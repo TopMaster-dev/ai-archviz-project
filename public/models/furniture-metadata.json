@@ -1,0 +1,37 @@
+{
+  "floor_lamp_1.gltf": {
+    "widthMm": 420,
+    "depthMm": 420,
+    "forwardYawDeg": 0
+  },
+  "floor_lamp_2.gltf": {
+    "widthMm": 380,
+    "depthMm": 380,
+    "forwardYawDeg": 0
+  },
+  "sofa_1.gltf": {
+    "widthMm": 1900,
+    "depthMm": 920,
+    "forwardYawDeg": 0
+  },
+  "chair_1.gltf": {
+    "widthMm": 620,
+    "depthMm": 620,
+    "forwardYawDeg": 0
+  },
+  "table_1.gltf": {
+    "widthMm": 1400,
+    "depthMm": 800,
+    "forwardYawDeg": 0
+  },
+  "bed_1.gltf": {
+    "widthMm": 2000,
+    "depthMm": 1400,
+    "forwardYawDeg": 0
+  },
+  "shelf_1.gltf": {
+    "widthMm": 900,
+    "depthMm": 450,
+    "forwardYawDeg": 0
+  }
+}

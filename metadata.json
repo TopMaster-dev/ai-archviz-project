@@ -1,0 +1,7 @@
+{
+  "name": "AI ArchViz Pro（最新）",
+  "description": "現行のプロジェクト",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "functions": {
+    "api/render.ts": {
+      "maxDuration": 60,
+      "includeFiles": "lib/**"
+    },
+    "api/furniture.ts": {
+      "maxDuration": 60,
+      "includeFiles": "lib/**"
+    },
+    "api/**/*.ts": {
+      "maxDuration": 60
+    }
+  }
+}

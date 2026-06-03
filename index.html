@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Arch-Material AI - 建築建材・AIレンダリング統合プラットフォーム</title>
+    
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;900&family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+    
+    <!-- Tailwind CSS CDN (Development only) -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'Noto Sans JP', 'sans-serif'],
+                    },
+                    animation: {
+                        'spin-slow': 'spin 3s linear infinite',
+                    }
+                },
+            },
+        }
+    </script>
+<script type="importmap">
+{
+  "imports": {
+    "react": "https://esm.sh/react@^19.2.4",
+    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
+    "react/": "https://esm.sh/react@^19.2.4/",
+    "@react-three/fiber": "https://esm.sh/@react-three/fiber@^9.5.0?external=react,react-dom,three",
+    "@react-three/drei": "https://esm.sh/@react-three/drei@^10.7.7?external=react,react-dom,three,@react-three/fiber",
+    "three": "https://esm.sh/three@0.182.0",
+    "three/": "https://esm.sh/three@0.182.0/",
+    "three-stdlib": "https://esm.sh/three-stdlib@2.33.0?external=three",
+    "@google/genai": "https://esm.sh/@google/genai@^1.40.0",
+    "vite": "https://esm.sh/vite@^7.3.1",
+    "@vitejs/plugin-react": "https://esm.sh/@vitejs/plugin-react@^5.1.4",
+    "cloudinary": "https://esm.sh/cloudinary@^2.9.0",
+    "@fal-ai/serverless-client": "https://esm.sh/@fal-ai/serverless-client@^0.15.0",
+    "@fal-ai/client": "https://esm.sh/@fal-ai/client@^1.9.1",
+    "@react-three/postprocessing": "https://esm.sh/@react-three/postprocessing@3.0.4?external=react,react-dom,three,@react-three/fiber",
+    "postprocessing": "https://esm.sh/postprocessing@6.36.6?external=three"
+  }
+}
+</script>
+</head>
+<body>
+    <div id="root"></div>
+    <script type="module" src="/index.tsx"></script>
+</body>
+</html>

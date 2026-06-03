@@ -1,0 +1,2668 @@
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, PropsWithChildren } from 'react';
+import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import type { ThreeEvent } from '@react-three/fiber';
+import { useTexture, OrbitControls, PerspectiveCamera, useGLTF, Center, Environment, Html } from '@react-three/drei';
+import * as THREE from 'three';
+import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
+import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
+import { EffectComposer as ThreeEffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import {
+  walkForward,
+  walkRight,
+  clampPitch,
+  getAabbFromMPoints,
+  clampXZToAabb,
+  type WalkBoundsAabb,
+} from '../utils/walkthrough.js';
+import { MaterialCategory, Product, FurnitureItem, Opening, CameraBlendRequest } from '../types.js';
+import { OPENING_CENTER_OFFSET_M, OPENING_DEPTH_M, ParametricWindow, ParametricDoor } from './Openings.js';
+import { useGesture } from '@use-gesture/react';
+import {
+  getRoomTransform,
+  getWallRotationY,
+  openingRatioToWallLocalX,
+  wallLocalXToOpeningRatio,
+  clampOpeningRatioWithCollisions,
+  scaledToMm,
+  slideFurnitureCenterMmWithWallContact,
+  furniturePositionToMm,
+  mmToFurniturePosition,
+  getFurnitureFootprintMm,
+  getEffectiveOpeningWidthMm,
+  MM_PER_METER,
+  clampFurnitureItemToRoom
+} from '../utils/sketchTransform.js';
+import { Point } from '../types.js';
+
+// three.jsのジオメトリをパストレーサー(BVH)対応に拡張
+if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
+  (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
+  (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
+  (THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
+}
+
+interface RoomViewerProps {
+  selections: Record<string, Product | null>;
+  onMeshClick: (category: MaterialCategory, meshName: string, isMulti: boolean) => void;
+  activeCategory: MaterialCategory | null;
+  activeMeshes: string[];
+  modelUrl?: string | null;
+  cameraRef: React.MutableRefObject<THREE.PerspectiveCamera | null>;
+  sketchPoints: { x: number, y: number }[];
+  roomHeight: number; // m
+  snapshotMode?: boolean; // Used ONLY to hide highlights & grid
+  furnitureItems: FurnitureItem[];
+  onFurnitureUpdate: React.Dispatch<React.SetStateAction<FurnitureItem[]>>;
+  activeFurnitureId: string | null;
+  onFurnitureSelect: (id: string | null) => void;
+  hideFurniture?: boolean; // New Prop for empty room capture
+  maskMode?: boolean; // New Prop for mask generation (Black background, white furniture)
+  materialSettings: Record<string, { roughness: number, metalness: number, textureScale?: number, baseboardEnabled?: boolean, baseboardHeight?: number, baseboardColor?: string, wainscotHeight?: number, doorColor?: string, doorFrameColor?: string, windowFrameColor?: string }>;
+  wallDivisions: Record<number, number>;
+  isRendering?: boolean;
+  captureStep?: 'idle' | 'pt-base' | 'mask';
+  openings: Opening[];
+  setOpenings: React.Dispatch<React.SetStateAction<Opening[]>>;
+  selectedOpeningId: string | null;
+  onOpeningSelect: (id: string | null) => void;
+  outsideBackgroundColor?: string;
+  orbitControlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+  cameraBlendRequest: CameraBlendRequest | null;
+  onCameraBlendComplete?: () => void;
+  cameraMode: 'orbit' | 'walk';
+  cameraFov: number;
+  eyeHeightMm: number;
+  walkSessionKey: number;
+  walkInitialYaw: number;
+  walkInitialPitch: number;
+  walkSpawnXZ: [number, number] | null;
+  walkDigitalInputRef: React.MutableRefObject<{ forward: number; strafe: number }>;
+  cameraWalkStateRef: React.MutableRefObject<{ yaw: number; pitch: number }>;
+}
+
+interface DynamicMaterialProps {
+  product: Product | null;
+  captureStep?: 'idle' | 'pt-base' | 'mask';
+  isFloor?: boolean;
+  meshRef: React.RefObject<THREE.Mesh | null>;
+  /** 壁など：ワールド寸法（m）を渡すと bbox ではなくここから repeat を計算する */
+  surfaceWidthM?: number;
+  surfaceHeightM?: number;
+}
+
+function getTextureImageSize(texture: THREE.Texture): { width: number; height: number } | null {
+  const img = texture.image as HTMLImageElement | HTMLCanvasElement | undefined;
+  if (img && img.width && img.height) {
+    return { width: img.width, height: img.height };
+  }
+  return null;
+}
+
+function getSurfaceSizeFromMesh(mesh: THREE.Mesh): { widthM: number; heightM: number } | null {
+  const geom = mesh.geometry;
+  if (!geom) return null;
+  geom.computeBoundingBox();
+  const bbox = geom.boundingBox;
+  if (!bbox) return null;
+  const sx = Math.abs(bbox.max.x - bbox.min.x);
+  const sy = Math.abs(bbox.max.y - bbox.min.y);
+  const sz = Math.abs(bbox.max.z - bbox.min.z);
+  const sorted = [sx, sy, sz].sort((a, b) => b - a);
+  const widthM = sorted[0] ?? 0;
+  const heightM = sorted[1] ?? 0;
+  if (!(widthM > 0) || !(heightM > 0)) return null;
+  return { widthM, heightM };
+}
+
+function applyRealSizeTextureRepeat(
+  texture: THREE.Texture,
+  shortEdgeMeters: number,
+  surfaceWidthM?: number,
+  surfaceHeightM?: number
+): void {
+  const safeShortEdgeM = Math.max(0.1, shortEdgeMeters);
+  const imageSize = getTextureImageSize(texture);
+  const imageWidth = imageSize?.width ?? 1;
+  const imageHeight = imageSize?.height ?? 1;
+  const isLandscape = imageWidth >= imageHeight;
+  const longEdgeFactor = isLandscape ? imageWidth / imageHeight : imageHeight / imageWidth;
+  if (
+    surfaceWidthM != null &&
+    surfaceHeightM != null &&
+    Number.isFinite(surfaceWidthM) &&
+    Number.isFinite(surfaceHeightM) &&
+    surfaceWidthM > 0 &&
+    surfaceHeightM > 0
+  ) {
+    const repeatX = isLandscape
+      ? surfaceWidthM / (safeShortEdgeM * longEdgeFactor)
+      : surfaceWidthM / safeShortEdgeM;
+    const repeatY = isLandscape
+      ? surfaceHeightM / safeShortEdgeM
+      : surfaceHeightM / (safeShortEdgeM * longEdgeFactor);
+    texture.repeat.set(repeatX, repeatY);
+  } else {
+    const fallbackRepeatX = isLandscape ? 1 / longEdgeFactor : 1;
+    const fallbackRepeatY = isLandscape ? 1 : 1 / longEdgeFactor;
+    texture.repeat.set(fallbackRepeatX, fallbackRepeatY);
+  }
+  texture.needsUpdate = true;
+}
+
+const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSettings: any, captureStep?: string) => {
+    if (captureStep === 'mask') {
+        mesh.material = new THREE.MeshBasicMaterial({ color: 0x000000 });
+        return;
+    }
+    if (!prod) {
+        mesh.material = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.8 });
+        return;
+    }
+    const settings = materialSettings[prod.id] || {};
+    const texture = new THREE.TextureLoader().load(prod.textureUrl);
+    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+    texture.colorSpace = THREE.SRGBColorSpace;
+    const shortEdgeMeters = settings.textureScale ?? 1; // 1.0 => 短辺 1000mm
+    const surface = getSurfaceSizeFromMesh(mesh);
+    applyRealSizeTextureRepeat(texture, shortEdgeMeters, surface?.widthM, surface?.heightM);
+    
+    mesh.material = new THREE.MeshStandardMaterial({
+        map: texture,
+        roughness: settings.roughness ?? prod.pbr.roughness,
+        metalness: settings.metalness ?? prod.pbr.metalness,
+        side: THREE.FrontSide
+    });
+};
+
+interface TexturedMaterialProps {
+  textureUrl: string;
+  meshRef: React.RefObject<THREE.Mesh | null>;
+  product: Product;
+  materialSettings: any;
+  surfaceWidthM?: number;
+  surfaceHeightM?: number;
+}
+
+const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
+  textureUrl,
+  meshRef,
+  product,
+  materialSettings,
+  surfaceWidthM,
+  surfaceHeightM,
+}) => {
+  const texture = useTexture(textureUrl);
+  /** useTexture は URL 単位でキャッシュするため、腰壁の上下など同一 URL の面で repeat が競合する。インスタンスごとに clone する */
+  const mapTexture = useMemo(() => {
+    const t = texture.clone();
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }, [texture]);
+
+  useEffect(() => {
+    return () => {
+      mapTexture.dispose();
+    };
+  }, [mapTexture]);
+
+  const settings = materialSettings[product.id] || {};
+
+  const applyTextureRepeat = useCallback(() => {
+    if (!mapTexture) return;
+    const mesh = meshRef.current;
+    if (!mesh) return;
+
+    let w: number | undefined;
+    let h: number | undefined;
+    if (surfaceWidthM != null && surfaceHeightM != null && surfaceWidthM > 0 && surfaceHeightM > 0) {
+      w = surfaceWidthM;
+      h = surfaceHeightM;
+    } else if (mesh.geometry.type === 'ShapeGeometry' || mesh.geometry.type === 'PlaneGeometry') {
+      mesh.geometry.computeBoundingBox();
+      const bbox = mesh.geometry.boundingBox;
+      if (bbox) {
+        w = bbox.max.x - bbox.min.x;
+        h = bbox.max.y - bbox.min.y;
+      }
+    }
+
+    applyRealSizeTextureRepeat(mapTexture, settings.textureScale ?? 1, w, h);
+  }, [mapTexture, meshRef, settings.textureScale, surfaceWidthM, surfaceHeightM]);
+
+  useLayoutEffect(() => {
+    applyTextureRepeat();
+    if (meshRef.current) return;
+    const id = requestAnimationFrame(() => applyTextureRepeat());
+    return () => cancelAnimationFrame(id);
+  }, [applyTextureRepeat, meshRef]);
+
+  return (
+    <meshStandardMaterial
+      map={mapTexture}
+      roughness={settings.roughness ?? product.pbr.roughness}
+      metalness={settings.metalness ?? product.pbr.metalness}
+      envMapIntensity={1.0}
+      side={THREE.FrontSide}
+      polygonOffset
+      polygonOffsetFactor={1}
+      polygonOffsetUnits={1}
+    />
+  );
+};
+
+const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any }> = ({
+  product,
+  captureStep,
+  isFloor,
+  meshRef,
+  materialSettings,
+  surfaceWidthM,
+  surfaceHeightM,
+}) => {
+  if (captureStep === 'mask') {
+    return <meshBasicMaterial color={0x000000} />;
+  }
+
+  if (!product || !product.textureUrl) {
+    return <meshStandardMaterial color={isFloor ? 0x8b5a2b : 0xcccccc} roughness={0.8} />;
+  }
+
+  return (
+    <Suspense fallback={<meshStandardMaterial color={isFloor ? 0x8b5a2b : 0xcccccc} roughness={0.8} />}>
+      <TexturedMaterial
+        textureUrl={product.textureUrl}
+        meshRef={meshRef}
+        product={product}
+        materialSettings={materialSettings}
+        surfaceWidthM={surfaceWidthM}
+        surfaceHeightM={surfaceHeightM}
+      />
+    </Suspense>
+  );
+};
+
+const OUTLINE_SELECTED_COLOR = '#ff8800';
+const OUTLINE_HOVER_COLOR = '#38bdf8';
+const FURNITURE_NAME_PREFIX = 'Furniture_';
+const OPENING_NAME_PREFIX = 'Opening_';
+const POST_DRAG_GUARD_MS = 120;
+
+// Black Structural Edges - リアルな表現のため完全に無効化
+const StructuralEdges = ({ snapshotMode = false }: { snapshotMode?: boolean }) => {
+  return null; // 黒い線を完全に消す
+};
+
+const SceneOutlineEffects: React.FC<{
+  selectedNames: string[];
+  hoveredName: string | null;
+  editingActive: boolean;
+  enabled: boolean;
+}> = ({ selectedNames, hoveredName, editingActive, enabled }) => {
+  const { scene, camera, gl, size, clock } = useThree();
+  const composerRef = useRef<ThreeEffectComposer | null>(null);
+  const selectedPassRef = useRef<OutlinePass | null>(null);
+  const hoverPassRef = useRef<OutlinePass | null>(null);
+
+  const resolveSelectedObjects = useCallback((): THREE.Object3D[] => {
+    if (!enabled || selectedNames.length === 0) return [];
+    const nameSet = new Set(selectedNames);
+    const objs: THREE.Object3D[] = [];
+    scene.traverse((obj) => {
+      if (nameSet.has(obj.name)) objs.push(obj);
+    });
+    return objs;
+  }, [enabled, scene, selectedNames]);
+
+  const resolveHoveredObjects = useCallback((): THREE.Object3D[] => {
+    if (!enabled || !hoveredName) return [];
+    const objs: THREE.Object3D[] = [];
+    scene.traverse((obj) => {
+      if (obj.name === hoveredName) objs.push(obj);
+    });
+    return objs;
+  }, [enabled, hoveredName, scene]);
+
+  useEffect(() => {
+    const composer = new ThreeEffectComposer(gl);
+    composerRef.current = composer;
+
+    const renderPass = new RenderPass(scene, camera);
+    composer.addPass(renderPass);
+
+    const selectedPass = new OutlinePass(new THREE.Vector2(size.width, size.height), scene, camera);
+    selectedPass.visibleEdgeColor.set(OUTLINE_SELECTED_COLOR);
+    selectedPass.hiddenEdgeColor.set(OUTLINE_SELECTED_COLOR);
+    selectedPass.edgeStrength = 6.8;
+    selectedPass.edgeThickness = 3.0;
+    selectedPass.pulsePeriod = 0;
+    selectedPassRef.current = selectedPass;
+    composer.addPass(selectedPass);
+
+    const hoverPass = new OutlinePass(new THREE.Vector2(size.width, size.height), scene, camera);
+    hoverPass.visibleEdgeColor.set(OUTLINE_HOVER_COLOR);
+    hoverPass.hiddenEdgeColor.set(OUTLINE_HOVER_COLOR);
+    hoverPass.edgeStrength = 4.5;
+    hoverPass.edgeThickness = 2.1;
+    hoverPass.pulsePeriod = 0;
+    hoverPassRef.current = hoverPass;
+    composer.addPass(hoverPass);
+    composer.addPass(new OutputPass());
+
+    return () => {
+      composerRef.current = null;
+      selectedPassRef.current = null;
+      hoverPassRef.current = null;
+      composer.dispose();
+    };
+  }, [camera, gl, scene, size.height, size.width]);
+
+  useEffect(() => {
+    composerRef.current?.setSize(size.width, size.height);
+    selectedPassRef.current?.setSize(size.width, size.height);
+    hoverPassRef.current?.setSize(size.width, size.height);
+  }, [size.width, size.height]);
+
+  useEffect(() => {
+    const selectedPass = selectedPassRef.current;
+    const hoverPass = hoverPassRef.current;
+    if (!selectedPass || !hoverPass) return;
+
+    const applyResolvedObjects = () => {
+      selectedPass.selectedObjects = enabled ? resolveSelectedObjects() : [];
+      hoverPass.selectedObjects = enabled ? resolveHoveredObjects() : [];
+    };
+
+    // Commit後に解決し、追加直後のscene反映ズレを吸収する
+    applyResolvedObjects();
+    const raf = requestAnimationFrame(applyResolvedObjects);
+    return () => cancelAnimationFrame(raf);
+  }, [enabled, resolveSelectedObjects, resolveHoveredObjects]);
+
+  useFrame(() => {
+    const composer = composerRef.current;
+    const selectedPass = selectedPassRef.current;
+    if (!composer || !selectedPass) return;
+    if (!enabled) {
+      gl.render(scene, camera);
+      return;
+    }
+    const pulse = 0.85 + 0.15 * (0.5 + 0.5 * Math.sin((clock.elapsedTime / 1.2) * Math.PI * 2));
+    selectedPass.edgeStrength = editingActive ? 8.5 * pulse : 6.8;
+    composer.render();
+  }, 1);
+
+  return null;
+};
+
+interface CanvasErrorBoundaryProps {
+  children?: React.ReactNode;
+}
+
+interface CanvasErrorBoundaryState {
+  hasError: boolean;
+}
+
+class CanvasErrorBoundary extends React.Component<CanvasErrorBoundaryProps, CanvasErrorBoundaryState> {
+  // Explicitly declare state property for TypeScript compatibility
+  public state: CanvasErrorBoundaryState = { hasError: false };
+  // Explicitly declare props to satisfy TS if it's missing from base type inference
+  public props: CanvasErrorBoundaryProps;
+
+  constructor(props: CanvasErrorBoundaryProps) {
+    super(props);
+    this.props = props;
+  }
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: any) {
+    console.error("Canvas Render Error:", error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <group>
+          <mesh>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="red" wireframe />
+          </mesh>
+        </group>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// 読み込み中、またはエラー時に表示される仮のワイヤーフレームボックス
+const FurnitureFallback = ({ modelUrl }: { modelUrl?: string }) => {
+    useEffect(() => {
+        if (modelUrl) {
+            console.warn(
+                '[RoomViewer] 家具モデル読み込み中（長く止まる場合は URL / ネットワーク / CORS を確認）:',
+                modelUrl
+            );
+        }
+    }, [modelUrl]);
+    return (
+        <mesh position={[0, 0.5, 0]}>
+            <boxGeometry args={[1, 1, 1]} />
+            <meshStandardMaterial color="#00ff00" wireframe />
+        </mesh>
+    );
+};
+
+// 実際のGLTFモデルを読み込み、クレイ（白粘土）マテリアルを適用するコア部分
+const GLTFCore = ({
+    modelUrl,
+    maskMode,
+    isSelected,
+    snapshotMode,
+    captureStep
+}: {
+    modelUrl: string;
+    maskMode?: boolean;
+    isSelected?: boolean;
+    snapshotMode?: boolean;
+    captureStep?: 'idle' | 'pt-base' | 'mask';
+}) => {
+    const { scene } = useGLTF(modelUrl);
+    
+    // クローンと座標補正は「最初の1回」だけ行う（ここで計算を確定させる）
+    const clonedScene = useMemo(() => {
+        const clone = scene.clone();
+        const box = new THREE.Box3().setFromObject(clone);
+        const center = box.getCenter(new THREE.Vector3());
+        clone.position.x = -center.x;
+        clone.position.y = -box.min.y;
+        clone.position.z = -center.z;
+        return clone;
+    }, [scene]);
+
+    // maskMode が変わった時は「マテリアル（色）」だけを変える（座標は絶対にいじらない）
+    useEffect(() => {
+        clonedScene.traverse((child: any) => {
+            if (child.isMesh) {
+                child.castShadow = !maskMode && captureStep !== 'mask';
+                child.receiveShadow = !maskMode && captureStep !== 'mask';
+                
+                if (captureStep === 'mask') {
+                    // 自動マスク生成モード：選択中の家具は白、それ以外は黒
+                    child.material = new THREE.MeshBasicMaterial({ 
+                        color: isSelected ? 0xffffff : 0x000000 
+                    });
+                } else {
+                    child.material = maskMode 
+                        ? new THREE.MeshBasicMaterial({ color: 0xffffff })
+                        : new THREE.MeshStandardMaterial({
+                            color: 0xe0e0e0, // 暗いグレー(0x888888)から明るい白に変更し、光を拾わせる
+                            roughness: 0.9,
+                            metalness: 0.0,
+                            map: null,
+                            normalMap: null
+                        });
+                }
+            }
+        });
+    }, [clonedScene, maskMode, captureStep, isSelected]);
+
+    return <primitive object={clonedScene} />;
+};
+
+/** 足跡に合わせた半径（m）。弧＋不可視ヒット用チューブ */
+function getFurnitureRingRadiusM(item: FurnitureItem): number {
+    const { width, depth } = getFurnitureFootprintMm(item);
+    const w = width / MM_PER_METER;
+    const d = depth / MM_PER_METER;
+    const raw = Math.hypot(w, d) / 2 + 0.08;
+    return Math.max(0.22, Math.min(1.15, raw));
+}
+
+function arcTubeGeometryXZ(radius: number, a0: number, a1: number, y: number, tubeRadius: number): THREE.TubeGeometry {
+    const ec = new THREE.EllipseCurve(0, 0, radius, radius, a0, a1, false, 0);
+    const pts = ec.getPoints(40).map((p) => new THREE.Vector3(p.x, y, p.y));
+    const curve = new THREE.CatmullRomCurve3(pts, false, 'catmullrom', 0.5);
+    return new THREE.TubeGeometry(curve, 40, tubeRadius, 6, false);
+}
+
+const FURNITURE_RING_COLOR = 0x2563eb;
+const FURNITURE_RING_COLOR_HI = 0x60a5fd;
+const RING_ARC_Y = 0.05;
+const RING_VIS_TUBE_R = 0.016;
+/** 可視チューブの約 2.5 倍。レイで弧を拾いやすくする */
+const RING_HIT_TUBE_R = 0.04;
+/** リング円周からの許容（m） */
+const RING_RADIAL_TOLERANCE_M = 0.065;
+/** 移動開始判定：足跡矩形を各辺方向に拡張（m） */
+const MOVE_FOOTPRINT_MARGIN_M = 0.05;
+/** 2D の FURNITURE_ROTATION_SNAP_RAD と同じ（10°） */
+const FURNITURE_ROTATION_SNAP_RAD = (10 * Math.PI) / 180;
+
+/** ワールド XZ 上の点が家具足跡（ローカル幅・奥行き、Y 回転）内か。marginM で半辺ごと拡張 */
+function isPointInFurnitureFootprintXZ(
+    px: number,
+    pz: number,
+    cx: number,
+    cz: number,
+    yaw: number,
+    widthM: number,
+    depthM: number,
+    marginM = 0
+): boolean {
+    const dx = px - cx;
+    const dz = pz - cz;
+    const c = Math.cos(-yaw);
+    const s = Math.sin(-yaw);
+    const lx = dx * c - dz * s;
+    const lz = dx * s + dz * c;
+    const hw = widthM / 2 + marginM;
+    const hd = depthM / 2 + marginM;
+    return Math.abs(lx) <= hw && Math.abs(lz) <= hd;
+}
+
+function arcLineGeometryXZFlat(radius: number, a0: number, a1: number, y: number): THREE.BufferGeometry {
+    const ec = new THREE.EllipseCurve(0, 0, radius, radius, a0, a1, false, 0);
+    const pts = ec.getPoints(72).map((p) => new THREE.Vector3(p.x, y, p.y));
+    const g = new THREE.BufferGeometry().setFromPoints(pts);
+    return g;
+}
+
+/** チューブ弧と同一 EllipseCurve の終端位置（XZ）と接線（XZ、正規化）。円錐を弧の終点に合わせる */
+function ringArcEndPositionAndTangent(
+    radius: number,
+    a0: number,
+    a1: number
+): { px: number; pz: number; quat: THREE.Quaternion } {
+    const ec = new THREE.EllipseCurve(0, 0, radius, radius, a0, a1, false, 0);
+    const pt = ec.getPointAt(1);
+    const tang2 = ec.getTangentAt(1);
+    const tang = new THREE.Vector3(tang2.x, 0, tang2.y).normalize();
+    const q = new THREE.Quaternion();
+    q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), tang);
+    return { px: pt.x, pz: pt.y, quat: q };
+}
+
+/** 床面点の中心からの方位が、左右の可視弧のいずれかの角度範囲内か（EllipseCurve と a = atan2(dz,dx)） */
+function isOnRingArcAngles(theta: number): boolean {
+    const t = ((theta % (Math.PI * 2)) + Math.PI * 2) % (Math.PI * 2);
+    if (t <= Math.PI / 4 || t >= (7 * Math.PI) / 4) return true;
+    if (t >= (3 * Math.PI) / 4 && t <= (5 * Math.PI) / 4) return true;
+    return false;
+}
+
+/** 青い太チューブ弧＋矢印。回転ドラッグ中は破線 Line。ワールド水平（親で位置のみ） */
+const FurnitureRotationRing3D: React.FC<{
+    radius: number;
+    highlighted: boolean;
+    isDashed: boolean;
+    onRingPointerDown: (e: ThreeEvent<PointerEvent>) => void;
+    onRingPointerOver: (e: ThreeEvent<PointerEvent>) => void;
+    onRingPointerOut: () => void;
+}> = ({ radius, highlighted, isDashed, onRingPointerDown, onRingPointerOver, onRingPointerOut }) => {
+    const color = highlighted ? FURNITURE_RING_COLOR_HI : FURNITURE_RING_COLOR;
+
+    const visMat = useMemo(
+        () =>
+            new THREE.MeshBasicMaterial({
+                color: FURNITURE_RING_COLOR,
+                depthTest: false,
+                depthWrite: false,
+                polygonOffset: true,
+                polygonOffsetFactor: -1,
+                polygonOffsetUnits: -4
+            }),
+        []
+    );
+    const hitMat = useMemo(
+        () =>
+            new THREE.MeshBasicMaterial({
+                transparent: true,
+                opacity: 0,
+                depthWrite: false,
+                side: THREE.DoubleSide
+            }),
+        []
+    );
+
+    const dashedMat = useMemo(
+        () =>
+            new THREE.LineDashedMaterial({
+                color: FURNITURE_RING_COLOR,
+                dashSize: 0.09,
+                gapSize: 0.07,
+                depthTest: false,
+                depthWrite: false
+            }),
+        []
+    );
+
+    const { tubeVis0, tubeVis1, tubeHit0, tubeHit1, coneRight, coneLeft, lineD0, lineD1 } = useMemo(() => {
+        const coneRight = ringArcEndPositionAndTangent(radius, (7 * Math.PI) / 4, Math.PI / 4);
+        const coneLeft = ringArcEndPositionAndTangent(radius, (3 * Math.PI) / 4, (5 * Math.PI) / 4);
+        return {
+            tubeVis0: arcTubeGeometryXZ(radius, (7 * Math.PI) / 4, Math.PI / 4, RING_ARC_Y, RING_VIS_TUBE_R),
+            tubeVis1: arcTubeGeometryXZ(radius, (3 * Math.PI) / 4, (5 * Math.PI) / 4, RING_ARC_Y, RING_VIS_TUBE_R),
+            tubeHit0: arcTubeGeometryXZ(radius, (7 * Math.PI) / 4, Math.PI / 4, RING_ARC_Y, RING_HIT_TUBE_R),
+            tubeHit1: arcTubeGeometryXZ(radius, (3 * Math.PI) / 4, (5 * Math.PI) / 4, RING_ARC_Y, RING_HIT_TUBE_R),
+            coneRight,
+            coneLeft,
+            lineD0: arcLineGeometryXZFlat(radius, (7 * Math.PI) / 4, Math.PI / 4, RING_ARC_Y),
+            lineD1: arcLineGeometryXZFlat(radius, (3 * Math.PI) / 4, (5 * Math.PI) / 4, RING_ARC_Y)
+        };
+    }, [radius]);
+
+    const lineObj0 = useMemo(() => {
+        const l = new THREE.Line(lineD0, dashedMat);
+        l.computeLineDistances();
+        l.renderOrder = 10;
+        return l;
+    }, [lineD0, dashedMat]);
+
+    const lineObj1 = useMemo(() => {
+        const l = new THREE.Line(lineD1, dashedMat);
+        l.computeLineDistances();
+        l.renderOrder = 10;
+        return l;
+    }, [lineD1, dashedMat]);
+
+    useEffect(() => {
+        visMat.color.setHex(color);
+        dashedMat.color.setHex(color);
+    }, [color, visMat, dashedMat]);
+
+    const hitHandlers = {
+        onPointerDown: onRingPointerDown,
+        onPointerOver: (ev: ThreeEvent<PointerEvent>) => onRingPointerOver(ev),
+        onPointerOut: onRingPointerOut
+    };
+
+    return (
+        <group renderOrder={10}>
+            {isDashed ? (
+                <>
+                    <primitive object={lineObj0} />
+                    <group scale={[1, 1, -1]}>
+                        <primitive object={lineObj1} />
+                    </group>
+                    <mesh geometry={tubeHit0} material={hitMat} renderOrder={10} {...hitHandlers} />
+                    <group scale={[1, 1, -1]}>
+                        <mesh geometry={tubeHit1} material={hitMat} renderOrder={10} {...hitHandlers} />
+                    </group>
+                </>
+            ) : (
+                <>
+                    <mesh geometry={tubeVis0} material={visMat} renderOrder={10} />
+                    <mesh geometry={tubeHit0} material={hitMat} renderOrder={10} {...hitHandlers} />
+                    <group scale={[1, 1, -1]}>
+                        <mesh geometry={tubeVis1} material={visMat} renderOrder={10} />
+                        <mesh geometry={tubeHit1} material={hitMat} renderOrder={10} {...hitHandlers} />
+                    </group>
+                </>
+            )}
+            <mesh
+                position={[coneRight.px, RING_ARC_Y, coneRight.pz]}
+                quaternion={coneRight.quat}
+                renderOrder={11}
+                {...hitHandlers}
+            >
+                <coneGeometry args={[0.042, 0.095, 10]} />
+                <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
+            </mesh>
+            <mesh
+                position={[coneLeft.px, RING_ARC_Y, coneLeft.pz]}
+                quaternion={coneLeft.quat}
+                renderOrder={11}
+                {...hitHandlers}
+            >
+                <coneGeometry args={[0.042, 0.095, 10]} />
+                <meshBasicMaterial color={color} depthTest={false} depthWrite={false} />
+            </mesh>
+        </group>
+    );
+};
+
+/** 床面点がリング弧（左右のセクタ）の近傍か */
+function isPointerOnFurnitureRingXZ(
+    p: { x: number; z: number },
+    wx: { x: number; z: number },
+    ringR: number
+): boolean {
+    const dx = p.x - wx.x;
+    const dz = p.z - wx.z;
+    const dist = Math.hypot(dx, dz);
+    if (Math.abs(dist - ringR) > RING_RADIAL_TOLERANCE_M) return false;
+    const theta = Math.atan2(dz, dx);
+    return isOnRingArcAngles(theta);
+}
+
+/** 家具グループの世界座標にリングを追従（移動ドラッグ中も位置一致） */
+const FurnitureRingAnchor: React.FC<{
+    furnitureGroupRef: React.RefObject<THREE.Group | null>;
+    children: React.ReactNode;
+}> = ({ furnitureGroupRef, children }) => {
+    const anchorRef = useRef<THREE.Group>(null);
+    useFrame(() => {
+        const g = furnitureGroupRef.current;
+        const a = anchorRef.current;
+        if (g && a) {
+            g.getWorldPosition(a.position);
+        }
+    });
+    return (
+        <group ref={anchorRef} rotation={[0, 0, 0]}>
+            {children}
+        </group>
+    );
+};
+
+/** 操作系：未選択時はクリックで選択のみ。選択後は床面距離で移動／回転を分岐（青リング・床ポリゴン内にクランプ） */
+const GLTFFurniture: React.FC<{
+    item: FurnitureItem;
+    isSelected: boolean;
+    onSelect?: () => void;
+    isDraggingRef: React.MutableRefObject<boolean>;
+    snapshotMode: boolean;
+    maskMode?: boolean;
+    captureStep?: 'idle' | 'pt-base' | 'mask';
+    sketchFloorDrag?: boolean;
+    centerMm?: Point;
+    polygonMm?: Point[];
+    onFurniturePatch?: (
+        id: string,
+        position: [number, number, number],
+        rotation?: [number, number, number]
+    ) => void;
+    onFurnitureDragStart?: () => void;
+    onFurnitureDragEnd?: () => void;
+    onHoverNameChange?: (name: string | null) => void;
+    onPostDragGuard?: () => void;
+}> = ({
+    item,
+    isSelected,
+    onSelect,
+    isDraggingRef,
+    snapshotMode,
+    maskMode,
+    captureStep,
+    sketchFloorDrag,
+    centerMm,
+    polygonMm,
+    onFurniturePatch,
+    onFurnitureDragStart,
+    onFurnitureDragEnd,
+    onHoverNameChange,
+    onPostDragGuard
+}) => {
+    const [isHovered, setIsHovered] = useState(false);
+    const groupRef = useRef<THREE.Group>(null);
+    const draggingRef = useRef(false);
+    const dragKindRef = useRef<'move' | 'rotate' | null>(null);
+    const lastWorldRef = useRef(new THREE.Vector3());
+    /** 回転ドラッグ開始時（累積 lastAngle ではスナップ時に逆回転しやすい） */
+    const rotateDragStartYawRef = useRef(0);
+    const rotateDragStartAngleRef = useRef(0);
+    const { camera, gl } = useThree();
+    const plane = useMemo(() => new THREE.Plane(), []);
+    const raycaster = useMemo(() => new THREE.Raycaster(), []);
+    const ndc = useMemo(() => new THREE.Vector2(), []);
+    const tmpHit = useMemo(() => new THREE.Vector3(), []);
+    const tmpPos = useMemo(() => new THREE.Vector3(), []);
+
+    const ringRadiusM = useMemo(() => getFurnitureRingRadiusM(item), [item]);
+
+    const showTc =
+        isSelected &&
+        sketchFloorDrag &&
+        !!centerMm &&
+        !!polygonMm &&
+        polygonMm.length >= 3 &&
+        !snapshotMode &&
+        !maskMode &&
+        captureStep !== 'mask';
+
+    const [pointerBusy, setPointerBusy] = useState(false);
+    const [ringHoverDist, setRingHoverDist] = useState(false);
+    const [ringMeshHover, setRingMeshHover] = useState(false);
+    const [isRotateDragging, setIsRotateDragging] = useState(false);
+
+    const ringHighlight = ringHoverDist || ringMeshHover;
+
+    useEffect(() => {
+        const g = groupRef.current;
+        if (!g || draggingRef.current) return;
+        g.position.set(item.position[0], item.position[1], item.position[2]);
+        g.rotation.set(item.rotation[0], item.rotation[1], item.rotation[2]);
+        g.scale.set(item.scale[0], item.scale[1], item.scale[2]);
+    }, [item.position, item.rotation, item.scale]);
+
+    const commitTransform = useCallback(() => {
+        const g = groupRef.current;
+        if (!g || !centerMm || !polygonMm || polygonMm.length < 3 || !onFurniturePatch) return;
+        const draft: FurnitureItem = {
+            ...item,
+            position: [g.position.x, g.position.y, g.position.z],
+            rotation: [g.rotation.x, g.rotation.y, g.rotation.z]
+        };
+        const clamped = clampFurnitureItemToRoom(draft, centerMm, polygonMm);
+        onFurniturePatch(clamped.id, clamped.position, clamped.rotation);
+        g.position.set(clamped.position[0], clamped.position[1], clamped.position[2]);
+        g.rotation.set(clamped.rotation[0], clamped.rotation[1], clamped.rotation[2]);
+    }, [centerMm, polygonMm, item, onFurniturePatch]);
+
+    const intersectFloor = useCallback(
+        (clientX: number, clientY: number) => {
+            const g = groupRef.current;
+            if (!g) return null;
+            const rect = gl.domElement.getBoundingClientRect();
+            ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+            ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(ndc, camera);
+            const y = g.getWorldPosition(tmpPos).y;
+            plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, y, 0));
+            const out = raycaster.ray.intersectPlane(plane, tmpHit);
+            return out ? tmpHit.clone() : null;
+        },
+        [camera, gl, ndc, plane, raycaster, tmpHit, tmpPos]
+    );
+
+    useEffect(() => {
+        if (!showTc || !isSelected || snapshotMode || maskMode) {
+            setRingHoverDist(false);
+            return;
+        }
+        const onMove = (e: PointerEvent) => {
+            if (draggingRef.current) return;
+            const g = groupRef.current;
+            if (!g) return;
+            const p = intersectFloor(e.clientX, e.clientY);
+            if (!p) {
+                setRingHoverDist(false);
+                return;
+            }
+            g.updateMatrixWorld(true);
+            const wx = new THREE.Vector3();
+            g.getWorldPosition(wx);
+            const ringR = ringRadiusM;
+            const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR);
+            setRingHoverDist(onRingArc);
+        };
+        window.addEventListener('pointermove', onMove);
+        return () => window.removeEventListener('pointermove', onMove);
+    }, [showTc, isSelected, snapshotMode, maskMode, intersectFloor, item, ringRadiusM]);
+
+    const endDrag = useCallback(() => {
+        if (!draggingRef.current) return;
+        commitTransform();
+        draggingRef.current = false;
+        dragKindRef.current = null;
+        setPointerBusy(false);
+        setIsRotateDragging(false);
+        setRingMeshHover(false);
+        onPostDragGuard?.();
+        onFurnitureDragEnd?.();
+    }, [commitTransform, onFurnitureDragEnd, onPostDragGuard]);
+
+    useEffect(() => {
+        const onMove = (e: PointerEvent) => {
+            if (!draggingRef.current || !groupRef.current) return;
+            const g = groupRef.current;
+            const p = intersectFloor(e.clientX, e.clientY);
+            if (!p) return;
+            if (dragKindRef.current === 'move') {
+                const dx = p.x - lastWorldRef.current.x;
+                const dz = p.z - lastWorldRef.current.z;
+                if (centerMm && polygonMm && polygonMm.length >= 3) {
+                    const prevCenterMm = furniturePositionToMm(
+                        [g.position.x, g.position.y, g.position.z],
+                        centerMm
+                    );
+                    const proposedMm = {
+                        x: prevCenterMm.x + dx * MM_PER_METER,
+                        y: prevCenterMm.y + dz * MM_PER_METER
+                    };
+                    const { width, depth } = getFurnitureFootprintMm(item);
+                    const nextMm = slideFurnitureCenterMmWithWallContact(
+                        prevCenterMm,
+                        proposedMm,
+                        g.rotation.y,
+                        width,
+                        depth,
+                        polygonMm
+                    );
+                    const np = mmToFurniturePosition(nextMm, g.position.y, centerMm);
+                    g.position.x = np[0];
+                    g.position.z = np[2];
+                } else {
+                    g.position.x += dx;
+                    g.position.z += dz;
+                }
+                lastWorldRef.current.copy(p);
+            } else if (dragKindRef.current === 'rotate') {
+                g.updateMatrixWorld(true);
+                const wx = new THREE.Vector3();
+                g.getWorldPosition(wx);
+                const ang = Math.atan2(p.x - wx.x, p.z - wx.z);
+                let delta = ang - rotateDragStartAngleRef.current;
+                while (delta > Math.PI) delta -= Math.PI * 2;
+                while (delta < -Math.PI) delta += Math.PI * 2;
+                let newY = rotateDragStartYawRef.current + delta;
+                newY =
+                    Math.round(newY / FURNITURE_ROTATION_SNAP_RAD) * FURNITURE_ROTATION_SNAP_RAD;
+                g.rotation.y = newY;
+            }
+        };
+        const onUp = () => endDrag();
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+        return () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+        };
+    }, [endDrag, intersectFloor, centerMm, polygonMm, item]);
+
+    useEffect(() => {
+        if (snapshotMode || maskMode || captureStep === 'mask') {
+            document.body.style.cursor = 'auto';
+            return;
+        }
+        if (pointerBusy) {
+            document.body.style.cursor = 'grabbing';
+        } else if (ringHighlight && showTc && isSelected) {
+            document.body.style.cursor = 'grab';
+        } else if (isHovered && isSelected && showTc) {
+            document.body.style.cursor = 'grab';
+        } else if (isHovered && !isSelected) {
+            document.body.style.cursor = 'pointer';
+        } else if (isHovered) {
+            document.body.style.cursor = 'pointer';
+        } else {
+            document.body.style.cursor = 'auto';
+        }
+        return () => {
+            document.body.style.cursor = 'auto';
+        };
+    }, [
+        isHovered,
+        isSelected,
+        showTc,
+        snapshotMode,
+        maskMode,
+        captureStep,
+        pointerBusy,
+        ringHighlight
+    ]);
+
+    const onBodyPointerDown = (e: ThreeEvent<PointerEvent>) => {
+        if (captureStep === 'mask' || maskMode || snapshotMode) return;
+        e.stopPropagation();
+        if (!isSelected) {
+            onSelect?.();
+            return;
+        }
+        if (!showTc) return;
+        const g = groupRef.current;
+        if (!g) return;
+        g.updateMatrixWorld(true);
+        const wx = new THREE.Vector3();
+        g.getWorldPosition(wx);
+        const floorY = wx.y;
+        let p = intersectFloor(e.clientX, e.clientY);
+        if (!p && e.point) {
+            p = tmpHit.set(e.point.x, floorY, e.point.z);
+        }
+        if (!p) return;
+        const ringR = ringRadiusM;
+        const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR);
+        const { width, depth } = getFurnitureFootprintMm(item);
+        const wM = width / MM_PER_METER;
+        const dM = depth / MM_PER_METER;
+        const yaw = g.rotation.y;
+        const inFootprint = isPointInFurnitureFootprintXZ(
+            p.x,
+            p.z,
+            wx.x,
+            wx.z,
+            yaw,
+            wM,
+            dM,
+            MOVE_FOOTPRINT_MARGIN_M
+        );
+        const meshHit =
+            (e.intersections?.length ?? 0) > 0 ||
+            (e.object != null && e.object instanceof THREE.Mesh);
+
+        if (onRingArc) {
+            rotateDragStartYawRef.current = g.rotation.y;
+            rotateDragStartAngleRef.current = Math.atan2(p.x - wx.x, p.z - wx.z);
+            draggingRef.current = true;
+            dragKindRef.current = 'rotate';
+            setIsRotateDragging(true);
+        } else if (inFootprint || meshHit) {
+            lastWorldRef.current.copy(p);
+            draggingRef.current = true;
+            dragKindRef.current = 'move';
+        } else {
+            return;
+        }
+        setPointerBusy(true);
+        onFurnitureDragStart?.();
+        try {
+            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        } catch {
+            /* ignore */
+        }
+    };
+
+    const onRingPointerDown = (e: ThreeEvent<PointerEvent>) => {
+        if (captureStep === 'mask' || maskMode || snapshotMode || !showTc) return;
+        e.stopPropagation();
+        const g = groupRef.current;
+        const p = intersectFloor(e.clientX, e.clientY);
+        if (!g || !p) return;
+        g.updateMatrixWorld(true);
+        const wx = new THREE.Vector3();
+        g.getWorldPosition(wx);
+        const ringR = ringRadiusM;
+        if (!isPointerOnFurnitureRingXZ(p, wx, ringR)) return;
+        rotateDragStartYawRef.current = g.rotation.y;
+        rotateDragStartAngleRef.current = Math.atan2(p.x - wx.x, p.z - wx.z);
+        draggingRef.current = true;
+        dragKindRef.current = 'rotate';
+        setIsRotateDragging(true);
+        setPointerBusy(true);
+        onFurnitureDragStart?.();
+        try {
+            (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
+        } catch {
+            /* ignore */
+        }
+    };
+
+    const handleRingMeshPointerOver = useCallback(
+        (e: ThreeEvent<PointerEvent>) => {
+            if (draggingRef.current) return;
+            const g = groupRef.current;
+            if (!g) return;
+            const p = intersectFloor(e.clientX, e.clientY);
+            if (!p) {
+                setRingMeshHover(false);
+                return;
+            }
+            g.updateMatrixWorld(true);
+            const wx = new THREE.Vector3();
+            g.getWorldPosition(wx);
+            const ringR2 = ringRadiusM;
+            const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR2);
+            setRingMeshHover(onRingArc);
+        },
+        [intersectFloor, item, ringRadiusM]
+    );
+
+    return (
+        <>
+            <group
+                ref={groupRef}
+                name={`${FURNITURE_NAME_PREFIX}${item.id}`}
+                visible={true}
+                position={new THREE.Vector3(...item.position)}
+                rotation={new THREE.Euler(...item.rotation)}
+                scale={new THREE.Vector3(...item.scale)}
+            >
+                <group
+                    onPointerDown={onBodyPointerDown}
+                    onPointerOver={(ev) => {
+                        ev.stopPropagation();
+                        setIsHovered(true);
+                        onHoverNameChange?.(`${FURNITURE_NAME_PREFIX}${item.id}`);
+                    }}
+                    onPointerOut={() => {
+                        setIsHovered(false);
+                        onHoverNameChange?.(null);
+                    }}
+                    onPointerUp={(ev) => {
+                        ev.stopPropagation();
+                    }}
+                    onClick={(ev) => {
+                        ev.stopPropagation();
+                    }}
+                >
+                    <CanvasErrorBoundary>
+                        <Suspense fallback={<FurnitureFallback modelUrl={item.modelUrl} />}>
+                            <GLTFCore
+                                modelUrl={item.modelUrl}
+                                maskMode={maskMode}
+                                isSelected={isSelected}
+                                captureStep={captureStep}
+                            />
+                        </Suspense>
+                    </CanvasErrorBoundary>
+                </group>
+                {isHovered && !snapshotMode && !maskMode && captureStep !== 'mask' && (
+                    <Html position={[0, 1.5, 0]} center style={{ pointerEvents: 'none' }}>
+                        <div className="bg-black/80 text-white text-[10px] px-3 py-1.5 rounded-lg whitespace-nowrap border border-white/20 shadow-xl font-bold text-center leading-tight animate-in fade-in zoom-in duration-200">
+                            {!isSelected
+                                ? 'クリックで選択'
+                                : sketchFloorDrag
+                                  ? 'ドラッグで移動 / 青い弧で回転（2Dでも可）'
+                                  : '2Dで移動・回転'}
+                        </div>
+                    </Html>
+                )}
+            </group>
+            {showTc && (
+                <FurnitureRingAnchor furnitureGroupRef={groupRef}>
+                    <FurnitureRotationRing3D
+                        radius={ringRadiusM}
+                        highlighted={ringHighlight}
+                        isDashed={isRotateDragging}
+                        onRingPointerDown={onRingPointerDown}
+                        onRingPointerOver={handleRingMeshPointerOver}
+                        onRingPointerOut={() => setRingMeshHover(false)}
+                    />
+                </FurnitureRingAnchor>
+            )}
+        </>
+    );
+};
+
+
+const CustomBIMModel = ({
+  url,
+  selections,
+  onMeshClick,
+  materialSettings,
+  isDraggingRef,
+  captureStep,
+  onHoverNameChange
+}: any) => {
+  const gltf = useGLTF(url) as any;
+  const scene = gltf.scene;
+
+  useEffect(() => {
+    scene.traverse((child: THREE.Object3D) => {
+      if ((child as THREE.Mesh).isMesh) {
+        const mesh = child as THREE.Mesh;
+        updateMeshMaterial(mesh, selections[mesh.name] || null, materialSettings, captureStep);
+        // Shadows ENABLED
+        mesh.castShadow = !captureStep || captureStep !== 'mask';
+        mesh.receiveShadow = !captureStep || captureStep !== 'mask';
+      }
+    });
+  }, [scene, selections, materialSettings, captureStep]); 
+
+  return (
+    <group>
+      <primitive 
+        object={scene} 
+        onClick={(e: any) => {
+          e.stopPropagation();
+          if (isDraggingRef.current) return;
+          const meshName = e.object.name;
+          const lowerName = meshName.toLowerCase();
+          let category: MaterialCategory = 'Wall';
+          if (lowerName.includes('floor')) category = 'Floor';
+          else if (lowerName.includes('ceiling')) category = 'Ceiling';
+          
+          // Multi-selection: pass flag if Shift/Ctrl/Meta is pressed
+          onMeshClick(category, meshName, e.shiftKey || e.metaKey || e.ctrlKey);
+        }}
+        onPointerOver={(e: any) => {
+          e.stopPropagation();
+          onHoverNameChange?.(e.object?.name ?? null);
+        }}
+        onPointerOut={(e: any) => {
+          e.stopPropagation();
+          onHoverNameChange?.(null);
+        }}
+      />
+    </group>
+  );
+};
+
+const DraggableOpening = ({
+  op,
+  isSelected,
+  onSelect,
+  onUpdate,
+  onDragStart,
+  onDragEnd,
+  posX,
+  posY,
+  wallLength,
+  captureStep,
+  isDraggingRef,
+  openings,
+  isAxisFlipped,
+  isLocalPlusZIndoor,
+  doorColor,
+  doorFrameColor,
+  windowFrameColor,
+  onHoverNameChange,
+  snapshotMode = false,
+  maskMode = false
+}: any) => {
+  const groupRef = useRef<THREE.Group>(null);
+  const isSelectedRef = useRef(isSelected);
+  const dragArmedRef = useRef(false);
+  const pointerDraggingRef = useRef(false);
+  const [isHovered, setIsHovered] = useState(false);
+  const [pointerDragging, setPointerDragging] = useState(false);
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const ndc = useMemo(() => new THREE.Vector2(), []);
+  const wallPlane = useMemo(() => new THREE.Plane(), []);
+  const wallQuat = useMemo(() => new THREE.Quaternion(), []);
+  const wallPlanePoint = useMemo(() => new THREE.Vector3(), []);
+  const wallNormal = useMemo(() => new THREE.Vector3(0, 0, 1), []);
+  const hitPoint = useMemo(() => new THREE.Vector3(), []);
+  const localPoint = useMemo(() => new THREE.Vector3(), []);
+
+  useEffect(() => {
+    isSelectedRef.current = isSelected;
+  }, [isSelected]);
+
+  useEffect(() => {
+    pointerDraggingRef.current = pointerDragging;
+  }, [pointerDragging]);
+
+  const finalizeOpeningDrag = useCallback(() => {
+    dragArmedRef.current = false;
+    if (!pointerDraggingRef.current) return;
+    pointerDraggingRef.current = false;
+    setPointerDragging(false);
+    if (onDragEnd) onDragEnd();
+  }, [onDragEnd]);
+
+  const handleBind = useGesture({
+    onDrag: ({ event, active, first, last }) => {
+      if (captureStep === 'mask' || snapshotMode || maskMode) return;
+      if (first && !dragArmedRef.current) return;
+      if (!dragArmedRef.current) return;
+      event.stopPropagation();
+      if (first) {
+        if (!pointerDraggingRef.current) {
+          pointerDraggingRef.current = true;
+          setPointerDragging(true);
+          if (onDragStart) onDragStart();
+        }
+      }
+      if (last) {
+        finalizeOpeningDrag();
+      }
+
+      if (active && groupRef.current) {
+        const parent = groupRef.current.parent;
+        if (!parent) return;
+        const pe = event as PointerEvent;
+        if (pe.clientX == null || pe.clientY == null) return;
+        const rect = gl.domElement.getBoundingClientRect();
+        ndc.x = ((pe.clientX - rect.left) / rect.width) * 2 - 1;
+        ndc.y = -((pe.clientY - rect.top) / rect.height) * 2 + 1;
+        raycaster.setFromCamera(ndc, camera);
+        parent.getWorldQuaternion(wallQuat);
+        wallNormal.set(0, 0, 1).applyQuaternion(wallQuat);
+        parent.getWorldPosition(wallPlanePoint);
+        wallPlane.setFromNormalAndCoplanarPoint(wallNormal, wallPlanePoint);
+        if (raycaster.ray.intersectPlane(wallPlane, hitPoint)) {
+          localPoint.copy(hitPoint);
+          parent.worldToLocal(localPoint);
+          const nextRatioRaw = wallLocalXToOpeningRatio(localPoint.x, wallLength, isAxisFlipped);
+          const others = openings
+            .filter((o: Opening) => o.wallIndex === op.wallIndex && o.id !== op.id)
+            .map((other: Opening) => ({ ...other, width: getEffectiveOpeningWidthMm(other) }));
+          const wallLengthMm = wallLength * MM_PER_METER;
+          const clamped = clampOpeningRatioWithCollisions(
+            nextRatioRaw,
+            wallLengthMm,
+            getEffectiveOpeningWidthMm(op),
+            op.ratioPosition,
+            others
+          );
+          onUpdate(clamped);
+        }
+      }
+    },
+    onPointerDown: ({ event }) => {
+      if (captureStep === 'mask' || snapshotMode || maskMode) return;
+      event.stopPropagation();
+      // 1回目クリックは選択のみ。選択済みのときだけ次のドラッグを許可する。
+      dragArmedRef.current = isSelectedRef.current;
+      // 選択済み開口を掴んだ時点で視点操作を先にロックし、ドラッグ中の競合を防ぐ。
+      if (dragArmedRef.current && !pointerDraggingRef.current) {
+        pointerDraggingRef.current = true;
+        setPointerDragging(true);
+        if (onDragStart) onDragStart();
+      }
+      onSelect();
+    }
+  });
+
+  useEffect(() => {
+    const onPointerEnd = () => finalizeOpeningDrag();
+    window.addEventListener('pointerup', onPointerEnd);
+    window.addEventListener('pointercancel', onPointerEnd);
+    return () => {
+      window.removeEventListener('pointerup', onPointerEnd);
+      window.removeEventListener('pointercancel', onPointerEnd);
+    };
+  }, [finalizeOpeningDrag]);
+
+  const wM = op.width / 1000;
+  const hM = op.height / 1000;
+  const openingEffectiveWidthM = getEffectiveOpeningWidthMm(op) / 1000;
+  const openingBodyDepthM = op.type.startsWith('door') ? OPENING_DEPTH_M + 0.02 : OPENING_DEPTH_M;
+  // ハイライトは建具厚みに同期し、わずかな余裕のみ持たせる
+  const openingHighlightDepthM = openingBodyDepthM + 0.002;
+  const signedOpeningOffsetZ = isLocalPlusZIndoor ? -OPENING_CENTER_OFFSET_M : OPENING_CENTER_OFFSET_M;
+
+  useEffect(() => {
+    if (snapshotMode || maskMode || captureStep === 'mask') {
+      document.body.style.cursor = 'auto';
+      return () => {
+        document.body.style.cursor = 'auto';
+      };
+    }
+    if (pointerDragging) {
+      document.body.style.cursor = 'grabbing';
+    } else if (isHovered && isSelected) {
+      document.body.style.cursor = 'grab';
+    } else if (isHovered && !isSelected) {
+      document.body.style.cursor = 'pointer';
+    } else {
+      document.body.style.cursor = 'auto';
+    }
+    return () => {
+      document.body.style.cursor = 'auto';
+    };
+  }, [isHovered, isSelected, pointerDragging, snapshotMode, maskMode, captureStep]);
+
+  const bindProps = handleBind() as any;
+
+  return (
+    <group ref={groupRef} name={`${OPENING_NAME_PREFIX}${op.id}`} position={[posX, posY, signedOpeningOffsetZ]}>
+      {captureStep === 'mask' ? (
+        <mesh>
+          <boxGeometry args={[openingEffectiveWidthM, hM, openingHighlightDepthM]} />
+          <meshBasicMaterial color="white" />
+        </mesh>
+      ) : (
+        <>
+          <group>
+            {op.type.startsWith('door') ? (
+              <ParametricDoor
+                width={op.width}
+                height={op.height}
+                type={op.type as any}
+                doorColor={doorColor}
+                frameColor={doorFrameColor}
+              />
+            ) : (
+              <ParametricWindow
+                width={op.width}
+                height={op.height}
+                type={op.type as any}
+                frameColor={windowFrameColor}
+                sashColor={windowFrameColor}
+              />
+            )}
+          </group>
+          {/* 前面ヒット：選択・壁沿いドラッグ（ギズモなし） */}
+          <mesh
+            visible={false}
+            position={[0, hM / 2, 0.18]}
+            {...bindProps}
+            onPointerOver={(e: ThreeEvent<PointerEvent>) => {
+              e.stopPropagation();
+              setIsHovered(true);
+              onHoverNameChange?.(`${OPENING_NAME_PREFIX}${op.id}`);
+            }}
+            onPointerOut={() => {
+              setIsHovered(false);
+              onHoverNameChange?.(null);
+            }}
+          >
+            <boxGeometry args={[openingEffectiveWidthM, hM, 0.04]} />
+            <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+          </mesh>
+          {isHovered && !snapshotMode && !maskMode && captureStep !== 'mask' && (
+            <Html position={[0, hM + 0.15, 0.2]} center style={{ pointerEvents: 'none' }}>
+              <div className="bg-black/80 text-white text-[10px] px-3 py-1.5 rounded-lg whitespace-nowrap border border-white/20 shadow-xl font-bold text-center leading-tight animate-in fade-in zoom-in duration-200">
+                {!isSelected ? 'クリックで選択' : 'ドラッグで壁に沿って移動'}
+              </div>
+            </Html>
+          )}
+        </>
+      )}
+    </group>
+  );
+};
+
+type SketchRoomMaterialSettings = Record<
+  string,
+  {
+    roughness: number;
+    metalness: number;
+    textureScale?: number;
+    baseboardEnabled?: boolean;
+    baseboardHeight?: number;
+    baseboardColor?: string;
+    wainscotHeight?: number;
+    doorColor?: string;
+    doorFrameColor?: string;
+    windowFrameColor?: string;
+  }
+>;
+
+/** 腰壁分割で極小穴になると earcut が破綻しやすい — これ未満の高さの穴は作らない */
+const MIN_WALL_HOLE_HEIGHT_M = 0.008;
+const HOLE_INSET_EPS_M = 1e-4;
+
+/** SketchRoom の openingsInSegment と WallSegment のクリップで共通の交差判定 */
+const getOpeningBottomM = (op: Opening) => (op.type.startsWith('door') ? 0 : op.bottomOffset / 1000);
+
+const openingIntersectsVerticalSegment = (op: Opening, segmentMinY: number, segmentMaxY: number) => {
+  const openingMinY = getOpeningBottomM(op);
+  const openingMaxY = openingMinY + op.height / 1000;
+  return openingMaxY > segmentMinY && openingMinY < segmentMaxY;
+};
+
+const WallSegment: React.FC<{
+  subWallName: string;
+  lengthM: number;
+  actualWallH: number;
+  actualWallY: number;
+  yOffset: number;
+  isBottom: boolean;
+  bbEnabled: boolean;
+  bbHeightM: number;
+  bbColor: string;
+  segmentMinY: number;
+  segmentMaxY: number;
+  openingsInSegment: Opening[];
+  wallOpenings: Opening[];
+  isCCW: boolean;
+  prod: Product | null;
+  materialSettings: SketchRoomMaterialSettings;
+  captureStep?: 'idle' | 'pt-base' | 'mask';
+  shadowEnabled: boolean;
+  activeMeshes: string[];
+  snapshotMode: boolean;
+  maskMode?: boolean;
+  hideOpeningsForCamera: boolean;
+  onMeshClick: RoomViewerProps['onMeshClick'];
+  setOpenings: React.Dispatch<React.SetStateAction<Opening[]>>;
+  selectedOpeningId: string | null;
+  onOpeningSelect: (id: string | null) => void;
+  openings: Opening[];
+  isDraggingRef: React.MutableRefObject<boolean>;
+  isLocalPlusZIndoor: boolean;
+  doorColor: string;
+  doorFrameColor: string;
+  windowFrameColor: string;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onHoverNameChange?: (name: string | null) => void;
+}> = ({
+  subWallName,
+  lengthM,
+  actualWallH,
+  actualWallY,
+  yOffset,
+  isBottom,
+  bbEnabled,
+  bbHeightM,
+  bbColor,
+  segmentMinY,
+  segmentMaxY,
+  openingsInSegment,
+  wallOpenings,
+  isCCW,
+  prod,
+  materialSettings,
+  captureStep,
+  shadowEnabled,
+  activeMeshes,
+  snapshotMode,
+  maskMode = false,
+  hideOpeningsForCamera,
+  onMeshClick,
+  setOpenings,
+  selectedOpeningId,
+  onOpeningSelect,
+  openings,
+  isDraggingRef,
+  isLocalPlusZIndoor,
+  doorColor,
+  doorFrameColor,
+  windowFrameColor,
+  onDragStart,
+  onDragEnd,
+  onHoverNameChange,
+}) => {
+  const meshRef = useRef<THREE.Mesh>(null);
+
+  const wallShape = useMemo(() => {
+    const s = new THREE.Shape();
+    s.moveTo(-lengthM / 2, -actualWallH / 2);
+    s.lineTo(lengthM / 2, -actualWallH / 2);
+    s.lineTo(lengthM / 2, actualWallH / 2);
+    s.lineTo(-lengthM / 2, actualWallH / 2);
+    s.lineTo(-lengthM / 2, -actualWallH / 2);
+
+    const sorted = [...openingsInSegment].sort((a: Opening, b: Opening) => a.ratioPosition - b.ratioPosition);
+    const halfH = actualWallH / 2;
+    const minYL = -halfH + HOLE_INSET_EPS_M;
+    const maxYL = halfH - HOLE_INSET_EPS_M;
+    const wallBottomNoInsetYL = -halfH;
+    const minXL = -lengthM / 2 + HOLE_INSET_EPS_M;
+    const maxXL = lengthM / 2 - HOLE_INSET_EPS_M;
+
+    sorted.forEach((op: Opening) => {
+      const openingBottom = getOpeningBottomM(op);
+      const openingTop = openingBottom + op.height / 1000;
+      let clippedBottom = Math.max(openingBottom, segmentMinY);
+      let clippedTop = Math.min(openingTop, segmentMaxY);
+      if (clippedBottom >= clippedTop) return;
+
+      let holeH = clippedTop - clippedBottom;
+      if (holeH <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+      const holeX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
+      const holeW = getEffectiveOpeningWidthMm(op) / 1000;
+      let hy = (clippedBottom + clippedTop) / 2 - actualWallY;
+      let hh = holeH / 2;
+      let hx = holeX;
+      let hw = holeW / 2;
+
+      let yBot = hy - hh;
+      let yTop = hy + hh;
+      // 巾木との共有境界（segmentMinY）に接する穴だけは下端EPSを外し、境界スリバーを防ぐ
+      const touchesSegmentBottom = Math.abs(clippedBottom - segmentMinY) <= HOLE_INSET_EPS_M;
+      yBot = Math.max(yBot, touchesSegmentBottom ? wallBottomNoInsetYL : minYL);
+      yTop = Math.min(yTop, maxYL);
+      if (yTop <= yBot) return;
+      hy = (yTop + yBot) / 2;
+      hh = (yTop - yBot) / 2;
+      if (hh * 2 <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+      let xL = hx - hw;
+      let xR = hx + hw;
+      xL = Math.max(xL, minXL);
+      xR = Math.min(xR, maxXL);
+      if (xR <= xL) return;
+      hx = (xL + xR) / 2;
+      hw = (xR - xL) / 2;
+
+      const holePath = new THREE.Path();
+      // 外周と逆巻き（時計回り）— ShapeUtils.triangulateShape が穴として正しく認識する
+      holePath.moveTo(hx - hw, hy - hh);
+      holePath.lineTo(hx - hw, hy + hh);
+      holePath.lineTo(hx + hw, hy + hh);
+      holePath.lineTo(hx + hw, hy - hh);
+      holePath.lineTo(hx - hw, hy - hh);
+      s.holes.push(holePath);
+    });
+    return s;
+  }, [
+    lengthM,
+    actualWallH,
+    actualWallY,
+    segmentMinY,
+    segmentMaxY,
+    openingsInSegment,
+    isCCW,
+  ]);
+
+  return (
+    <>
+      <mesh
+        name={subWallName}
+        ref={meshRef}
+        position={[0, actualWallY, 0]}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey || e.metaKey || e.ctrlKey);
+        }}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          onHoverNameChange?.(subWallName);
+        }}
+        onPointerOut={() => onHoverNameChange?.(null)}
+        castShadow={shadowEnabled}
+        receiveShadow={shadowEnabled}
+      >
+        <shapeGeometry args={[wallShape]} />
+        <Suspense fallback={<meshStandardMaterial color="#cccccc" />}>
+          <DynamicMaterial
+            product={prod}
+            captureStep={captureStep}
+            meshRef={meshRef}
+            materialSettings={materialSettings}
+            surfaceWidthM={lengthM}
+            surfaceHeightM={actualWallH}
+          />
+        </Suspense>
+      </mesh>
+
+      {openingsInSegment
+          .filter((op: Opening) => {
+            // 壁穴生成と同じ縦方向交差判定を使い、建具表示と穴形状の不整合を防ぐ。
+            if (hideOpeningsForCamera) return false;
+            return openingIntersectsVerticalSegment(op, segmentMinY, segmentMaxY);
+          })
+          .map((op: Opening) => {
+            const isSelected = selectedOpeningId === op.id;
+            const posX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
+            const posY = getOpeningBottomM(op);
+
+            return (
+              <DraggableOpening
+                key={op.id}
+                op={op}
+                isSelected={isSelected}
+                onSelect={() => onOpeningSelect(op.id)}
+                onUpdate={(newRatio: number) => {
+                  setOpenings((prev: Opening[]) => prev.map((o) => (o.id === op.id ? { ...o, ratioPosition: newRatio } : o)));
+                }}
+                onDragStart={() => onDragStart && onDragStart()}
+                onDragEnd={() => onDragEnd && onDragEnd()}
+                posX={posX}
+                posY={posY}
+                wallLength={lengthM}
+                captureStep={captureStep}
+                isDraggingRef={isDraggingRef}
+                openings={openings}
+                isAxisFlipped={isCCW}
+                isLocalPlusZIndoor={isLocalPlusZIndoor}
+                doorColor={doorColor}
+                doorFrameColor={doorFrameColor}
+                windowFrameColor={windowFrameColor}
+                onHoverNameChange={onHoverNameChange}
+                snapshotMode={snapshotMode}
+                maskMode={maskMode}
+              />
+            );
+          })}
+
+      {bbEnabled &&
+        (() => {
+          const baseboardShape = new THREE.Shape();
+          baseboardShape.moveTo(-lengthM / 2, -bbHeightM / 2);
+          baseboardShape.lineTo(lengthM / 2, -bbHeightM / 2);
+          baseboardShape.lineTo(lengthM / 2, bbHeightM / 2);
+          baseboardShape.lineTo(-lengthM / 2, bbHeightM / 2);
+          baseboardShape.lineTo(-lengthM / 2, -bbHeightM / 2);
+
+          const baseboardMinY = yOffset;
+          const baseboardMaxY = yOffset + bbHeightM;
+          const bbHalfH = bbHeightM / 2;
+          const bbMinYL = -bbHalfH + HOLE_INSET_EPS_M;
+          const bbMaxYL = bbHalfH - HOLE_INSET_EPS_M;
+          const bbTopNoInsetYL = bbHalfH;
+          const bbMinXL = -lengthM / 2 + HOLE_INSET_EPS_M;
+          const bbMaxXL = lengthM / 2 - HOLE_INSET_EPS_M;
+
+          [...wallOpenings]
+            .sort((a: Opening, b: Opening) => a.ratioPosition - b.ratioPosition)
+            .forEach((op: Opening) => {
+            const openingMinY = getOpeningBottomM(op);
+            const openingMaxY = openingMinY + op.height / 1000;
+            const clippedBottom = Math.max(openingMinY, baseboardMinY);
+            const clippedTop = Math.min(openingMaxY, baseboardMaxY);
+            if (clippedBottom >= clippedTop) return;
+            const clippedHeight = clippedTop - clippedBottom;
+            if (clippedHeight <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+            const holeX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
+            const holeW = getEffectiveOpeningWidthMm(op) / 1000;
+            let hy = (clippedBottom + clippedTop) / 2 - (yOffset + bbHeightM / 2);
+            let hh = clippedHeight / 2;
+            let hx = holeX;
+            let hw = holeW / 2;
+
+            let yBot = hy - hh;
+            let yTop = hy + hh;
+            yBot = Math.max(yBot, bbMinYL);
+            // 壁との共有境界（baseboardMaxY）に接する穴だけは上端EPSを外し、境界スリバーを防ぐ
+            const touchesBaseboardTop = Math.abs(clippedTop - baseboardMaxY) <= HOLE_INSET_EPS_M;
+            yTop = Math.min(yTop, touchesBaseboardTop ? bbTopNoInsetYL : bbMaxYL);
+            if (yTop <= yBot) return;
+            hy = (yTop + yBot) / 2;
+            hh = (yTop - yBot) / 2;
+            if (hh * 2 <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+            let xL = hx - hw;
+            let xR = hx + hw;
+            xL = Math.max(xL, bbMinXL);
+            xR = Math.min(xR, bbMaxXL);
+            if (xR <= xL) return;
+            hx = (xL + xR) / 2;
+            hw = (xR - xL) / 2;
+
+            const holePath = new THREE.Path();
+            holePath.moveTo(hx - hw, hy - hh);
+            holePath.lineTo(hx - hw, hy + hh);
+            holePath.lineTo(hx + hw, hy + hh);
+            holePath.lineTo(hx + hw, hy - hh);
+            holePath.lineTo(hx - hw, hy - hh);
+            baseboardShape.holes.push(holePath);
+          });
+
+          const baseboardGeometry = new THREE.ShapeGeometry(baseboardShape);
+
+          return (
+            <mesh
+              position={[0, yOffset + bbHeightM / 2, 0]}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey || e.metaKey || e.ctrlKey);
+              }}
+              onPointerOver={(e) => {
+                e.stopPropagation();
+                onHoverNameChange?.(subWallName);
+              }}
+              onPointerOut={() => onHoverNameChange?.(null)}
+              castShadow={shadowEnabled}
+              receiveShadow={shadowEnabled}
+            >
+              <primitive object={baseboardGeometry} attach="geometry" />
+              <meshStandardMaterial color={bbColor} side={THREE.FrontSide} roughness={0.7} />
+            </mesh>
+          );
+        })()}
+    </>
+  );
+};
+
+const SketchRoom = ({ 
+  points, 
+  selections, 
+  onMeshClick, 
+  height, 
+  activeMeshes, 
+  snapshotMode, 
+  maskMode = false,
+  materialSettings, 
+  isDraggingRef, 
+  wallDivisions, 
+  captureStep, 
+  openings,
+  setOpenings,
+  selectedOpeningId,
+  onOpeningSelect,
+  onDragStart,
+  onDragEnd,
+  onHoverNameChange
+}: any) => {
+  const { camera } = useThree();
+  const [cameraSyncTick, setCameraSyncTick] = useState(0);
+  const prevCameraPosRef = useRef(new THREE.Vector3());
+  const openingsHiddenByWallRef = useRef<Record<number, boolean>>({});
+
+  useFrame(({ camera: frameCamera }) => {
+    // 視点移動と同期して開口表示判定を更新
+    if (prevCameraPosRef.current.distanceToSquared(frameCamera.position) > 1e-6) {
+      prevCameraPosRef.current.copy(frameCamera.position);
+      setCameraSyncTick(t => (t + 1) % 100000);
+    }
+  });
+
+  const { mPoints, isCCW } = useMemo(() => getRoomTransform(points as any), [points]);
+
+  useEffect(() => {
+    // 壁構成が変わったら開口表示の履歴（ヒステリシス状態）をリセット
+    openingsHiddenByWallRef.current = {};
+  }, [mPoints.length]);
+
+  const { shape, ceilingShape } = useMemo(() => {
+    const s = new THREE.Shape();
+    const c = new THREE.Shape(); 
+    if (mPoints.length > 0) {
+        s.moveTo(mPoints[0].x, -mPoints[0].z);
+        c.moveTo(mPoints[0].x, mPoints[0].z);
+        for (let i = 1; i < mPoints.length; i++) {
+            s.lineTo(mPoints[i].x, -mPoints[i].z);
+            c.lineTo(mPoints[i].x, mPoints[i].z);
+        }
+        s.lineTo(mPoints[0].x, -mPoints[0].z);
+        c.lineTo(mPoints[0].x, mPoints[0].z);
+    }
+    return { shape: s, ceilingShape: c };
+  }, [mPoints]);
+
+  const floorRef = useRef<THREE.Mesh>(null);
+  const ceilingRef = useRef<THREE.Mesh>(null);
+
+  const shadowEnabled = !captureStep || captureStep !== 'mask';
+
+  return (
+    <group>
+      <mesh 
+        ref={floorRef}
+        name="Sketch_Floor"
+        rotation={[-Math.PI / 2, 0, 0]} 
+        position={[0, 0, 0]} 
+        onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Floor', 'Sketch_Floor', e.shiftKey || e.metaKey || e.ctrlKey); }}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          onHoverNameChange?.('Sketch_Floor');
+        }}
+        onPointerOut={() => onHoverNameChange?.(null)}
+        receiveShadow={shadowEnabled}
+      >
+        <shapeGeometry args={[shape]} />
+        <Suspense fallback={<meshStandardMaterial color="#8b5a2b" />}>
+           <DynamicMaterial product={selections['Sketch_Floor']} captureStep={captureStep} isFloor meshRef={floorRef} materialSettings={materialSettings} />
+        </Suspense>
+        <StructuralEdges snapshotMode={snapshotMode} />
+      </mesh>
+
+      <mesh 
+        ref={ceilingRef}
+        name="Sketch_Ceiling"
+        position={[0, height, 0]} 
+        rotation={[Math.PI / 2, 0, 0]} 
+        scale={[1, 1, 1]} 
+        onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Ceiling', 'Sketch_Ceiling', e.shiftKey || e.metaKey || e.ctrlKey); }}
+        onPointerOver={(e) => {
+          e.stopPropagation();
+          onHoverNameChange?.('Sketch_Ceiling');
+        }}
+        onPointerOut={() => onHoverNameChange?.(null)}
+        receiveShadow={shadowEnabled}
+      >
+        <shapeGeometry args={[ceilingShape]} />
+        <Suspense fallback={<meshStandardMaterial color="#cccccc" />}>
+           <DynamicMaterial product={selections['Sketch_Ceiling']} captureStep={captureStep} meshRef={ceilingRef} materialSettings={materialSettings} />
+        </Suspense>
+        <StructuralEdges snapshotMode={snapshotMode} />
+      </mesh>
+
+      {mPoints.map((p: any, i: number) => {
+        const wallName = `Sketch_Wall_${i}`;
+        const next = mPoints[(i + 1) % mPoints.length];
+        const dx = next.x - p.x;
+        const dz = next.z - p.z;
+        const length = Math.sqrt(dx * dx + dz * dz);
+        const rotationY = getWallRotationY(p, next, isCCW);
+        const cameraTick = cameraSyncTick;
+
+        // 壁法線（内向き）とカメラ位置の関係で開口表示を制御
+        const wallCenter = new THREE.Vector3((p.x + next.x) / 2, height / 2, (p.z + next.z) / 2);
+        const roomCenter = new THREE.Vector3(0, height / 2, 0);
+        const toCenter = new THREE.Vector3().subVectors(roomCenter, wallCenter).normalize();
+        const toCamera = new THREE.Vector3().subVectors(camera.position, wallCenter).normalize();
+        const wallLocalPlusZ = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY).normalize();
+        const isLocalPlusZIndoor = wallLocalPlusZ.dot(toCenter) >= 0;
+        const wallNormal = wallLocalPlusZ.clone();
+        if (!isLocalPlusZIndoor) wallNormal.multiplyScalar(-1);
+        // ヒステリシスで境界付近の表示チラつきを抑える
+        const openingHideThreshold = -0.02;
+        const openingShowThreshold = 0.02;
+        const openingFacingDot = wallNormal.dot(toCamera);
+        const wasHidden = openingsHiddenByWallRef.current[i] ?? false;
+        let isHidden = wasHidden;
+        if (openingFacingDot <= openingHideThreshold) {
+          isHidden = true;
+        } else if (openingFacingDot >= openingShowThreshold) {
+          isHidden = false;
+        }
+        openingsHiddenByWallRef.current[i] = isHidden;
+        const hideOpeningsForCamera = isHidden && cameraTick >= 0;
+
+        const divs = wallDivisions[i] || 1;
+        const bottomProd = selections[`${wallName}_0`];
+        const bottomProdId = bottomProd ? bottomProd.id : 'default_no_tex';
+        const wainscotHeight = materialSettings[bottomProdId]?.wainscotHeight ?? 900;
+
+        return (
+          <group key={i} position={[(p.x + next.x) / 2, 0, (p.z + next.z) / 2]} rotation={[0, rotationY, 0]}>
+            {Array.from({ length: divs }).map((_, j) => {
+                const subWallName = divs === 1 ? wallName : `${wallName}_${j}`;
+                const segHeightMm = divs === 1 ? (height * 1000) : (j === 0 ? wainscotHeight : Math.max(0.1, (height * 1000) - wainscotHeight));
+                const segHeight = segHeightMm / 1000;
+                const yOffset = divs === 1 ? 0 : (j === 0 ? 0 : wainscotHeight / 1000);
+
+                const prod = selections[subWallName];
+                const matSettings = materialSettings[prod ? prod.id : 'default_no_tex'] || {};
+
+                const isBottom = j === 0;
+                const bbEnabled = isBottom && (matSettings.baseboardEnabled ?? false);
+                const bbHeightM = (matSettings.baseboardHeight ?? 60) / 1000;
+                const bbColor = matSettings.baseboardColor ?? '#ffffff';
+                const openingStyle = materialSettings.__openings__ ?? {};
+                const doorColor = openingStyle.doorColor ?? '#8b4513';
+                const doorFrameColor = openingStyle.doorFrameColor ?? '#444';
+                const windowFrameColor = openingStyle.windowFrameColor ?? '#333';
+
+                const actualWallH = bbEnabled ? segHeight - bbHeightM : segHeight;
+                const actualWallY = yOffset + (bbEnabled ? bbHeightM + actualWallH / 2 : segHeight / 2);
+
+                const wallOpenings = openings.filter((op: Opening) => op.wallIndex === i);
+
+                const segmentMinY = yOffset + (bbEnabled ? bbHeightM : 0);
+                const segmentMaxY = segmentMinY + actualWallH;
+                const openingsInSegment = wallOpenings
+                  .filter((op: Opening) => openingIntersectsVerticalSegment(op, segmentMinY, segmentMaxY))
+                  .sort((a: Opening, b: Opening) => a.ratioPosition - b.ratioPosition);
+
+                return (
+                  <WallSegment
+                    key={`${i}-${j}`}
+                    subWallName={subWallName}
+                    lengthM={length}
+                    actualWallH={actualWallH}
+                    actualWallY={actualWallY}
+                    yOffset={yOffset}
+                    isBottom={isBottom}
+                    bbEnabled={bbEnabled}
+                    bbHeightM={bbHeightM}
+                    bbColor={bbColor}
+                    segmentMinY={segmentMinY}
+                    segmentMaxY={segmentMaxY}
+                    openingsInSegment={openingsInSegment}
+                    wallOpenings={wallOpenings}
+                    isCCW={isCCW}
+                    prod={prod}
+                    materialSettings={materialSettings}
+                    captureStep={captureStep}
+                    shadowEnabled={shadowEnabled}
+                    activeMeshes={activeMeshes}
+                    snapshotMode={snapshotMode}
+                    maskMode={maskMode}
+                    hideOpeningsForCamera={hideOpeningsForCamera}
+                    onMeshClick={onMeshClick}
+                    setOpenings={setOpenings}
+                    selectedOpeningId={selectedOpeningId}
+                    onOpeningSelect={onOpeningSelect}
+                    openings={openings}
+                    isDraggingRef={isDraggingRef}
+                    isLocalPlusZIndoor={isLocalPlusZIndoor}
+                    doorColor={doorColor}
+                    doorFrameColor={doorFrameColor}
+                    windowFrameColor={windowFrameColor}
+                    onDragStart={onDragStart}
+                    onDragEnd={onDragEnd}
+                    onHoverNameChange={onHoverNameChange}
+                  />
+                );
+            })}
+          </group>
+        );
+      })}
+    </group>
+  );
+};
+
+const CAMERA_BLEND_MS = 450;
+const MAX_ORBIT_TARGET_DISTANCE_FROM_CAMERA = 5000;
+const CONTINUOUS_ZOOM_SPEED = 0.0022;
+const CONTINUOUS_ZOOM_MAX_DELTA = 180;
+
+const WALK_SPEED = 2.3;
+const WALK_SPEED_SLOW = 1.0;
+const LOOK_SENS = 0.0022;
+const PITCH_LIMIT = Math.PI / 3;
+
+const LOOK_DRAG_THRESHOLD_PX = 8;
+
+const WalkthroughController: React.FC<{
+  eyeHeightM: number;
+  walkBounds: WalkBoundsAabb | null;
+  walkSessionKey: number;
+  walkInitialYaw: number;
+  walkInitialPitch: number;
+  walkSpawnXZ: [number, number] | null;
+  digitalInputRef: React.MutableRefObject<{ forward: number; strafe: number }>;
+  cameraWalkStateRef: React.MutableRefObject<{ yaw: number; pitch: number }>;
+  isDraggingRef: React.MutableRefObject<boolean>;
+  disabled: boolean;
+}> = ({
+  eyeHeightM,
+  walkBounds,
+  walkSessionKey,
+  walkInitialYaw,
+  walkInitialPitch,
+  walkSpawnXZ,
+  digitalInputRef,
+  cameraWalkStateRef,
+  isDraggingRef,
+  disabled,
+}) => {
+  const { camera, gl } = useThree();
+  const yaw = useRef(0);
+  const pitch = useRef(0);
+  const keys = useRef(new Set<string>());
+  const lookDrag = useRef(false);
+  const lookPointerDown = useRef(false);
+  const lookAccumulated = useRef(0);
+  const lastPointer = useRef({ x: 0, y: 0 });
+
+  useLayoutEffect(() => {
+    const cam = camera as THREE.PerspectiveCamera;
+    const x = walkSpawnXZ ? walkSpawnXZ[0] : 0;
+    const z = walkSpawnXZ ? walkSpawnXZ[1] : 0;
+    cam.position.set(x, eyeHeightM, z);
+    yaw.current = walkInitialYaw;
+    pitch.current = walkInitialPitch;
+  }, [walkSessionKey, walkInitialYaw, walkInitialPitch, walkSpawnXZ, camera]);
+
+  useEffect(() => {
+    if (disabled) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      keys.current.add(k);
+      if (e.key === 'Shift') keys.current.add('shift');
+      if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright'].includes(k)) {
+        e.preventDefault();
+      }
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      const k = e.key.toLowerCase();
+      keys.current.delete(k);
+      if (e.key === 'Shift') keys.current.delete('shift');
+    };
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [disabled]);
+
+  useEffect(() => {
+    if (disabled) return;
+    const el = gl.domElement;
+    const resetLookPointerState = () => {
+      lookPointerDown.current = false;
+      lookDrag.current = false;
+      lookAccumulated.current = 0;
+    };
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      if (isDraggingRef.current) return;
+      lookPointerDown.current = true;
+      lookAccumulated.current = 0;
+      lookDrag.current = false;
+      lastPointer.current = { x: e.clientX, y: e.clientY };
+    };
+    const onPointerMove = (e: PointerEvent) => {
+      if (isDraggingRef.current) {
+        resetLookPointerState();
+        return;
+      }
+      if (!lookPointerDown.current) return;
+      const dx = e.clientX - lastPointer.current.x;
+      const dy = e.clientY - lastPointer.current.y;
+      lookAccumulated.current += Math.abs(dx) + Math.abs(dy);
+      lastPointer.current = { x: e.clientX, y: e.clientY };
+      if (!lookDrag.current) {
+        if (lookAccumulated.current < LOOK_DRAG_THRESHOLD_PX) return;
+        lookDrag.current = true;
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch {
+          /* ignore */
+        }
+      }
+      if (!lookDrag.current) return;
+      e.preventDefault();
+      yaw.current -= dx * LOOK_SENS;
+      pitch.current = clampPitch(pitch.current - dy * LOOK_SENS, PITCH_LIMIT);
+    };
+    const endLook = (e: PointerEvent) => {
+      if (e.type === 'pointerup' && e.button !== 0) return;
+      resetLookPointerState();
+      try {
+        if (e.pointerId !== undefined) el.releasePointerCapture(e.pointerId);
+      } catch {
+        /* ignore */
+      }
+    };
+    el.addEventListener('pointerdown', onPointerDown);
+    el.addEventListener('pointermove', onPointerMove);
+    el.addEventListener('pointerup', endLook);
+    el.addEventListener('pointercancel', endLook);
+    return () => {
+      el.removeEventListener('pointerdown', onPointerDown);
+      el.removeEventListener('pointermove', onPointerMove);
+      el.removeEventListener('pointerup', endLook);
+      el.removeEventListener('pointercancel', endLook);
+    };
+  }, [disabled, gl]);
+
+  useFrame((_, delta) => {
+    if (disabled) return;
+    const cam = camera as THREE.PerspectiveCamera;
+    const shift = keys.current.has('shift');
+    const speed = shift ? WALK_SPEED_SLOW : WALK_SPEED;
+
+    let f = 0;
+    let s = 0;
+    if (keys.current.has('w')) f += 1;
+    if (keys.current.has('s')) f -= 1;
+    if (keys.current.has('a')) s -= 1;
+    if (keys.current.has('d')) s += 1;
+    if (keys.current.has('arrowup')) f += 1;
+    if (keys.current.has('arrowdown')) f -= 1;
+    if (keys.current.has('arrowleft')) s -= 1;
+    if (keys.current.has('arrowright')) s += 1;
+
+    f += digitalInputRef.current.forward;
+    s += digitalInputRef.current.strafe;
+
+    if (keys.current.has('q')) yaw.current += 1.3 * delta;
+    if (keys.current.has('e')) yaw.current -= 1.3 * delta;
+
+    const fwd = walkForward(yaw.current);
+    const right = walkRight(yaw.current);
+    const move = new THREE.Vector3().addScaledVector(fwd, f).addScaledVector(right, s);
+    if (move.lengthSq() > 1e-8) {
+      move.normalize().multiplyScalar(speed * delta);
+      cam.position.add(move);
+    }
+
+    cam.position.y = eyeHeightM;
+
+    if (walkBounds) {
+      const [cx, cz] = clampXZToAabb(cam.position.x, cam.position.z, walkBounds, 0.08);
+      cam.position.x = cx;
+      cam.position.z = cz;
+    }
+
+    cameraWalkStateRef.current.yaw = yaw.current;
+    cameraWalkStateRef.current.pitch = pitch.current;
+
+    cam.rotation.order = 'YXZ';
+    cam.rotation.y = yaw.current;
+    cam.rotation.x = pitch.current;
+    cam.rotation.z = 0;
+  });
+
+  return null;
+};
+
+const CameraBlendController: React.FC<{
+  orbitControlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+  request: CameraBlendRequest | null;
+  onBlendStart: () => void;
+  onBlendEnd: () => void;
+  onComplete: () => void;
+}> = ({ orbitControlsRef, request, onBlendStart, onBlendEnd, onComplete }) => {
+  const { camera } = useThree();
+  const animRef = useRef<{
+    start: number;
+    fromPos: THREE.Vector3;
+    fromTarget: THREE.Vector3;
+    fromFov: number;
+    toPos: THREE.Vector3;
+    toTarget: THREE.Vector3;
+    toFov: number;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!request) {
+      animRef.current = null;
+      return;
+    }
+    const cam = camera as THREE.PerspectiveCamera;
+    let raf = 0;
+    let cancelled = false;
+    const tryStart = () => {
+      if (cancelled) return;
+      const ctrl = orbitControlsRef.current;
+      if (!ctrl) {
+        raf = requestAnimationFrame(tryStart);
+        return;
+      }
+      onBlendStart();
+      animRef.current = {
+        start: performance.now(),
+        fromPos: cam.position.clone(),
+        fromTarget: ctrl.target.clone(),
+        fromFov: cam.fov,
+        toPos: new THREE.Vector3(...request.position),
+        toTarget: new THREE.Vector3(...request.target),
+        toFov: request.fov,
+      };
+    };
+    tryStart();
+    return () => {
+      cancelled = true;
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, [request, camera, orbitControlsRef, onBlendStart]);
+
+  useFrame(() => {
+    const anim = animRef.current;
+    if (!anim) return;
+    const ctrl = orbitControlsRef.current;
+    const cam = camera as THREE.PerspectiveCamera;
+    if (!ctrl) return;
+    const t = Math.min(1, (performance.now() - anim.start) / CAMERA_BLEND_MS);
+    const e = t * t * (3 - 2 * t);
+    cam.position.lerpVectors(anim.fromPos, anim.toPos, e);
+    ctrl.target.lerpVectors(anim.fromTarget, anim.toTarget, e);
+    cam.fov = THREE.MathUtils.lerp(anim.fromFov, anim.toFov, e);
+    cam.updateProjectionMatrix();
+    ctrl.update();
+    if (t >= 1) {
+      cam.position.copy(anim.toPos);
+      ctrl.target.copy(anim.toTarget);
+      cam.fov = anim.toFov;
+      cam.updateProjectionMatrix();
+      ctrl.update();
+      animRef.current = null;
+      onBlendEnd();
+      onComplete();
+    }
+  });
+
+  return null;
+};
+
+const OrbitContinuousZoomController: React.FC<{
+  orbitControlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+  enabled: boolean;
+}> = ({ orbitControlsRef, enabled }) => {
+  const { camera, gl } = useThree();
+  const forward = useMemo(() => new THREE.Vector3(), []);
+
+  useEffect(() => {
+    if (!enabled) return;
+    const el = gl.domElement;
+    const onWheel = (e: WheelEvent) => {
+      const ctrl = orbitControlsRef.current;
+      if (!ctrl) return;
+      const signedDelta = THREE.MathUtils.clamp(
+        e.deltaY,
+        -CONTINUOUS_ZOOM_MAX_DELTA,
+        CONTINUOUS_ZOOM_MAX_DELTA
+      );
+      const amount = -signedDelta * CONTINUOUS_ZOOM_SPEED;
+      if (Math.abs(amount) < 1e-6) return;
+      e.preventDefault();
+      camera.getWorldDirection(forward);
+      if (forward.lengthSq() < 1e-10) return;
+      forward.normalize().multiplyScalar(amount);
+      camera.position.add(forward);
+      ctrl.target.add(forward);
+      ctrl.update();
+    };
+    // OrbitControls より先に捕捉して、ホイールズームを常時前後移動へ統一する
+    el.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => {
+      el.removeEventListener('wheel', onWheel, true);
+    };
+  }, [camera, enabled, forward, gl, orbitControlsRef]);
+
+  return null;
+};
+
+const OrbitTargetGuard: React.FC<{
+  orbitControlsRef: React.MutableRefObject<OrbitControlsImpl | null>;
+  enabled: boolean;
+}> = ({ orbitControlsRef, enabled }) => {
+  const { camera } = useThree();
+  const lastValidTargetRef = useRef(new THREE.Vector3(0, 0, 0));
+
+  useFrame(() => {
+    if (!enabled) return;
+    const ctrl = orbitControlsRef.current;
+    if (!ctrl) return;
+    const target = ctrl.target;
+    const isFiniteTarget =
+      Number.isFinite(target.x) && Number.isFinite(target.y) && Number.isFinite(target.z);
+    const dist = camera.position.distanceTo(target);
+    const tooFar = !Number.isFinite(dist) || dist > MAX_ORBIT_TARGET_DISTANCE_FROM_CAMERA;
+
+    if (isFiniteTarget && !tooFar) {
+      lastValidTargetRef.current.copy(target);
+      return;
+    }
+
+    if (!isFiniteTarget) {
+      target.copy(lastValidTargetRef.current);
+    } else if (tooFar) {
+      target.copy(lastValidTargetRef.current);
+    }
+
+    const hasFiniteRestored =
+      Number.isFinite(target.x) && Number.isFinite(target.y) && Number.isFinite(target.z);
+    if (!hasFiniteRestored) {
+      const fallbackDir = new THREE.Vector3();
+      camera.getWorldDirection(fallbackDir);
+      if (fallbackDir.lengthSq() < 1e-8) fallbackDir.set(0, 0, -1);
+      target.copy(camera.position).addScaledVector(fallbackDir.normalize(), 2.5);
+      lastValidTargetRef.current.copy(target);
+    }
+
+    ctrl.update();
+  });
+
+  return null;
+};
+
+export const RoomViewer: React.FC<RoomViewerProps> = ({ 
+  selections, 
+  onMeshClick, 
+  activeCategory, 
+  activeMeshes, 
+  cameraRef, 
+  modelUrl, 
+  sketchPoints, 
+  roomHeight, 
+  snapshotMode = false, 
+  furnitureItems, 
+  onFurnitureUpdate, 
+  activeFurnitureId, 
+  onFurnitureSelect, 
+  hideFurniture = false, 
+  maskMode = false, 
+  materialSettings,
+  wallDivisions,
+  isRendering,
+  captureStep,
+  openings,
+  setOpenings,
+  selectedOpeningId,
+  onOpeningSelect,
+  outsideBackgroundColor = '#0a0a0a',
+  orbitControlsRef,
+  cameraBlendRequest,
+  onCameraBlendComplete,
+  cameraMode,
+  cameraFov,
+  eyeHeightMm,
+  walkSessionKey,
+  walkInitialYaw,
+  walkInitialPitch,
+  walkSpawnXZ,
+  walkDigitalInputRef,
+  cameraWalkStateRef,
+}) => {
+  // ドラッグ中かどうかを判定するステートを追加
+  const [isDragging, setIsDragging] = useState(false);
+  const [hoveredName, setHoveredName] = useState<string | null>(null);
+  const isDraggingRef = useRef(false);
+  const dragUnlockTimerRef = useRef<number | null>(null);
+  const postDragSuppressUntilRef = useRef(0);
+  
+  useEffect(() => {
+    isDraggingRef.current = isDragging;
+  }, [isDragging]);
+
+  useEffect(() => {
+    return () => {
+      if (dragUnlockTimerRef.current != null) {
+        window.clearTimeout(dragUnlockTimerRef.current);
+        dragUnlockTimerRef.current = null;
+      }
+    };
+  }, []);
+
+  const beginDragInteraction = useCallback(() => {
+    if (dragUnlockTimerRef.current != null) {
+      window.clearTimeout(dragUnlockTimerRef.current);
+      dragUnlockTimerRef.current = null;
+    }
+    isDraggingRef.current = true;
+    setIsDragging(true);
+  }, []);
+
+  const markPostDragGuard = useCallback(() => {
+    postDragSuppressUntilRef.current = performance.now() + POST_DRAG_GUARD_MS;
+  }, []);
+
+  const endDragInteraction = useCallback(() => {
+    markPostDragGuard();
+    if (dragUnlockTimerRef.current != null) {
+      window.clearTimeout(dragUnlockTimerRef.current);
+    }
+    dragUnlockTimerRef.current = window.setTimeout(() => {
+      isDraggingRef.current = false;
+      setIsDragging(false);
+      dragUnlockTimerRef.current = null;
+    }, POST_DRAG_GUARD_MS);
+  }, [markPostDragGuard]);
+
+  const isInteractionSuppressed = useCallback(() => {
+    if (isDraggingRef.current) return true;
+    return performance.now() < postDragSuppressUntilRef.current;
+  }, []);
+
+  const safeHoverNameChange = useCallback(
+    (name: string | null) => {
+      if (isInteractionSuppressed()) return;
+      setHoveredName(name);
+    },
+    [isInteractionSuppressed]
+  );
+
+  const safeMeshClick = useCallback(
+    (category: MaterialCategory, meshName: string, isMulti: boolean) => {
+      if (isInteractionSuppressed()) return;
+      onMeshClick(category, meshName, isMulti);
+    },
+    [isInteractionSuppressed, onMeshClick]
+  );
+
+  const sketchFloorPolygon = useMemo(() => {
+    if (modelUrl || sketchPoints.length < 3) return null;
+    const { centerMm } = getRoomTransform(sketchPoints);
+    const polygonMm = sketchPoints.map((p) => ({ x: scaledToMm(p.x), y: scaledToMm(p.y) }));
+    return { centerMm, polygonMm };
+  }, [modelUrl, sketchPoints]);
+
+  const walkBounds = useMemo((): WalkBoundsAabb | null => {
+    if (modelUrl || sketchPoints.length < 3) return null;
+    const { mPoints } = getRoomTransform(sketchPoints as Point[]);
+    return getAabbFromMPoints(mPoints);
+  }, [modelUrl, sketchPoints]);
+
+  const eyeHeightM = eyeHeightMm / 1000;
+
+  const [cameraBlending, setCameraBlending] = useState(false);
+  const handleBlendStart = useCallback(() => setCameraBlending(true), []);
+  const handleBlendEnd = useCallback(() => setCameraBlending(false), []);
+
+  const controlsGloballyLocked =
+    snapshotMode || maskMode || !!isRendering || captureStep === 'mask';
+
+  const selectedNames = useMemo(() => {
+    const names = [...activeMeshes];
+    if (activeFurnitureId) names.push(`${FURNITURE_NAME_PREFIX}${activeFurnitureId}`);
+    if (selectedOpeningId) names.push(`${OPENING_NAME_PREFIX}${selectedOpeningId}`);
+    return names;
+  }, [activeMeshes, activeFurnitureId, selectedOpeningId]);
+
+  return (
+    <div className="w-full h-full bg-[#0a0a0a] relative">
+      <Canvas 
+        shadows
+        dpr={[1, 2]} 
+        gl={{ 
+          antialias: true, 
+          preserveDrawingBuffer: true, 
+          alpha: false,
+          toneMapping: THREE.ACESFilmicToneMapping,
+          toneMappingExposure: 0.85
+        }}
+        onPointerMissed={(e) => {
+            if (isInteractionSuppressed()) return;
+            if (e.type === 'click') {
+                onFurnitureSelect(null);
+            }
+        }}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <color attach="background" args={[captureStep === 'mask' ? '#000000' : (maskMode ? '#000000' : outsideBackgroundColor)]} />
+        {!maskMode && captureStep !== 'mask' && (
+          <mesh position={[0, 8, 0]}>
+            <sphereGeometry args={[250, 24, 24]} />
+            <meshBasicMaterial color={outsideBackgroundColor} side={THREE.BackSide} />
+          </mesh>
+        )}
+
+        <PerspectiveCamera makeDefault position={[12, 10, 12]} fov={cameraFov} ref={cameraRef} />
+        
+        {cameraMode === 'orbit' && (
+          <>
+            <OrbitControls 
+                ref={orbitControlsRef}
+                makeDefault 
+                enableDamping={!snapshotMode && !maskMode && captureStep !== 'mask'} 
+                enabled={
+                  !controlsGloballyLocked &&
+                  !isDragging &&
+                  !cameraBlending
+                }
+                enablePan={true}
+                screenSpacePanning={true}
+                dollyToCursor={false}
+                minDistance={0.8}
+                maxDistance={5000}
+            />
+            <OrbitTargetGuard
+              orbitControlsRef={orbitControlsRef}
+              enabled={
+                !controlsGloballyLocked &&
+                !isDragging &&
+                !cameraBlending
+              }
+            />
+            <OrbitContinuousZoomController
+              orbitControlsRef={orbitControlsRef}
+              enabled={
+                !controlsGloballyLocked &&
+                !isDragging &&
+                !cameraBlending
+              }
+            />
+
+            <CameraBlendController
+              orbitControlsRef={orbitControlsRef}
+              request={cameraBlendRequest}
+              onBlendStart={handleBlendStart}
+              onBlendEnd={handleBlendEnd}
+              onComplete={() => onCameraBlendComplete?.()}
+            />
+          </>
+        )}
+
+        {cameraMode === 'walk' && (
+          <WalkthroughController
+            eyeHeightM={eyeHeightM}
+            walkBounds={walkBounds}
+            walkSessionKey={walkSessionKey}
+            walkInitialYaw={walkInitialYaw}
+            walkInitialPitch={walkInitialPitch}
+            walkSpawnXZ={walkSpawnXZ}
+            digitalInputRef={walkDigitalInputRef}
+            cameraWalkStateRef={cameraWalkStateRef}
+            isDraggingRef={isDraggingRef}
+            disabled={controlsGloballyLocked}
+          />
+        )}
+        {!snapshotMode && !maskMode && captureStep !== 'mask' && <gridHelper args={[40, 40, 0x222222, 0x111111]} position={[0, -0.02, 0]} />}
+
+        <Suspense fallback={null}>
+            <CanvasErrorBoundary>
+                <group>
+                    {/* マスクモード時は照明とエフェクトを完全に消す */}
+                    {!maskMode && captureStep !== 'mask' && (
+                        <>
+                            {/* 影を作らず、空間全体を均一に照らすフラットライティング */}
+                            <ambientLight intensity={0.2} />
+                            <hemisphereLight color="#ffffff" groundColor="#111111" intensity={0.4} />
+                            
+                            {/* 立体感を出すための補助光（影は落とさない） */}
+                            <directionalLight position={[5, 5, 5]} intensity={0.5} castShadow={false} />
+                            <directionalLight position={[-5, 5, -5]} intensity={0.3} castShadow={false} />
+
+                            {/* AIに「素材の質感（ツヤ・金属感）」を伝えるためのHDRI反射情報だけは残す */}
+                            <Environment files="https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/sculpture_exhibition_1k.hdr" environmentIntensity={0.5} />
+                        </>
+                    )}
+
+                    {/* --- 以下、元のモデル描画部分 --- */}
+                    {modelUrl ? (
+                        <CustomBIMModel
+                          url={modelUrl}
+                          selections={selections}
+                          onMeshClick={safeMeshClick}
+                          materialSettings={materialSettings}
+                          isDraggingRef={isDraggingRef}
+                          captureStep={captureStep}
+                          onHoverNameChange={safeHoverNameChange}
+                        />
+                    ) : sketchPoints.length >= 3 ? (
+                        <SketchRoom 
+                          points={sketchPoints} 
+                          selections={selections} 
+                          onMeshClick={safeMeshClick} 
+                          height={roomHeight} 
+                          activeMeshes={activeMeshes} 
+                          snapshotMode={snapshotMode} 
+                          maskMode={maskMode}
+                          materialSettings={materialSettings} 
+                          isDraggingRef={isDraggingRef} 
+                          wallDivisions={wallDivisions} 
+                          captureStep={captureStep} 
+                          openings={openings}
+                          setOpenings={setOpenings}
+                          selectedOpeningId={selectedOpeningId}
+                          onOpeningSelect={onOpeningSelect}
+                          onDragStart={beginDragInteraction}
+                          onDragEnd={endDragInteraction}
+                          onHoverNameChange={safeHoverNameChange}
+                        />
+                    ) : null}
+
+                    {hideFurniture ? null : furnitureItems.map((item) => (
+                        <GLTFFurniture 
+                            key={item.id} item={item} isSelected={activeFurnitureId === item.id}
+                            onSelect={() => onFurnitureSelect(item.id)}
+                            isDraggingRef={isDraggingRef}
+                            snapshotMode={snapshotMode || false}
+                            maskMode={maskMode}
+                            captureStep={captureStep}
+                            sketchFloorDrag={!!sketchFloorPolygon}
+                            centerMm={sketchFloorPolygon?.centerMm}
+                            polygonMm={sketchFloorPolygon?.polygonMm}
+                            onFurniturePatch={(id, position, rotation) => {
+                              onFurnitureUpdate((prev) =>
+                                prev.map((f) =>
+                                  f.id === id
+                                    ? { ...f, position, ...(rotation ? { rotation } : {}) }
+                                    : f
+                                )
+                              );
+                            }}
+                            onFurnitureDragStart={beginDragInteraction}
+                            onFurnitureDragEnd={endDragInteraction}
+                            onPostDragGuard={markPostDragGuard}
+                            onHoverNameChange={safeHoverNameChange}
+                        />
+                    ))}
+                </group>
+            </CanvasErrorBoundary>
+        </Suspense>
+        <SceneOutlineEffects
+          selectedNames={selectedNames}
+          hoveredName={hoveredName}
+          editingActive={isDragging}
+          enabled={!snapshotMode && !maskMode && captureStep !== 'mask'}
+        />
+      </Canvas>
+    </div>
+  );
+};

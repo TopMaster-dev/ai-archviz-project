@@ -1,0 +1,90 @@
+/* Standard CSS Reset & Base Styles */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #050505;
+  color: #f5f5f5;
+}
+
+canvas {
+  display: block;
+  touch-action: none;
+}
+
+/* NumericField: スピナー非表示（type=number 併用時） */
+.numeric-field-input[type='number']::-webkit-outer-spin-button,
+.numeric-field-input[type='number']::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.numeric-field-input[type='number'] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+/* Custom Glass Utility - Converted from @apply to standard CSS */
+.glass {
+  background-color: rgba(15, 15, 15, 0.7);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* Animation Utilities */
+.animate-in { 
+  animation-duration: 0.5s; 
+  animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1); 
+  animation-fill-mode: forwards; 
+}
+
+.fade-in { animation-name: keyframe-fade-in; }
+.slide-in-from-right { animation-name: keyframe-slide-in-right; }
+.slide-in-from-top { animation-name: keyframe-slide-in-top; }
+.slide-in-from-bottom-2 { animation-name: keyframe-slide-in-bottom; }
+.zoom-in-95 { animation-name: keyframe-zoom-in; }
+
+/* マテリアルカタログ: サムネ密度スライダー */
+.catalog-thumb-size-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+.catalog-thumb-size-slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.catalog-thumb-size-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: -5px;
+  border-radius: 9999px;
+  background: #10b981;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+.catalog-thumb-size-slider::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.12);
+}
+.catalog-thumb-size-slider::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: #10b981;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  cursor: pointer;
+}
+
+/* Keyframes */
+@keyframes keyframe-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes keyframe-slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
+@keyframes keyframe-slide-in-top { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes keyframe-slide-in-bottom { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes keyframe-zoom-in { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
