@@ -1,4 +1,5 @@
 import { v2 as cloudinary } from 'cloudinary';
+import { deriveMaterialPhysical } from '../lib/materialPhysical.js';
 
 // Cloudinary Configuration
 cloudinary.config({
@@ -114,7 +115,16 @@ export default async function handler(req: any, res: any) {
 
         // Optimize Texture URL
         const textureUrl = res.secure_url.replace('/upload/', '/upload/f_auto,q_auto/');
-        
+
+        // 実寸テクスチャ投影用メタデータ（mm）を画像仕様から導出。
+        // Cloudinary search はリソースの実ピクセル幅/高さ (res.width/res.height) を返すため、
+        // 「1mm=1px」「チップ=200dpi」やファイル名の識別コード(P/C/R/K)を用いて実寸を推定する。
+        const physical = deriveMaterialPhysical({
+          publicId,
+          widthPx: typeof res.width === 'number' ? res.width : undefined,
+          heightPx: typeof res.height === 'number' ? res.height : undefined,
+        });
+
         // Infer PBR properties
         let glossiness = 'Matte';
         let roughness = 0.8;
@@ -141,7 +151,8 @@ export default async function handler(req: any, res: any) {
                 glossiness: glossiness,
                 normalMapStrength: 0.5
             },
-            promptHint: `(${brand} ${category} ${name})`
+            promptHint: `(${brand} ${category} ${name})`,
+            physical
         };
     });
 

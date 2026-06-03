@@ -7,6 +7,7 @@ import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
 import { generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives } from './lib/gemini.js';
 import { normalizeObjectReference } from './lib/aiEditNormalize.js';
+import { deriveMaterialPhysical } from './lib/materialPhysical.js';
 import type { AiEditObjectReference } from './types.js';
 
 export default defineConfig(({ mode }) => {
@@ -416,7 +417,15 @@ export default defineConfig(({ mode }) => {
                   
                   const category = mapCategory(rawCategory);
                   const textureUrl = res.secure_url.replace('/upload/', '/upload/f_auto,q_auto/');
-                  
+
+                  // Production の /api/materials と同じ実寸メタデータ導出を dev でも適用（dev/prod parity）。
+                  // Cloudinary Admin API のリソースも画像の width/height を返す。
+                  const physical = deriveMaterialPhysical({
+                    publicId: res.public_id,
+                    widthPx: typeof res.width === 'number' ? res.width : undefined,
+                    heightPx: typeof res.height === 'number' ? res.height : undefined,
+                  });
+
                   return {
                     id: res.public_id,
                     name: productId,
@@ -434,7 +443,8 @@ export default defineConfig(({ mode }) => {
                       glossiness: 'Matte',
                       normalMapStrength: 0.5
                     },
-                    promptHint: `(${manufacturer} ${rawCategory} ${productId})`
+                    promptHint: `(${manufacturer} ${rawCategory} ${productId})`,
+                    physical
                   };
                 });
 

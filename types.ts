@@ -1,4 +1,5 @@
 import { ThreeElements } from '@react-three/fiber';
+import type { MaterialPhysical } from './lib/materialPhysical.js';
 
 export interface Point {
   x: number;
@@ -57,6 +58,12 @@ export interface Product {
     normalMapStrength: number;
   };
   promptHint: string;
+  /**
+   * 実寸テクスチャ投影用の物理メタデータ（mm）。/api/materials が画像仕様から導出。
+   * RoomViewer の applyRealSizeTextureRepeat に渡すことで、面の実寸 ÷ テクスチャ実寸から
+   * リピート幅を自動計算する。未取得時は undefined（従来の短辺指定にフォールバック）。
+   */
+  physical?: MaterialPhysical;
 }
 
 export interface SelectionState {

@@ -1,0 +1,6 @@
+dist
+node_modules
+public/models
+*.glb
+*.gltf
+package-lock.json
