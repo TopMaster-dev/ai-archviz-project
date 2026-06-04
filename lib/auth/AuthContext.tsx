@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import { getSupabase, isSupabaseConfigured } from '../db/supabaseClient.js';
+import { translateAuthError } from './authErrors.js';
 import type { Profile, UserRole } from '../db/types.js';
 
 // 認証コンテキスト。属性別サインアップ（プロ/学生/施主、学生は卒業予定年度必須）に対応。
@@ -22,7 +23,7 @@ export interface AuthContextValue {
   userId: string | null;
   email: string | null;
   profile: Profile | null;
-  signUp(params: SignUpParams): Promise<{ error: string | null }>;
+  signUp(params: SignUpParams): Promise<{ error: string | null; needsConfirmation: boolean }>;
   signIn(email: string, password: string): Promise<{ error: string | null }>;
   signOut(): Promise<void>;
   resetPassword(email: string): Promise<{ error: string | null }>;
@@ -79,11 +80,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signUp = useCallback(async (params: SignUpParams) => {
     const sb = getSupabase();
-    if (!sb) return { error: 'Supabase が未構成です。' };
+    if (!sb) return { error: 'Supabase が未構成です。', needsConfirmation: false };
     if (params.role === 'student' && !params.graduationYear) {
-      return { error: '学生の方は卒業予定年度が必須です。' };
+      return { error: '学生の方は卒業予定年度が必須です。', needsConfirmation: false };
     }
-    const { error } = await sb.auth.signUp({
+    const { data, error } = await sb.auth.signUp({
       email: params.email,
       password: params.password,
       options: {
@@ -96,14 +97,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         },
       },
     });
-    return { error: error?.message ?? null };
+    if (error) return { error: translateAuthError(error.message), needsConfirmation: false };
+    // セッションが返らずユーザーだけ作成された＝メール確認が必要な設定。
+    const needsConfirmation = !data.session && !!data.user;
+    return { error: null, needsConfirmation };
   }, []);
 
   const signIn = useCallback(async (em: string, password: string) => {
     const sb = getSupabase();
     if (!sb) return { error: 'Supabase が未構成です。' };
     const { error } = await sb.auth.signInWithPassword({ email: em, password });
-    return { error: error?.message ?? null };
+    return { error: error ? translateAuthError(error.message) : null };
   }, []);
 
   const signOut = useCallback(async () => {
@@ -116,7 +120,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const sb = getSupabase();
     if (!sb) return { error: 'Supabase が未構成です。' };
     const { error } = await sb.auth.resetPasswordForEmail(em);
-    return { error: error?.message ?? null };
+    return { error: error ? translateAuthError(error.message) : null };
   }, []);
 
   const refreshProfile = useCallback(async () => {

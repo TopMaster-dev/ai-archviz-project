@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { useAuth } from '../../lib/auth/AuthContext.js';
 import { AuthScreen } from './AuthScreen.js';
+import { AccountMenu } from './AccountMenu.js';
 
 /**
  * 認証ゲート。
@@ -23,5 +24,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (!userId) return <AuthScreen />;
 
-  return <>{children}</>;
+  return (
+    <>
+      {children}
+      <AccountMenu />
+    </>
+  );
 }

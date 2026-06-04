@@ -27,7 +27,7 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
     setBusy(true);
     setError(null);
     setNotice(null);
-    const { error } = await signUp({
+    const { error, needsConfirmation } = await signUp({
       email,
       password,
       role,
@@ -40,8 +40,14 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
       setError(error);
       return;
     }
-    setNotice('確認メールを送信しました。メール内のリンクから登録を完了してください。');
-    onRegistered?.();
+    if (needsConfirmation) {
+      // メール確認が有効な設定。確認後にログインが必要。
+      setNotice('確認メールを送信しました。メール内のリンクで登録を完了し、ログインしてください。');
+      onRegistered?.();
+    } else {
+      // セッション作成済み（メール確認オフ）。認証ゲートが自動でアプリへ遷移する。
+      setNotice('登録が完了しました。アプリを読み込んでいます…');
+    }
   }
 
   return (
