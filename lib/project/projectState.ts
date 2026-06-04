@@ -31,6 +31,13 @@ export interface MaterialAssignment {
   settings?: Record<string, number>;
 }
 
+/** オブジェクトのグループ（Ctrl+G）。memberIds は家具等のオブジェクト id。 */
+export interface Group {
+  id: string;
+  label?: string;
+  memberIds: string[];
+}
+
 export interface ProjectState {
   schemaVersion: number;
   sketch: {
@@ -43,6 +50,7 @@ export interface ProjectState {
   scene: {
     roomHeightMm: number;
     furniture: FurnitureItem[];
+    groups: Group[];
   };
   /** サーフェスID（メッシュ名）→ マテリアル割り当て */
   materials: Record<string, MaterialAssignment>;
@@ -60,7 +68,7 @@ export function createEmptyProjectState(): ProjectState {
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     sketch: { points: [], openings: [], wallDivisions: {}, underlay: null },
-    scene: { roomHeightMm: 2400, furniture: [] },
+    scene: { roomHeightMm: 2400, furniture: [], groups: [] },
     materials: {},
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },
     camera: { presets: [] },

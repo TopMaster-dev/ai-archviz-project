@@ -25,6 +25,8 @@ import { useAiRenderer } from './hooks/useAiRenderer.js';
 import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
+import { useProjectStore } from './lib/store/projectStore.js';
+import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -663,15 +665,31 @@ const App: React.FC = () => {
   const [activeMeshes, setActiveMeshes] = useState<string[]>([]);
   const [wallDivisions, setWallDivisions] = useState<Record<number, number>>({});
   
-  // Furniture State
-  const [furnitureItems, setFurnitureItems] = useState<FurnitureItem[]>([]);
+  // Furniture State — 真実源は統合ストア（Zustand）。setFurnitureItems の API（値 or 更新関数）は
+  // 互換のまま維持し、書き込みをストアにブリッジする（既存の全呼び出し箇所はそのまま動作し、
+  // かつ Undo/Redo の対象になる）。
+  const furnitureItems = useProjectStore((s) => s.scene.furniture);
+  const setFurnitureItems = useCallback<React.Dispatch<React.SetStateAction<FurnitureItem[]>>>(
+    (action) => {
+      const current = useProjectStore.getState().scene.furniture;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: FurnitureItem[]) => FurnitureItem[])(current)
+          : action;
+      useProjectStore.getState().setFurniture(next);
+    },
+    []
+  );
   /** 3D 側の連続更新をメインスレッドでブロックしにくくする（2D は直接 setFurnitureItems のまま） */
   const setFurnitureItemsFrom3D = useCallback(
     (action: React.SetStateAction<FurnitureItem[]>) => {
       startTransition(() => setFurnitureItems(action));
     },
-    []
+    [setFurnitureItems]
   );
+  // キーボードショートカット（Ctrl+Z / Ctrl+Shift+Z・Ctrl+Y / Ctrl+G）。
+  // ※現時点では家具スライドのみストア管理のため、Undo/Redo は家具に対して有効。
+  useEditorShortcuts();
   const furnitureFootprintAttemptedRef = useRef<Set<string>>(new Set());
   const furnitureItemsRef = useRef<FurnitureItem[]>(furnitureItems);
   furnitureItemsRef.current = furnitureItems;

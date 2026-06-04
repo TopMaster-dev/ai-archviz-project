@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react';
 import { v2 as cloudinary } from 'cloudinary';
 import path from 'node:path';
 import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
+import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
 import { generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives } from './lib/gemini.js';
@@ -89,6 +90,15 @@ export default defineConfig(({ mode }) => {
             // --- Local Furniture Fetch Endpoint ---
             if (req.url === '/api/furniture' && req.method === 'GET') {
               try {
+                // Cloudinary 未構成なら、ローカル public/models のフォールバックカタログを返す
+                // （Cloudinary なしでも家具配置・Undo/Redo をローカルで試せるようにするため）。
+                const hasCloudinary = !!(process.env.CLOUDINARY_CLOUD_NAME || env.CLOUDINARY_CLOUD_NAME);
+                if (!hasCloudinary) {
+                  const items = getLocalFurnitureCatalog();
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ items, _debug: { source: 'local-fallback', count: items.length } }));
+                  return;
+                }
                 // Ensure Cloudinary is configured with latest Secrets
                 cloudinary.config({
                     cloud_name: process.env.CLOUDINARY_CLOUD_NAME || env.CLOUDINARY_CLOUD_NAME,
