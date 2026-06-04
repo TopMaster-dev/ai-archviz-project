@@ -2,6 +2,7 @@ import type {
   Point,
   Opening,
   FurnitureItem,
+  Product,
   CameraPreset,
   AiEditVersion,
   AiEditObjectReference,
@@ -24,11 +25,21 @@ export interface UnderlaySettings {
   visible: boolean;
 }
 
-/** マテリアル割り当て（サーフェスID → 製品 + 表示設定）。 */
-export interface MaterialAssignment {
-  productId: string;
-  /** ツヤ・テクスチャスケール等の調整値 */
-  settings?: Record<string, number>;
+/**
+ * マテリアルの表示設定（productId ごと）。App.tsx の materialSettings と同形。
+ * 同一製品を複数サーフェスで使う場合に設定を共有するため productId をキーに保持する。
+ */
+export interface MaterialSettingsValue {
+  roughness: number;
+  metalness: number;
+  textureScale?: number;
+  baseboardEnabled?: boolean;
+  baseboardHeight?: number;
+  baseboardColor?: string;
+  wainscotHeight?: number;
+  doorColor?: string;
+  doorFrameColor?: string;
+  windowFrameColor?: string;
 }
 
 /** オブジェクトのグループ（Ctrl+G）。memberIds は家具等のオブジェクト id。 */
@@ -43,8 +54,8 @@ export interface ProjectState {
   sketch: {
     points: Point[];
     openings: Opening[];
-    /** 壁インデックス → 分割位置（2 素材の貼り分け） */
-    wallDivisions: Record<string, number>;
+    /** 壁インデックス → 分割数（2 素材の貼り分け）。App.tsx と同じく数値キー。 */
+    wallDivisions: Record<number, number>;
     underlay: UnderlaySettings | null;
   };
   scene: {
@@ -52,8 +63,11 @@ export interface ProjectState {
     furniture: FurnitureItem[];
     groups: Group[];
   };
-  /** サーフェスID（メッシュ名）→ マテリアル割り当て */
-  materials: Record<string, MaterialAssignment>;
+  /** マテリアル: selections（メッシュ名→製品）＋ materialSettings（productId→設定） */
+  materials: {
+    selections: Record<string, Product | null>;
+    materialSettings: Record<string, MaterialSettingsValue>;
+  };
   aiEdit: {
     versions: AiEditVersion[];
     activeVersionId: string | null;
@@ -69,7 +83,7 @@ export function createEmptyProjectState(): ProjectState {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     sketch: { points: [], openings: [], wallDivisions: {}, underlay: null },
     scene: { roomHeightMm: 2400, furniture: [], groups: [] },
-    materials: {},
+    materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },
     camera: { presets: [] },
   };

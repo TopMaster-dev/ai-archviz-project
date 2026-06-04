@@ -27,6 +27,7 @@ import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
+import type { MaterialSettingsValue } from './lib/project/projectState.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -645,10 +646,34 @@ const App: React.FC = () => {
   }, []);
 
   const [viewMode, setViewMode] = useState<ViewMode>('sketch');
-  const [sketchPoints, setSketchPoints] = useState<SketchPoint[]>([]);
+  // sketchPoints の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
+  const sketchPoints = useProjectStore((s) => s.sketch.points) as SketchPoint[];
+  const setSketchPoints = useCallback<React.Dispatch<React.SetStateAction<SketchPoint[]>>>(
+    (action) => {
+      const current = useProjectStore.getState().sketch.points as SketchPoint[];
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: SketchPoint[]) => SketchPoint[])(current)
+          : action;
+      useProjectStore.getState().setSketchPoints(next);
+    },
+    []
+  );
   const [pendingPoints, setPendingPoints] = useState<SketchPoint[]>([]);
   const [isClosedPending, setIsClosedPending] = useState(false);
-  const [selections, setSelections] = useState<Record<string, Product | null>>({});
+  // selections（メッシュ→製品）の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
+  const selections = useProjectStore((s) => s.materials.selections);
+  const setSelections = useCallback<React.Dispatch<React.SetStateAction<Record<string, Product | null>>>>(
+    (action) => {
+      const current = useProjectStore.getState().materials.selections;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: Record<string, Product | null>) => Record<string, Product | null>)(current)
+          : action;
+      useProjectStore.getState().setSelections(next);
+    },
+    []
+  );
   const [roomHeight, setRoomHeight] = useState(2700); 
   
   // Snap Settings
@@ -663,7 +688,19 @@ const App: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<MaterialCategory | null>(null);
   // activeMeshを複数選択対応のactiveMeshesに変更
   const [activeMeshes, setActiveMeshes] = useState<string[]>([]);
-  const [wallDivisions, setWallDivisions] = useState<Record<number, number>>({});
+  // wallDivisions の真実源も統合ストア（Undo/Redo・永続化対象）。setState 互換 API は維持。
+  const wallDivisions = useProjectStore((s) => s.sketch.wallDivisions);
+  const setWallDivisions = useCallback<React.Dispatch<React.SetStateAction<Record<number, number>>>>(
+    (action) => {
+      const current = useProjectStore.getState().sketch.wallDivisions;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: Record<number, number>) => Record<number, number>)(current)
+          : action;
+      useProjectStore.getState().setWallDivisions(next);
+    },
+    []
+  );
   
   // Furniture State — 真実源は統合ストア（Zustand）。setFurnitureItems の API（値 or 更新関数）は
   // 互換のまま維持し、書き込みをストアにブリッジする（既存の全呼び出し箇所はそのまま動作し、
@@ -709,7 +746,19 @@ const App: React.FC = () => {
   const [furnitureCatalogFetchStatus, setFurnitureCatalogFetchStatus] = useState<FurnitureCatalogFetchStatus>('loading');
   const [furnitureCatalogErrorText, setFurnitureCatalogErrorText] = useState<string | null>(null);
   const [furnitureMetadataMap, setFurnitureMetadataMap] = useState<FurnitureModelMetadataMap>({});
-  const [openings, setOpenings] = useState<Opening[]>([]);
+  // openings の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
+  const openings = useProjectStore((s) => s.sketch.openings);
+  const setOpenings = useCallback<React.Dispatch<React.SetStateAction<Opening[]>>>(
+    (action) => {
+      const current = useProjectStore.getState().sketch.openings;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: Opening[]) => Opening[])(current)
+          : action;
+      useProjectStore.getState().setOpenings(next);
+    },
+    []
+  );
   const [selectedOpeningId, setSelectedOpeningId] = useState<string | null>(null);
   const [toolMode, setToolMode] = useState<ToolMode>('draw');
   const [addKind, setAddKind] = useState<AddKind>('door');
@@ -918,7 +967,19 @@ const App: React.FC = () => {
   const [fetchError, setFetchError] = useState<string | null>(null);
 
   // マテリアルごとのツヤ・金属・巾木設定（キーは productId）
-  const [materialSettings, setMaterialSettings] = useState<Record<string, { roughness: number, metalness: number, textureScale?: number, baseboardEnabled?: boolean, baseboardHeight?: number, baseboardColor?: string, wainscotHeight?: number, doorColor?: string, doorFrameColor?: string, windowFrameColor?: string }>>({});
+  // materialSettings（productId→設定）の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
+  const materialSettings = useProjectStore((s) => s.materials.materialSettings);
+  const setMaterialSettings = useCallback<React.Dispatch<React.SetStateAction<Record<string, MaterialSettingsValue>>>>(
+    (action) => {
+      const current = useProjectStore.getState().materials.materialSettings;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: Record<string, MaterialSettingsValue>) => Record<string, MaterialSettingsValue>)(current)
+          : action;
+      useProjectStore.getState().setMaterialSettings(next);
+    },
+    []
+  );
   const OPENINGS_MATERIAL_KEY = '__openings__';
 
   const [isDenoising, setIsDenoising] = useState(false);

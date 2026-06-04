@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useAuth } from '../../lib/auth/AuthContext.js';
 import { AuthScreen } from './AuthScreen.js';
 import { AccountMenu } from './AccountMenu.js';
+import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 
 /**
  * 認証ゲート。
@@ -28,6 +29,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     <>
       {children}
       <AccountMenu />
+      <ProjectSaveIndicator />
     </>
   );
 }

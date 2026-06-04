@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { useProjectStore } from './projectStore.js';
-import type { FurnitureItem } from '../../types.js';
+import type { FurnitureItem, Product } from '../../types.js';
 
 function fakeFurniture(id: string): FurnitureItem {
   return {
@@ -29,11 +29,19 @@ describe('projectStore — document actions', () => {
     expect(store.getState().scene.furniture).toHaveLength(0);
   });
 
-  it('assigns and clears a material', () => {
-    store.getState().assignMaterial('wall_1', { productId: 'p1' });
-    expect(store.getState().materials.wall_1.productId).toBe('p1');
-    store.getState().clearMaterial('wall_1');
-    expect(store.getState().materials.wall_1).toBeUndefined();
+  it('sets selections and material settings, and they are undoable', () => {
+    const product = { id: 'p1' } as unknown as Product;
+    store.getState().setSelections({ wall_1: product });
+    expect(store.getState().materials.selections.wall_1?.id).toBe('p1');
+
+    store.getState().setMaterialSettings({ p1: { roughness: 0.5, metalness: 0.1, textureScale: 2 } });
+    expect(store.getState().materials.materialSettings.p1.textureScale).toBe(2);
+
+    // 直前の materialSettings 変更を undo
+    store.temporal.getState().undo();
+    expect(store.getState().materials.materialSettings.p1).toBeUndefined();
+    // selections は残る
+    expect(store.getState().materials.selections.wall_1?.id).toBe('p1');
   });
 });
 

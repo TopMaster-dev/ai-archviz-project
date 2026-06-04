@@ -6,7 +6,6 @@ import {
   createEmptyProjectState,
   PROJECT_SCHEMA_VERSION,
   type ProjectState,
-  type MaterialAssignment,
   type UnderlaySettings,
 } from '../project/projectState.js';
 
@@ -34,6 +33,7 @@ export interface ProjectStoreState {
   // sketch
   setSketchPoints(points: Point[]): void;
   setOpenings(openings: Opening[]): void;
+  setWallDivisions(wallDivisions: ProjectState['sketch']['wallDivisions']): void;
   setUnderlay(underlay: UnderlaySettings | null): void;
 
   // scene / furniture
@@ -44,9 +44,9 @@ export interface ProjectStoreState {
   updateFurniture(id: string, patch: Partial<FurnitureItem>): void;
   removeFurniture(id: string): void;
 
-  // materials
-  assignMaterial(surfaceId: string, assignment: MaterialAssignment): void;
-  clearMaterial(surfaceId: string): void;
+  // materials（App.tsx の setState 互換ブリッジ用に、配列ならぬマップを丸ごと置き換える）
+  setSelections(selections: ProjectState['materials']['selections']): void;
+  setMaterialSettings(materialSettings: ProjectState['materials']['materialSettings']): void;
 
   // selection (transient)
   select(ids: string[]): void;
@@ -83,6 +83,10 @@ export const useProjectStore = create<ProjectStoreState>()(
         set((s) => {
           s.sketch.openings = openings;
         }),
+      setWallDivisions: (wallDivisions) =>
+        set((s) => {
+          s.sketch.wallDivisions = wallDivisions;
+        }),
       setUnderlay: (underlay) =>
         set((s) => {
           s.sketch.underlay = underlay;
@@ -117,13 +121,13 @@ export const useProjectStore = create<ProjectStoreState>()(
           s.selectedIds = s.selectedIds.filter((x) => x !== id);
         }),
 
-      assignMaterial: (surfaceId, assignment) =>
+      setSelections: (selections) =>
         set((s) => {
-          s.materials[surfaceId] = assignment;
+          s.materials.selections = selections;
         }),
-      clearMaterial: (surfaceId) =>
+      setMaterialSettings: (materialSettings) =>
         set((s) => {
-          delete s.materials[surfaceId];
+          s.materials.materialSettings = materialSettings;
         }),
 
       select: (ids) =>
