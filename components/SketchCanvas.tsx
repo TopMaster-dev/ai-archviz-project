@@ -369,15 +369,19 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const underlayImgRef = useRef<HTMLImageElement | null>(null);
   const underlayRef = useRef(underlay);
   underlayRef.current = underlay;
+  // 画像のピクセル寸法（キャリブレーションの「幅(mm)」計算に使うため state で保持）。
+  const [underlayImgSize, setUnderlayImgSize] = useState<{ w: number; h: number } | null>(null);
 
   useEffect(() => {
     if (!underlay?.dataUrl) {
       underlayImgRef.current = null;
+      setUnderlayImgSize(null);
       return;
     }
     const img = new Image();
     img.onload = () => {
       underlayImgRef.current = img;
+      setUnderlayImgSize({ w: img.width, h: img.height });
     };
     img.src = underlay.dataUrl;
     return () => {
@@ -386,18 +390,38 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   }, [underlay?.dataUrl]);
 
   const handleUnderlayFile = useCallback(
-    (e: React.ChangeEvent<HTMLInputElement>) => {
+    async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       e.target.value = '';
       if (!file) return;
-      const reader = new FileReader();
-      reader.onload = () => {
-        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+      // データ容量制限（仕様）: 10MB 超は拒否。
+      if (file.size > 10 * 1024 * 1024) {
+        showFurnitureHint('下絵ファイルが大きすぎます（10MB以下にしてください）');
+        return;
+      }
+      try {
+        const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+        let dataUrl: string;
+        if (isPdf) {
+          // pdfjs を動的 import（PDF 選択時のみ読み込み）して1ページ目をラスタライズ。
+          const { pdfFirstPageToDataUrl } = await import('../utils/pdfToImage.js');
+          dataUrl = await pdfFirstPageToDataUrl(file);
+        } else {
+          dataUrl = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+            reader.onerror = () => reject(reader.error);
+            reader.readAsDataURL(file);
+          });
+        }
         if (!dataUrl) return;
         onUnderlayChange?.({ dataUrl, opacity: 0.5, scaleMmPerPx: 10, offsetX: 0, offsetY: 0, visible: true });
-      };
-      reader.readAsDataURL(file);
+      } catch (err) {
+        console.error('[underlay] failed to load', err);
+        showFurnitureHint('下絵の読み込みに失敗しました');
+      }
     },
+    // showFurnitureHint は安定（useCallback []）のため依存に含めない。
     [onUnderlayChange]
   );
 
@@ -1796,8 +1820,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   return (
     <div className="relative flex flex-col items-center group pt-28" ref={containerRef}>
 
-      {/* 下絵（背景画像）コントロール */}
-      <div className="absolute top-6 left-6 z-50 glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+      {/* 下絵（背景画像）コントロール。ナビ（pt-28）の下に配置して被りを回避。 */}
+      <div className="absolute top-32 left-6 z-40 glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         {!underlay ? (
           <button
             type="button"
@@ -1807,46 +1831,84 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             下絵を挿入
           </button>
         ) : (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => underlayFileInputRef.current?.click()}
-              className="font-bold transition hover:text-white"
-              title="画像を差し替え"
-            >
-              下絵
-            </button>
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.05}
-              value={underlay.opacity}
-              onChange={(e) => onUnderlayChange?.({ ...underlay, opacity: Number(e.target.value) })}
-              className="w-20"
-              title="不透明度"
-            />
-            <button
-              type="button"
-              onClick={() => onUnderlayChange?.({ ...underlay, visible: !underlay.visible })}
-              className="px-2 py-1 rounded transition hover:bg-white/10"
-            >
-              {underlay.visible ? '表示' : '非表示'}
-            </button>
-            <button
-              type="button"
-              onClick={() => onUnderlayChange?.(null)}
-              className="px-2 py-1 rounded text-red-300 transition hover:bg-red-500/20"
-              title="下絵を削除"
-            >
-              ×
-            </button>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => underlayFileInputRef.current?.click()}
+                className="font-bold transition hover:text-white"
+                title="画像/PDFを差し替え"
+              >
+                下絵
+              </button>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={underlay.opacity}
+                onChange={(e) => onUnderlayChange?.({ ...underlay, opacity: Number(e.target.value) })}
+                className="w-20"
+                title="不透明度"
+              />
+              <button
+                type="button"
+                onClick={() => onUnderlayChange?.({ ...underlay, visible: !underlay.visible })}
+                className="px-2 py-1 rounded transition hover:bg-white/10"
+              >
+                {underlay.visible ? '表示' : '非表示'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onUnderlayChange?.(null)}
+                className="px-2 py-1 rounded text-red-300 transition hover:bg-red-500/20"
+                title="下絵を削除"
+              >
+                ×
+              </button>
+            </div>
+            {/* キャリブレーション: 実寸幅(mm) と 位置(mm) */}
+            <div className="flex items-center gap-2 text-[10px] text-neutral-300">
+              <label className="flex items-center gap-1">
+                幅
+                <input
+                  type="number"
+                  value={underlayImgSize ? Math.round(underlayImgSize.w * (underlay.scaleMmPerPx ?? 10)) : 0}
+                  onChange={(e) => {
+                    const widthMm = Number(e.target.value);
+                    if (underlayImgSize && underlayImgSize.w > 0 && widthMm > 0) {
+                      onUnderlayChange?.({ ...underlay, scaleMmPerPx: widthMm / underlayImgSize.w });
+                    }
+                  }}
+                  className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+                mm
+              </label>
+              <label className="flex items-center gap-1">
+                X
+                <input
+                  type="number"
+                  value={Math.round(underlay.offsetX)}
+                  onChange={(e) => onUnderlayChange?.({ ...underlay, offsetX: Number(e.target.value) })}
+                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                Y
+                <input
+                  type="number"
+                  value={Math.round(underlay.offsetY)}
+                  onChange={(e) => onUnderlayChange?.({ ...underlay, offsetY: Number(e.target.value) })}
+                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+              </label>
+            </div>
           </div>
         )}
         <input
           ref={underlayFileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/webp"
+          accept="image/png,image/jpeg,image/webp,application/pdf"
           className="hidden"
           onChange={handleUnderlayFile}
         />
