@@ -3,6 +3,7 @@ import { useAuth } from '../../lib/auth/AuthContext.js';
 import { AuthScreen } from './AuthScreen.js';
 import { AccountMenu } from './AccountMenu.js';
 import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
+import { UndoRedoBar } from '../UndoRedoBar.js';
 
 /**
  * 認証ゲート。
@@ -13,7 +14,14 @@ import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 export function AuthGate({ children }: { children: ReactNode }) {
   const { configured, loading, userId } = useAuth();
 
-  if (!configured) return <>{children}</>;
+  if (!configured) {
+    return (
+      <>
+        {children}
+        <UndoRedoBar />
+      </>
+    );
+  }
 
   if (loading) {
     return (
@@ -30,6 +38,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
       {children}
       <AccountMenu />
       <ProjectSaveIndicator />
+      <UndoRedoBar />
     </>
   );
 }
