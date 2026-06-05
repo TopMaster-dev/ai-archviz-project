@@ -36,12 +36,48 @@ import {
   clampFurnitureItemToRoom
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
+import type { Beam } from '../lib/project/projectState.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
   (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
   (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
   (THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
+}
+
+/**
+ * 梁の3D描画。2D(mm)座標 (cx,cy) を部屋と同じ変換で3Dワールド(m)へ写像し、
+ * 天井（roomHeight）から dropMm 下げた位置に箱として配置する。
+ */
+function Beams3D({
+  beams,
+  centerMm,
+  roomHeight,
+}: {
+  beams: Beam[];
+  centerMm: Point | undefined;
+  roomHeight: number;
+}) {
+  if (!centerMm || beams.length === 0) return null;
+  return (
+    <group>
+      {beams.map((b) => {
+        const bx = (b.cx - centerMm.x) / MM_PER_METER;
+        const bz = (b.cy - centerMm.y) / MM_PER_METER;
+        const lengthM = Math.max(0.01, b.lengthMm / MM_PER_METER);
+        const widthM = Math.max(0.01, b.widthMm / MM_PER_METER);
+        const heightM = Math.max(0.01, b.heightMm / MM_PER_METER);
+        const by = roomHeight - b.dropMm / MM_PER_METER - heightM / 2;
+        const angleRad = (b.angleDeg * Math.PI) / 180;
+        return (
+          <mesh key={b.id} position={[bx, by, bz]} rotation={[0, -angleRad, 0]} castShadow receiveShadow>
+            <boxGeometry args={[lengthM, heightM, widthM]} />
+            <meshStandardMaterial color="#9a9a9a" roughness={0.85} metalness={0.05} />
+          </mesh>
+        );
+      })}
+    </group>
+  );
 }
 
 interface RoomViewerProps {
@@ -56,6 +92,7 @@ interface RoomViewerProps {
   snapshotMode?: boolean; // Used ONLY to hide highlights & grid
   furnitureItems: FurnitureItem[];
   onFurnitureUpdate: React.Dispatch<React.SetStateAction<FurnitureItem[]>>;
+  beams?: Beam[];
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null) => void;
   hideFurniture?: boolean; // New Prop for empty room capture
@@ -2361,11 +2398,12 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   sketchPoints, 
   roomHeight, 
   snapshotMode = false, 
-  furnitureItems, 
-  onFurnitureUpdate, 
-  activeFurnitureId, 
-  onFurnitureSelect, 
-  hideFurniture = false, 
+  furnitureItems,
+  onFurnitureUpdate,
+  activeFurnitureId,
+  onFurnitureSelect,
+  beams = [],
+  hideFurniture = false,
   maskMode = false, 
   materialSettings,
   wallDivisions,
@@ -2653,6 +2691,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             onHoverNameChange={safeHoverNameChange}
                         />
                     ))}
+                    <Beams3D beams={beams} centerMm={sketchFloorPolygon?.centerMm} roomHeight={roomHeight} />
                 </group>
             </CanvasErrorBoundary>
         </Suspense>

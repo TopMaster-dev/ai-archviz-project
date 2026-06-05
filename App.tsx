@@ -2318,9 +2318,10 @@ const App: React.FC = () => {
                         sketchPoints={sketchPoints} 
                         roomHeight={roomHeight / 1000} 
                         snapshotMode={snapshotMode} 
-                        furnitureItems={furnitureItems} 
-                        onFurnitureUpdate={setFurnitureItemsFrom3D} 
-                        activeFurnitureId={activeFurnitureId} 
+                        furnitureItems={furnitureItems}
+                        onFurnitureUpdate={setFurnitureItemsFrom3D}
+                        beams={beams}
+                        activeFurnitureId={activeFurnitureId}
                         onFurnitureSelect={handleFurnitureSelect} 
                         hideFurniture={hideFurniture}
                         maskMode={maskMode}
