@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 import { NumericField } from './NumericField.js';
 import { Point, Opening, OpeningType, ToolMode, AddKind, FurnitureItem } from '../types.js';
+import type { UnderlaySettings } from '../lib/project/projectState.js';
 import {
   SKETCH_BASE_SCALE,
   getRoomTransform,
@@ -213,6 +214,9 @@ interface SketchCanvasProps {
   onFurnitureUpdate: React.Dispatch<React.SetStateAction<FurnitureItem[]>>;
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null) => void;
+  /** 下絵（2D背景画像）。null で非挿入。 */
+  underlay?: UnderlaySettings | null;
+  onUnderlayChange?: (underlay: UnderlaySettings | null) => void;
 }
 
 const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -246,7 +250,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   furnitureItems,
   onFurnitureUpdate,
   activeFurnitureId,
-  onFurnitureSelect
+  onFurnitureSelect,
+  underlay = null,
+  onUnderlayChange
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -356,6 +362,44 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     x: mm.x * viewZoomRef.current + viewOffsetRef.current.x,
     y: mm.y * viewZoomRef.current + viewOffsetRef.current.y
   }), []);
+
+  // --- 下絵（背景画像）---
+  // 画像は ref に保持し、rAF の render ループ内で毎フレーム読み出す（再描画トリガ不要）。
+  const underlayFileInputRef = useRef<HTMLInputElement | null>(null);
+  const underlayImgRef = useRef<HTMLImageElement | null>(null);
+  const underlayRef = useRef(underlay);
+  underlayRef.current = underlay;
+
+  useEffect(() => {
+    if (!underlay?.dataUrl) {
+      underlayImgRef.current = null;
+      return;
+    }
+    const img = new Image();
+    img.onload = () => {
+      underlayImgRef.current = img;
+    };
+    img.src = underlay.dataUrl;
+    return () => {
+      img.onload = null;
+    };
+  }, [underlay?.dataUrl]);
+
+  const handleUnderlayFile = useCallback(
+    (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      e.target.value = '';
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const dataUrl = typeof reader.result === 'string' ? reader.result : '';
+        if (!dataUrl) return;
+        onUnderlayChange?.({ dataUrl, opacity: 0.5, scaleMmPerPx: 10, offsetX: 0, offsetY: 0, visible: true });
+      };
+      reader.readAsDataURL(file);
+    },
+    [onUnderlayChange]
+  );
 
   const showFurnitureHint = useCallback((msg: string) => {
     if (furnitureHintTimerRef.current) clearTimeout(furnitureHintTimerRef.current);
@@ -1227,6 +1271,20 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       const currentZoom = viewZoomRef.current;
       const currentOffset = viewOffsetRef.current;
 
+      // 0. 下絵（背景画像）を最背面に描画
+      const ul = underlayRef.current;
+      const ulImg = underlayImgRef.current;
+      if (ul && ul.visible && ulImg) {
+        const mmPerPx = ul.scaleMmPerPx && ul.scaleMmPerPx > 0 ? ul.scaleMmPerPx : 10;
+        const tl = worldToScreen({ x: ul.offsetX, y: ul.offsetY });
+        const w = ulImg.width * mmPerPx * currentZoom;
+        const h = ulImg.height * mmPerPx * currentZoom;
+        ctx.save();
+        ctx.globalAlpha = Math.max(0, Math.min(1, ul.opacity));
+        ctx.drawImage(ulImg, tl.x, tl.y, w, h);
+        ctx.restore();
+      }
+
       // 1. Grid Lines
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
@@ -1737,7 +1795,63 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   return (
     <div className="relative flex flex-col items-center group pt-28" ref={containerRef}>
-      
+
+      {/* 下絵（背景画像）コントロール */}
+      <div className="absolute top-6 left-6 z-50 glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+        {!underlay ? (
+          <button
+            type="button"
+            onClick={() => underlayFileInputRef.current?.click()}
+            className="px-3 py-1.5 rounded-lg font-bold transition hover:bg-white/10"
+          >
+            下絵を挿入
+          </button>
+        ) : (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => underlayFileInputRef.current?.click()}
+              className="font-bold transition hover:text-white"
+              title="画像を差し替え"
+            >
+              下絵
+            </button>
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.05}
+              value={underlay.opacity}
+              onChange={(e) => onUnderlayChange?.({ ...underlay, opacity: Number(e.target.value) })}
+              className="w-20"
+              title="不透明度"
+            />
+            <button
+              type="button"
+              onClick={() => onUnderlayChange?.({ ...underlay, visible: !underlay.visible })}
+              className="px-2 py-1 rounded transition hover:bg-white/10"
+            >
+              {underlay.visible ? '表示' : '非表示'}
+            </button>
+            <button
+              type="button"
+              onClick={() => onUnderlayChange?.(null)}
+              className="px-2 py-1 rounded text-red-300 transition hover:bg-red-500/20"
+              title="下絵を削除"
+            >
+              ×
+            </button>
+          </div>
+        )}
+        <input
+          ref={underlayFileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          onChange={handleUnderlayFile}
+        />
+      </div>
+
       {/* Floating Toolbar (Right) */}
       <div className="absolute top-1/2 -translate-y-1/2 -right-20 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
         <button onClick={() => handleZoomButton('in')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">+</button>
