@@ -43,6 +43,8 @@ export interface ProjectStoreState {
   addFurniture(item: FurnitureItem): void;
   updateFurniture(id: string, patch: Partial<FurnitureItem>): void;
   removeFurniture(id: string): void;
+  /** 梁の配列を丸ごと置き換える（App.tsx の setState 互換ブリッジ用）。 */
+  setBeams(beams: ProjectState['scene']['beams']): void;
 
   // materials（App.tsx の setState 互換ブリッジ用に、配列ならぬマップを丸ごと置き換える）
   setSelections(selections: ProjectState['materials']['selections']): void;
@@ -119,6 +121,10 @@ export const useProjectStore = create<ProjectStoreState>()(
           for (const g of s.scene.groups) g.memberIds = g.memberIds.filter((m) => m !== id);
           s.scene.groups = s.scene.groups.filter((g) => g.memberIds.length > 0);
           s.selectedIds = s.selectedIds.filter((x) => x !== id);
+        }),
+      setBeams: (beams) =>
+        set((s) => {
+          s.scene.beams = beams;
         }),
 
       setSelections: (selections) =>

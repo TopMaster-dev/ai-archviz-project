@@ -13,7 +13,7 @@ export function UndoRedoBar() {
     'flex h-8 w-8 items-center justify-center rounded-lg text-neutral-200 transition hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent';
 
   return (
-    <div className="fixed bottom-3 left-3 z-[1000] flex gap-1 rounded-xl bg-neutral-800/80 p-1 shadow ring-1 ring-white/10">
+    <div className="fixed bottom-3 left-1/2 z-[1000] flex -translate-x-1/2 gap-1 rounded-xl bg-neutral-800/80 p-1 shadow ring-1 ring-white/10">
       <button
         type="button"
         onClick={() => useProjectStore.temporal.getState().undo()}

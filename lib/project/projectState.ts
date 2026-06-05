@@ -49,6 +49,21 @@ export interface Group {
   memberIds: string[];
 }
 
+/**
+ * 梁（パラメトリックな2D要素・フェーズ1）。中心＋長さ＋角度で保持し、寸法を数値編集できる。
+ * dropMm/heightMm は3D（天井下の梁せい）用。
+ */
+export interface Beam {
+  id: string;
+  cx: number; // 中心 X (mm)
+  cy: number; // 中心 Y (mm)
+  lengthMm: number;
+  angleDeg: number;
+  widthMm: number;
+  dropMm: number; // 天井からの下がり (mm)
+  heightMm: number; // 梁せい (mm)
+}
+
 export interface ProjectState {
   schemaVersion: number;
   sketch: {
@@ -62,6 +77,7 @@ export interface ProjectState {
     roomHeightMm: number;
     furniture: FurnitureItem[];
     groups: Group[];
+    beams: Beam[];
   };
   /** マテリアル: selections（メッシュ名→製品）＋ materialSettings（productId→設定） */
   materials: {
@@ -82,7 +98,7 @@ export function createEmptyProjectState(): ProjectState {
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     sketch: { points: [], openings: [], wallDivisions: {}, underlay: null },
-    scene: { roomHeightMm: 2400, furniture: [], groups: [] },
+    scene: { roomHeightMm: 2400, furniture: [], groups: [], beams: [] },
     materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },
     camera: { presets: [] },

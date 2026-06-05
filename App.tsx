@@ -648,6 +648,8 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('sketch');
   // 下絵（2D背景画像）もストア管理（永続化対象）。
   const underlay = useProjectStore((s) => s.sketch.underlay);
+  // 梁（天井レイヤ）もストア管理（永続化・Undo対象）。
+  const beams = useProjectStore((s) => s.scene.beams);
   // sketchPoints の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
   const sketchPoints = useProjectStore((s) => s.sketch.points) as SketchPoint[];
   const setSketchPoints = useCallback<React.Dispatch<React.SetStateAction<SketchPoint[]>>>(
@@ -2282,6 +2284,8 @@ const App: React.FC = () => {
                         onFurnitureSelect={handleFurnitureSelect}
                         underlay={underlay}
                         onUnderlayChange={(u) => useProjectStore.getState().setUnderlay(u)}
+                        beams={beams}
+                        onBeamsChange={(b) => useProjectStore.getState().setBeams(b)}
                      />
                      
                      {!renderState.isRendering && (

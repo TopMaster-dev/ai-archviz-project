@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 
 import { NumericField } from './NumericField.js';
 import { Point, Opening, OpeningType, ToolMode, AddKind, FurnitureItem } from '../types.js';
-import type { UnderlaySettings } from '../lib/project/projectState.js';
+import type { UnderlaySettings, Beam } from '../lib/project/projectState.js';
 import {
   SKETCH_BASE_SCALE,
   getRoomTransform,
@@ -217,6 +217,9 @@ interface SketchCanvasProps {
   /** 下絵（2D背景画像）。null で非挿入。 */
   underlay?: UnderlaySettings | null;
   onUnderlayChange?: (underlay: UnderlaySettings | null) => void;
+  /** 梁（パラメトリックな2D要素）。 */
+  beams?: Beam[];
+  onBeamsChange?: (beams: Beam[]) => void;
 }
 
 const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -252,7 +255,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   activeFurnitureId,
   onFurnitureSelect,
   underlay = null,
-  onUnderlayChange
+  onUnderlayChange,
+  beams = [],
+  onBeamsChange
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -310,6 +315,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [isDrawing, setIsDrawing] = useState(false);
   const [isClosed, setIsClosed] = useState(pointsMm.length >= 3);
   const [isGridSnapEnabled, setIsGridSnapEnabled] = useState(true);
+  // 寸法/頂点スナップ（既存ジオメトリの頂点・X/Y整列に吸着）。
+  const [isVertexSnapEnabled, setIsVertexSnapEnabled] = useState(true);
   
   // Selection & Interaction State
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
@@ -423,6 +430,40 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     },
     // showFurnitureHint は安定（useCallback []）のため依存に含めない。
     [onUnderlayChange]
+  );
+
+  // --- 梁 / 天伏ビュー ---
+  // render ループ（rAF）から毎フレーム読み出すため ref に保持する。
+  const beamsRef = useRef(beams);
+  beamsRef.current = beams;
+  const [isCeilingView, setIsCeilingView] = useState(false);
+  const ceilingViewRef = useRef(isCeilingView);
+  ceilingViewRef.current = isCeilingView;
+  const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
+  const selectedBeamIdRef = useRef(selectedBeamId);
+  selectedBeamIdRef.current = selectedBeamId;
+
+  const addBeam = useCallback(() => {
+    const id = `beam-${Date.now()}`;
+    const beam: Beam = { id, cx: 0, cy: 0, lengthMm: 3000, angleDeg: 0, widthMm: 150, dropMm: 200, heightMm: 300 };
+    onBeamsChange?.([...beamsRef.current, beam]);
+    setSelectedBeamId(id);
+    setIsCeilingView(true);
+  }, [onBeamsChange]);
+
+  const updateBeam = useCallback(
+    (id: string, patch: Partial<Beam>) => {
+      onBeamsChange?.(beamsRef.current.map((b) => (b.id === id ? { ...b, ...patch } : b)));
+    },
+    [onBeamsChange]
+  );
+
+  const removeBeam = useCallback(
+    (id: string) => {
+      onBeamsChange?.(beamsRef.current.filter((b) => b.id !== id));
+      setSelectedBeamId((cur) => (cur === id ? null : cur));
+    },
+    [onBeamsChange]
   );
 
   const showFurnitureHint = useCallback((msg: string) => {
@@ -555,7 +596,39 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         }
     }
 
-    // Priority 2: Grid Snap (Absolute Coordinate Snap)
+    // Priority 2: 寸法/頂点スナップ（既存ジオメトリへの吸着）
+    if (isVertexSnapEnabled && pointsMm.length > 0) {
+      const rawScreen = worldToScreen(rawMm);
+      const VERTEX_PX = 14;
+      // 2a. 既存頂点への吸着（自分の起点は除外）
+      for (const v of pointsMm) {
+        if (originMm && v.x === originMm.x && v.y === originMm.y) continue;
+        const vs = worldToScreen(v);
+        if (Math.hypot(vs.x - rawScreen.x, vs.y - rawScreen.y) < VERTEX_PX) {
+          return { x: v.x, y: v.y };
+        }
+      }
+      // 2b. X/Y 整列スナップ（既存頂点と同じ X もしくは Y に揃える）
+      let snappedX = rawMm.x;
+      let snappedY = rawMm.y;
+      let alignedX = false;
+      let alignedY = false;
+      for (const v of pointsMm) {
+        if (originMm && v.x === originMm.x && v.y === originMm.y) continue;
+        const vs = worldToScreen(v);
+        if (!alignedX && Math.abs(vs.x - rawScreen.x) < VERTEX_PX) { snappedX = v.x; alignedX = true; }
+        if (!alignedY && Math.abs(vs.y - rawScreen.y) < VERTEX_PX) { snappedY = v.y; alignedY = true; }
+        if (alignedX && alignedY) break;
+      }
+      if (alignedX || alignedY) {
+        // 整列しない軸はグリッドが有効なら従来どおりグリッドへ。
+        if (!alignedX && isGridSnapEnabled && gridSize > 0) snappedX = snapValue(rawMm.x, gridSize);
+        if (!alignedY && isGridSnapEnabled && gridSize > 0) snappedY = snapValue(rawMm.y, gridSize);
+        return { x: snappedX, y: snappedY };
+      }
+    }
+
+    // Priority 3: Grid Snap (Absolute Coordinate Snap)
     // If Grid Snap is ON, strictly snap to grid intersections defined by gridSize.
     if (isGridSnapEnabled && gridSize > 0) {
        return { 
@@ -1795,6 +1868,35 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, rulerSize, rulerSize);
       ctx.restore();
 
+      // 天伏ビュー: 平面を半透明化してから天井レイヤ（梁）を最前面に描画
+      if (ceilingViewRef.current) {
+        ctx.save();
+        ctx.fillStyle = 'rgba(8,10,14,0.55)';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.restore();
+      }
+      const beamList = beamsRef.current;
+      if (beamList.length > 0) {
+        ctx.save();
+        ctx.lineCap = 'round';
+        for (const beam of beamList) {
+          const half = beam.lengthMm / 2;
+          const rad = (beam.angleDeg * Math.PI) / 180;
+          const bdx = Math.cos(rad) * half;
+          const bdy = Math.sin(rad) * half;
+          const bp1 = worldToScreen({ x: beam.cx - bdx, y: beam.cy - bdy });
+          const bp2 = worldToScreen({ x: beam.cx + bdx, y: beam.cy + bdy });
+          ctx.lineWidth = Math.max(2, beam.widthMm * currentZoom);
+          ctx.strokeStyle =
+            beam.id === selectedBeamIdRef.current ? 'rgba(245,158,11,0.95)' : 'rgba(245,200,120,0.7)';
+          ctx.beginPath();
+          ctx.moveTo(bp1.x, bp1.y);
+          ctx.lineTo(bp2.x, bp2.y);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
       const frameMs = performance.now() - frameStart;
       if (PERF_TRACE && frameMs > PERF_FRAME_WARN_MS && furnitureItemsRef.current.length > 0) {
         console.warn('[perf][2d-frame] slow frame', {
@@ -1820,8 +1922,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   return (
     <div className="relative flex flex-col items-center group pt-28" ref={containerRef}>
 
-      {/* 下絵（背景画像）コントロール。ナビ（pt-28）の下に配置して被りを回避。 */}
-      <div className="absolute top-32 left-6 z-40 glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+      {/* 左サイドツールパネル（下絵 + 天伏/梁）を1列にまとめて自動整列 */}
+      <div className="absolute top-28 left-6 z-40 flex w-[320px] flex-col gap-2">
+      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         {!underlay ? (
           <button
             type="button"
@@ -1914,8 +2017,101 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         />
       </div>
 
+      {/* 天伏ビュー / 梁 */}
+      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center gap-2">
+          <span className="font-bold" title="平面を半透明化して天井レイヤ（梁）を表示">天伏</span>
+          <ToggleSwitch enabled={isCeilingView} onChange={() => setIsCeilingView(!isCeilingView)} />
+          <button type="button" onClick={addBeam} className="px-2 py-1 rounded font-bold transition hover:bg-white/10">
+            ＋梁
+          </button>
+          {beams.length > 0 && <span className="text-neutral-500">{beams.length}本</span>}
+        </div>
+        {beams.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {beams.map((b, i) => (
+              <button
+                key={b.id}
+                type="button"
+                onClick={() => setSelectedBeamId(b.id)}
+                className={`px-2 py-0.5 rounded text-[10px] transition ${
+                  selectedBeamId === b.id
+                    ? 'bg-amber-500/30 text-amber-200'
+                    : 'bg-neutral-700/50 hover:bg-neutral-700'
+                }`}
+              >
+                梁{i + 1}
+              </button>
+            ))}
+          </div>
+        )}
+        {(() => {
+          const b = beams.find((x) => x.id === selectedBeamId);
+          if (!b) return null;
+          return (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <label className="flex items-center gap-1">
+                長さ
+                <input
+                  type="number"
+                  value={Math.round(b.lengthMm)}
+                  onChange={(e) => updateBeam(b.id, { lengthMm: Number(e.target.value) })}
+                  className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+                mm
+              </label>
+              <label className="flex items-center gap-1">
+                角度
+                <input
+                  type="number"
+                  value={Math.round(b.angleDeg)}
+                  onChange={(e) => updateBeam(b.id, { angleDeg: Number(e.target.value) })}
+                  className="w-12 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+                °
+              </label>
+              <label className="flex items-center gap-1">
+                幅
+                <input
+                  type="number"
+                  value={Math.round(b.widthMm)}
+                  onChange={(e) => updateBeam(b.id, { widthMm: Number(e.target.value) })}
+                  className="w-12 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                X
+                <input
+                  type="number"
+                  value={Math.round(b.cx)}
+                  onChange={(e) => updateBeam(b.id, { cx: Number(e.target.value) })}
+                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                Y
+                <input
+                  type="number"
+                  value={Math.round(b.cy)}
+                  onChange={(e) => updateBeam(b.id, { cy: Number(e.target.value) })}
+                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => removeBeam(b.id)}
+                className="px-2 py-0.5 rounded text-red-300 transition hover:bg-red-500/20"
+              >
+                削除
+              </button>
+            </div>
+          );
+        })()}
+      </div>
+      </div>
+
       {/* Floating Toolbar (Right) */}
-      <div className="absolute top-1/2 -translate-y-1/2 -right-20 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
+      <div className="absolute top-1/2 -translate-y-1/2 right-4 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
         <button onClick={() => handleZoomButton('in')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">+</button>
         <button onClick={() => handleZoomButton('out')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">-</button>
         <button onClick={handleFitToScreen} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-xs font-black text-neutral-400 hover:bg-white/10 transition-all uppercase tracking-tighter">全体</button>
@@ -2034,6 +2230,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                           </select>
                       </div>
                       <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
+                  </div>
+
+                  {/* Vertex / Dimension Snap Toggle */}
+                  <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider" title="既存の頂点・整列にスナップ">頂点</span>
+                      <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
                   </div>
               </div>
 

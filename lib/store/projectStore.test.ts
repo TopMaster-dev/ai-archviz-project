@@ -119,6 +119,17 @@ describe('projectStore — setFurniture bridge (App.tsx setState compat)', () =>
   });
 });
 
+describe('projectStore — beams', () => {
+  it('sets beams and is undoable', () => {
+    store.getState().setBeams([
+      { id: 'b1', cx: 0, cy: 0, lengthMm: 3000, angleDeg: 0, widthMm: 150, dropMm: 200, heightMm: 300 },
+    ]);
+    expect(store.getState().scene.beams).toHaveLength(1);
+    store.temporal.getState().undo();
+    expect(store.getState().scene.beams).toHaveLength(0);
+  });
+});
+
 describe('projectStore — load / serialize', () => {
   it('round-trips through toProjectState / loadProjectState', () => {
     store.getState().addFurniture(fakeFurniture('a'));
