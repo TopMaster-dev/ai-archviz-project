@@ -2929,6 +2929,35 @@ const App: React.FC = () => {
                                                 </div>
                                             </div>
 
+                                            <button
+                                                type="button"
+                                                onClick={() => {
+                                                    const ceilingY = roomHeight / 1000;
+                                                    setFurnitureItems((prev) =>
+                                                        prev.map((f) => {
+                                                            if (f.id !== activeFurnitureId) return f;
+                                                            const toCeiling = !f.ceilingMount;
+                                                            return {
+                                                                ...f,
+                                                                ceilingMount: toCeiling,
+                                                                position: [
+                                                                    f.position[0],
+                                                                    toCeiling ? ceilingY : 0,
+                                                                    f.position[2],
+                                                                ] as [number, number, number],
+                                                            };
+                                                        })
+                                                    );
+                                                }}
+                                                className={`w-full text-[10px] font-bold rounded-lg px-2 py-1.5 border transition-colors ${
+                                                    activeItem.ceilingMount
+                                                        ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300'
+                                                        : 'bg-black/30 border-white/10 text-neutral-300 hover:bg-white/5'
+                                                }`}
+                                            >
+                                                {activeItem.ceilingMount ? '✓ 天井に配置中（解除）' : '天井に配置'}
+                                            </button>
+
                                             <div className="flex items-start gap-3 w-full pt-2 border-t border-white/10">
                                                 <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/10 shrink-0 bg-neutral-800">
                                                     <ModelThumbnail

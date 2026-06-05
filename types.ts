@@ -27,6 +27,8 @@ export interface FurnitureItem {
   customName?: string;
   customBrand?: string;
   customPrice?: number;
+  /** 天井オブジェクトとして天井高に配置するか（true のとき position[1] を天井高に置く） */
+  ceilingMount?: boolean;
 }
 
 export interface FurnitureCatalogItem {
