@@ -37,6 +37,7 @@ import {
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
+import { effectiveTextureShortEdgeMeters } from '../lib/materialPhysical.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -202,7 +203,8 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
     const texture = new THREE.TextureLoader().load(prod.textureUrl);
     texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
     texture.colorSpace = THREE.SRGBColorSpace;
-    const shortEdgeMeters = settings.textureScale ?? 1; // 1.0 => 短辺 1000mm
+    // 実寸投影: 素材の物理メタ（mm）から短辺実寸を決める（手動 textureScale が最優先）。
+    const shortEdgeMeters = effectiveTextureShortEdgeMeters(prod.physical, settings.textureScale);
     const surface = getSurfaceSizeFromMesh(mesh);
     applyRealSizeTextureRepeat(texture, shortEdgeMeters, surface?.widthM, surface?.heightM);
     
@@ -267,8 +269,14 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
       }
     }
 
-    applyRealSizeTextureRepeat(mapTexture, settings.textureScale ?? 1, w, h);
-  }, [mapTexture, meshRef, settings.textureScale, surfaceWidthM, surfaceHeightM]);
+    // 実寸投影: 素材の物理メタ（mm）から短辺実寸を決める（手動 textureScale が最優先）。
+    applyRealSizeTextureRepeat(
+      mapTexture,
+      effectiveTextureShortEdgeMeters(product.physical, settings.textureScale),
+      w,
+      h
+    );
+  }, [mapTexture, meshRef, product, settings.textureScale, surfaceWidthM, surfaceHeightM]);
 
   useLayoutEffect(() => {
     applyTextureRepeat();

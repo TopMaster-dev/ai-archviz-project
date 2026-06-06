@@ -138,3 +138,27 @@ export function deriveMaterialPhysical(opts: {
 function pxToMmAtDpi(px: number, dpi: number): number {
   return Math.round((px / dpi) * MM_PER_INCH * 10) / 10;
 }
+
+/**
+ * 実寸テクスチャ投影用: テクスチャ「短辺」の実寸（メートル）を決める。
+ * 優先順位:
+ *   1) 手動の textureScale（ユーザー調整）があればそれを使う
+ *   2) 素材の実寸メタ（physical.repeatWidthMm/repeatHeightMm）の短辺
+ *   3) 既定 1.0m
+ * applyRealSizeTextureRepeat はこの「短辺実寸」と面の実寸からリピート数を算出する。
+ */
+export function effectiveTextureShortEdgeMeters(
+  physical: MaterialPhysical | undefined,
+  textureScaleOverride?: number,
+): number {
+  if (textureScaleOverride != null && Number.isFinite(textureScaleOverride)) {
+    return textureScaleOverride;
+  }
+  if (physical && (physical.repeatWidthMm || physical.repeatHeightMm)) {
+    const w = physical.repeatWidthMm ?? physical.repeatHeightMm ?? 0;
+    const h = physical.repeatHeightMm ?? physical.repeatWidthMm ?? 0;
+    const shortMm = Math.min(w, h);
+    if (shortMm > 0) return shortMm / 1000;
+  }
+  return 1;
+}
