@@ -14,7 +14,7 @@ function normalizeImageDataUrl(raw: unknown): string | null {
 export default async function handler(req: any, res: any) {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, x-gemini-key');
 
   if (req.method === 'OPTIONS') {
     res.status(200).end();
@@ -26,7 +26,10 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    const rawApiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
+    // BYOK: リクエストヘッダのユーザーキーを最優先（無ければ管理者デバッグ用の環境変数）。
+    const headerKey = req.headers['x-gemini-key'];
+    const userKey = typeof headerKey === 'string' ? headerKey : Array.isArray(headerKey) ? headerKey[0] : '';
+    const rawApiKey = userKey || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
     const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
     const apiKey = keyMatch ? keyMatch[0] : '';
 

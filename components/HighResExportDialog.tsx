@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
+import { geminiAuthHeaders } from '../lib/byok.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import {
   describePixelAspect,
@@ -106,7 +107,7 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl }: Props
       );
       const res = await fetch('/api/render', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
         body: JSON.stringify({
           image: inputImage,
           prompt: RENDER_PROMPT,

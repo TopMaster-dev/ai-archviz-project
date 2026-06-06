@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { RenderState } from '../types.js';
+import { geminiAuthHeaders } from '../lib/byok.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import {
   PREVIEW_ASPECT_RATIO,
@@ -44,7 +45,7 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
 
       const res = await fetch('/api/render', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
         body: JSON.stringify({
           image: previewImage,
           prompt: 'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。',

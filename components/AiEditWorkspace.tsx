@@ -11,6 +11,7 @@ import {
   X,
 } from 'lucide-react';
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
+import { geminiAuthHeaders } from '../lib/byok.js';
 import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
@@ -300,7 +301,7 @@ export function AiEditWorkspace({
 
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
         body: JSON.stringify(body),
       });
       const data = await res.json();

@@ -4,6 +4,7 @@ import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectStore } from '../lib/store/projectStore.js';
 import { useAutosave } from './useAutosave.js';
 import { listProjects, getProject, createProject, saveProject } from '../lib/db/projects.js';
+import { refreshGeminiKey, resetGeminiKeyCache } from '../lib/byok.js';
 
 export type ProjectSessionStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
 
@@ -34,10 +35,13 @@ export function useProjectSession(): ProjectSession {
     if (!configured || !userId) {
       setProjectId(null);
       setStatus('idle');
+      resetGeminiKeyCache();
       return;
     }
     (async () => {
       setStatus('loading');
+      // BYOK: 保存済みの Gemini キーをメモリへ読み込む（生成 fetch で使用）。プロジェクト読込とは独立。
+      void refreshGeminiKey();
       try {
         const list = await listProjects();
         let id: string | null = null;

@@ -124,7 +124,7 @@ export default defineConfig(({ mode }) => {
                 req.on('end', async () => {
                     try {
                         // 1. Secrets / 環境変数からの取得 (VITE_ を最優先)
-                        const rawApiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
+                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         
                         // 2. 正規表現による抽出（文字数制限を外し、AIzaSyから始まる文字列を確実にキャッチ）
                         const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
@@ -243,7 +243,7 @@ export default defineConfig(({ mode }) => {
                 req.on('end', async () => {
                     try {
                         // 1. Secrets / 環境変数からの取得 (VITE_ を最優先)
-                        const rawApiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
+                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         
                         // 2. 正規表現による抽出（文字数制限を外し、AIzaSyから始まる文字列を確実にキャッチ）
                         const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
@@ -305,7 +305,7 @@ export default defineConfig(({ mode }) => {
                 req.on('data', chunk => { body += chunk.toString(); });
                 req.on('end', async () => {
                     try {
-                        const rawApiKey = process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
+                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
                         const apiKey = keyMatch ? keyMatch[0] : '';
 
