@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "gen:catalog": "node scripts/genLocalCatalog.mjs",
+    "prebuild": "node scripts/genLocalCatalog.mjs",
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",

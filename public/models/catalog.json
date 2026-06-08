@@ -1,0 +1,145 @@
+[
+  {
+    "id": "local-chair_1",
+    "name": "chair_1",
+    "type": "Chair",
+    "url": "/models/chair_1.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 620,
+      "depthMm": 620
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-chair_2",
+    "name": "chair_2",
+    "type": "Chair",
+    "url": "/models/chair_2.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1000,
+      "depthMm": 700
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-chair_3",
+    "name": "chair_3",
+    "type": "Chair",
+    "url": "/models/chair_3.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1000,
+      "depthMm": 700
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-floor_lamp_1",
+    "name": "floor_lamp_1",
+    "type": "Lamp",
+    "url": "/models/floor_lamp_1.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 420,
+      "depthMm": 420
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-floor_lamp_2",
+    "name": "floor_lamp_2",
+    "type": "Lamp",
+    "url": "/models/floor_lamp_2.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 380,
+      "depthMm": 380
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-sofa_1",
+    "name": "sofa_1",
+    "type": "Sofa",
+    "url": "/models/sofa_1.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1900,
+      "depthMm": 920
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-sofa_2",
+    "name": "sofa_2",
+    "type": "Sofa",
+    "url": "/models/sofa_2.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1000,
+      "depthMm": 700
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-sofa_3",
+    "name": "sofa_3",
+    "type": "Sofa",
+    "url": "/models/sofa_3.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1000,
+      "depthMm": 700
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-table_1",
+    "name": "table_1",
+    "type": "Table",
+    "url": "/models/table_1.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1400,
+      "depthMm": 800
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-table_2",
+    "name": "table_2",
+    "type": "Table",
+    "url": "/models/table_2.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1000,
+      "depthMm": 700
+    },
+    "forwardYawDeg": 0
+  },
+  {
+    "id": "local-table_3",
+    "name": "table_3",
+    "type": "Table",
+    "url": "/models/table_3.gltf",
+    "defaultScale": 1,
+    "defaultY": 0,
+    "footprint2d": {
+      "widthMm": 1000,
+      "depthMm": 700
+    },
+    "forwardYawDeg": 0
+  }
+]

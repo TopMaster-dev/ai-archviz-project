@@ -1337,8 +1337,33 @@ const App: React.FC = () => {
     fetchProducts();
   }, []);
 
-  // Fetch Furniture dynamically from API
+  // Fetch Furniture dynamically from API（本番=Cloudinary）。
+  // Cloudinary 未構成/空/失敗時は、同梱の静的カタログ public/models/catalog.json に
+  // フォールバックして家具を表示する（Cloudinary が有効ならそちらを優先）。
   useEffect(() => {
+    const normalizeRows = (data: unknown): FurnitureCatalogItem[] => {
+      const rows = Array.isArray(data)
+        ? data
+        : Array.isArray((data as { items?: unknown })?.items)
+          ? (data as { items: unknown[] }).items
+          : [];
+      return Array.isArray(rows)
+        ? rows
+            .map((item) => normalizeFurnitureCatalogItem(item))
+            .filter((item): item is FurnitureCatalogItem => item !== null)
+        : [];
+    };
+
+    const loadBundledFallback = async (): Promise<FurnitureCatalogItem[]> => {
+      try {
+        const res = await fetch('/models/catalog.json');
+        if (!res.ok) return [];
+        return normalizeRows(await res.json());
+      } catch {
+        return [];
+      }
+    };
+
     const fetchFurniture = async () => {
       setFurnitureCatalogFetchStatus('loading');
       setFurnitureCatalogErrorText(null);
@@ -1351,26 +1376,34 @@ const App: React.FC = () => {
         } catch {
           parsed = null;
         }
-        if (!res.ok) {
-          const msg =
-            parsed && typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof (parsed as { error: unknown }).error === 'string'
-              ? (parsed as { error: string }).error
-              : `HTTP ${res.status}`;
-          console.error('[furniture catalog]', res.status, bodyText.slice(0, 500));
-          setFurnitureCatalogErrorText(msg);
-          setFurnitureCatalogFetchStatus('error');
+        const normalized = res.ok ? normalizeRows(parsed) : [];
+        if (normalized.length > 0) {
+          setFurnitureCatalog(normalized);
+          setFurnitureCatalogFetchStatus('ready');
           return;
         }
-        const data = parsed;
-        const rows = Array.isArray(data) ? data : Array.isArray((data as { items?: unknown })?.items) ? (data as { items: unknown[] }).items : [];
-        const normalized = Array.isArray(rows)
-          ? rows
-              .map((item) => normalizeFurnitureCatalogItem(item))
-              .filter((item): item is FurnitureCatalogItem => item !== null)
-          : [];
-        setFurnitureCatalog(normalized);
-        setFurnitureCatalogFetchStatus('ready');
+        // Cloudinary が未構成/空でも同梱モデルで継続。
+        const fallback = await loadBundledFallback();
+        if (fallback.length > 0) {
+          setFurnitureCatalog(fallback);
+          setFurnitureCatalogFetchStatus('ready');
+          return;
+        }
+        const msg =
+          parsed && typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof (parsed as { error: unknown }).error === 'string'
+            ? (parsed as { error: string }).error
+            : `HTTP ${res.status}`;
+        console.error('[furniture catalog]', res.status, bodyText.slice(0, 500));
+        setFurnitureCatalogErrorText(msg);
+        setFurnitureCatalogFetchStatus('error');
       } catch (e) {
+        // ネットワーク等の例外時も同梱モデルで継続を試みる。
+        const fallback = await loadBundledFallback();
+        if (fallback.length > 0) {
+          setFurnitureCatalog(fallback);
+          setFurnitureCatalogFetchStatus('ready');
+          return;
+        }
         console.error('Furniture fetch error:', e);
         setFurnitureCatalogErrorText(e instanceof Error ? e.message : 'NETWORK_ERROR');
         setFurnitureCatalogFetchStatus('error');
