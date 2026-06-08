@@ -6,6 +6,25 @@ import type { ProjectRow, ProjectSummary, SharedProject } from './types.js';
 
 const GRACE_DAYS = 14;
 
+/**
+ * フリープランのプロジェクト保存上限。
+ * DB 側の free_plan_project_limit()（migration 0001）と一致させること。
+ * 実際の拒否は INSERT トリガが担うため、これは UI 表示・事前判定用のミラー値。
+ */
+export const FREE_PLAN_PROJECT_LIMIT = 5;
+
+/** createProject / duplicateProject 等がフリープラン上限トリガで拒否されたかを判定する。 */
+export function isFreePlanLimitError(e: unknown): boolean {
+  if (!e) return false;
+  const m =
+    typeof e === 'string'
+      ? e
+      : typeof (e as { message?: unknown }).message === 'string'
+        ? (e as { message: string }).message
+        : '';
+  return m.includes('FREE_PLAN_LIMIT_REACHED');
+}
+
 function requireClient() {
   const sb = getSupabase();
   if (!sb) {

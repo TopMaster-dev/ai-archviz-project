@@ -1,7 +1,7 @@
-import { useProjectSession } from '../hooks/useProjectSession.js';
+import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 
-// プロジェクトの読み込み/保存ステータスを表示し、同時に autosave セッションを起動する。
-// （ストアは singleton のため、ここで読み込み/保存してもエディタ本体と同じ状態を共有する。）
+// プロジェクトの読み込み/保存ステータスを表示する。autosave セッション本体は
+// ProjectSessionProvider が起動し、その状態をここで購読する（ストアは singleton で共有）。
 
 const LABELS: Record<string, string> = {
   loading: '読み込み中…',
@@ -11,7 +11,7 @@ const LABELS: Record<string, string> = {
 };
 
 export function ProjectSaveIndicator() {
-  const { status } = useProjectSession();
+  const { status } = useProjectSessionContext();
   if (status === 'idle') return null;
 
   const label = LABELS[status] ?? '';

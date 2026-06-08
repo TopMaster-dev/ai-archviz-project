@@ -4,6 +4,7 @@ import { AuthScreen } from './AuthScreen.js';
 import { AccountMenu } from './AccountMenu.js';
 import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
+import { ProjectSessionProvider } from '../../lib/project/projectSessionContext.js';
 
 /**
  * 認証ゲート。
@@ -34,11 +35,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!userId) return <AuthScreen />;
 
   return (
-    <>
+    <ProjectSessionProvider>
       {children}
       <AccountMenu />
       <ProjectSaveIndicator />
       <UndoRedoBar />
-    </>
+    </ProjectSessionProvider>
   );
 }

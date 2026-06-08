@@ -5,9 +5,10 @@ import {
   saveAndCacheGeminiKey,
   clearAndUncacheGeminiKey,
 } from '../../lib/byok.js';
+import { ProjectPanel } from '../ProjectPanel.js';
 
 /**
- * ログイン中のアカウント表示 + Gemini APIキー（BYOK）の設定 + ログアウト。
+ * ログイン中のアカウント表示 + プロジェクト管理 + Gemini APIキー（BYOK）の設定 + ログアウト。
  * ※暫定的に画面右上の固定チップとして表示する。状態リファクタ後にアプリのヘッダーへ統合予定。
  */
 export function AccountMenu() {
@@ -72,10 +73,13 @@ export function AccountMenu() {
         {initial}
       </button>
       {open && (
-        <div className="absolute right-0 mt-2 w-64 rounded-lg bg-neutral-800 p-3 text-neutral-200 shadow-xl ring-1 ring-white/10">
+        <div className="absolute right-0 mt-2 w-72 rounded-lg bg-neutral-800 p-3 text-neutral-200 shadow-xl ring-1 ring-white/10">
           <p className="mb-2 truncate text-[11px] text-neutral-400" title={email ?? ''}>
             {email ?? 'ログイン中'}
           </p>
+
+          {/* プロジェクト管理（Supabase 構成時のみ） */}
+          {configured && <ProjectPanel />}
 
           {/* BYOK: Gemini APIキー */}
           <div className="mb-3 rounded-md bg-neutral-900/60 p-2">
