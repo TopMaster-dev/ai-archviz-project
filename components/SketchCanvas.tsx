@@ -378,6 +378,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   underlayRef.current = underlay;
   // 画像のピクセル寸法（キャリブレーションの「幅(mm)」計算に使うため state で保持）。
   const [underlayImgSize, setUnderlayImgSize] = useState<{ w: number; h: number } | null>(null);
+  // 下絵をマウスドラッグで移動するモード（数値入力と併用）。
+  const [underlayMoveMode, setUnderlayMoveMode] = useState(false);
+  const underlayMoveModeRef = useRef(underlayMoveMode);
+  underlayMoveModeRef.current = underlayMoveMode;
+  const draggingUnderlayRef = useRef(false);
+  const underlayDragStartRef = useRef<{ mm: Point; offsetX: number; offsetY: number } | null>(null);
 
   useEffect(() => {
     if (!underlay?.dataUrl) {
@@ -823,6 +829,24 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       return;
     }
 
+    // --- 下絵 移動モード: 左ドラッグで下絵を平行移動（他のツール操作には干渉しない） ---
+    if (
+      underlayMoveModeRef.current &&
+      e.button !== 2 &&
+      underlayRef.current?.visible &&
+      underlayImgRef.current
+    ) {
+      draggingUnderlayRef.current = true;
+      underlayDragStartRef.current = {
+        mm,
+        offsetX: underlayRef.current.offsetX,
+        offsetY: underlayRef.current.offsetY,
+      };
+      lastMousePixelsRef.current = pixels;
+      tryPointerCapture(e);
+      return;
+    }
+
     // --- SELECT MODE ---
     if (isSelectMode || isAddFurniture) {
       if (furnitureHit) {
@@ -999,6 +1023,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     mousePosRef.current = pixels;
     const mm = screenToWorld(pixels);
     const canvas = canvasRef.current;
+
+    // 下絵 移動ドラッグ: 開始点からのmm差分を offset に反映。
+    if (draggingUnderlayRef.current && underlayDragStartRef.current && underlayRef.current) {
+      const start = underlayDragStartRef.current;
+      onUnderlayChange?.({
+        ...underlayRef.current,
+        offsetX: Math.round(start.offsetX + (mm.x - start.mm.x)),
+        offsetY: Math.round(start.offsetY + (mm.y - start.mm.y)),
+      });
+      if (canvas) canvas.style.cursor = 'grabbing';
+      return;
+    }
 
     if (isPanning && lastMousePixelsRef.current) {
       viewOffsetRef.current = { 
@@ -1189,6 +1225,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   };
 
   const handlePointerUp = () => {
+    if (draggingUnderlayRef.current) {
+      draggingUnderlayRef.current = false;
+      underlayDragStartRef.current = null;
+    }
     const pv = furnitureInteractionPreviewRef.current;
     furnitureInteractionPreviewRef.current = null;
     if (pv?.kind === 'move') {
@@ -1963,7 +2003,21 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               </button>
               <button
                 type="button"
-                onClick={() => onUnderlayChange?.(null)}
+                onClick={() => setUnderlayMoveMode((v) => !v)}
+                disabled={!underlay.visible}
+                className={`px-2 py-1 rounded transition disabled:opacity-40 ${
+                  underlayMoveMode ? 'bg-emerald-500 text-black' : 'hover:bg-white/10'
+                }`}
+                title="オンにしてキャンバスをドラッグで下絵を移動"
+              >
+                移動
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setUnderlayMoveMode(false);
+                  onUnderlayChange?.(null);
+                }}
                 className="px-2 py-1 rounded text-red-300 transition hover:bg-red-500/20"
                 title="下絵を削除"
               >

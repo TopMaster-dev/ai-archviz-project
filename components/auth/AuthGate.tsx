@@ -1,10 +1,9 @@
 import type { ReactNode } from 'react';
 import { useAuth } from '../../lib/auth/AuthContext.js';
 import { AuthScreen } from './AuthScreen.js';
-import { AccountMenu } from './AccountMenu.js';
-import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
 import { ProjectSessionProvider } from '../../lib/project/projectSessionContext.js';
+import { AuthedShell } from './AuthedShell.js';
 
 /**
  * 認証ゲート。
@@ -34,12 +33,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
 
   if (!userId) return <AuthScreen />;
 
+  // ログイン後はホーム画面（プロジェクト管理）→ エディタ の順。AuthedShell が切替を担う。
   return (
     <ProjectSessionProvider>
-      {children}
-      <AccountMenu />
-      <ProjectSaveIndicator />
-      <UndoRedoBar />
+      <AuthedShell>{children}</AuthedShell>
     </ProjectSessionProvider>
   );
 }
