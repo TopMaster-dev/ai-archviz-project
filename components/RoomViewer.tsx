@@ -47,84 +47,222 @@ if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
 }
 
 /**
- * 梁の3D描画。2D(mm)座標 (cx,cy) を部屋と同じ変換で3Dワールド(m)へ写像し、
- * 天井（roomHeight）から dropMm 下げた位置に箱として配置する。
+ * 梁1本の3D描画＋直接操作。2D(mm)座標 (cx,cy) を部屋と同じ変換で3Dワールド(m)へ写像し、
+ * 天井（roomHeight）から dropMm 下げた箱として配置する。
+ * 自由梁は選択後にクリックドラッグで水平移動、橙のハンドルで回転できる（壁梁は壁に固定）。
+ * ドラッグ中はメッシュを直接更新し、離した時に一度だけストアへ反映（Undo履歴を汚さない）。
  */
+const Beam3DMesh: React.FC<{
+  beam: Beam;
+  centerMm: Point;
+  polygonMm?: Point[];
+  roomHeight: number;
+  isSelected: boolean;
+  editable: boolean;
+  onSelect: () => void;
+  onPatch: (patch: Partial<Beam>) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  wallHiddenRef?: React.MutableRefObject<Record<number, boolean>>;
+}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef }) => {
+  const boxRef = useRef<THREE.Mesh>(null);
+  const handleRef = useRef<THREE.Mesh>(null);
+  const { camera, gl } = useThree();
+  const raycaster = useMemo(() => new THREE.Raycaster(), []);
+  const plane = useMemo(() => new THREE.Plane(), []);
+  const ndc = useMemo(() => new THREE.Vector2(), []);
+  const tmpHit = useMemo(() => new THREE.Vector3(), []);
+  const dragRef = useRef<{ mode: 'move' | 'rotate'; startCx: number; startCy: number; startWx: number; startWz: number; planeY: number; cbx: number; cbz: number } | null>(null);
+  const liveRef = useRef<{ cx: number; cy: number; angleDeg: number } | null>(null);
+  const onPatchRef = useRef(onPatch); onPatchRef.current = onPatch;
+  const onDragEndRef = useRef(onDragEnd); onDragEndRef.current = onDragEnd;
+
+  const isWallBeam = beam.wallIndex !== undefined;
+  const n = polygonMm?.length ?? 0;
+
+  let cx = beam.cx;
+  let cy = beam.cy;
+  let lengthMm = beam.lengthMm;
+  let angleDeg = beam.angleDeg;
+  if (isWallBeam && polygonMm && n >= 2) {
+    const p1 = polygonMm[(beam.wallIndex as number) % n];
+    const p2 = polygonMm[((beam.wallIndex as number) + 1) % n];
+    if (p1 && p2) {
+      const len = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+      cx = (p1.x + p2.x) / 2;
+      cy = (p1.y + p2.y) / 2;
+      lengthMm = len;
+      angleDeg = (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
+      let nx = -(p2.y - p1.y) / len;
+      let ny = (p2.x - p1.x) / len;
+      if (nx * (centerMm.x - cx) + ny * (centerMm.y - cy) < 0) { nx = -nx; ny = -ny; }
+      cx += nx * (beam.widthMm / 2);
+      cy += ny * (beam.widthMm / 2);
+    }
+  }
+  const bx = (cx - centerMm.x) / MM_PER_METER;
+  const bz = (cy - centerMm.y) / MM_PER_METER;
+  const lengthM = Math.max(0.01, lengthMm / MM_PER_METER);
+  const widthM = Math.max(0.01, beam.widthMm / MM_PER_METER);
+  const heightM = Math.max(0.01, beam.heightMm / MM_PER_METER);
+  const by = roomHeight - beam.dropMm / MM_PER_METER - heightM / 2;
+  const angleRad = (angleDeg * Math.PI) / 180;
+  const handleD = lengthM / 2 + 0.4;
+
+  // 壁梁は所属壁がカメラ背面で非表示のとき同期して非表示。
+  useFrame(() => {
+    const m = boxRef.current;
+    if (!m) return;
+    const hidden = wallHiddenRef?.current;
+    m.visible = !isWallBeam || !hidden ? true : !hidden[beam.wallIndex as number];
+  });
+
+  const intersectAtY = useCallback((clientX: number, clientY: number, y: number) => {
+    const rect = gl.domElement.getBoundingClientRect();
+    ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, y, 0));
+    return raycaster.ray.intersectPlane(plane, tmpHit) ? tmpHit.clone() : null;
+  }, [camera, gl, ndc, plane, raycaster, tmpHit]);
+
+  // ドラッグ中の global pointer 監視（選択中のみ）。メッシュを直接更新し、離したらストアへ一括反映。
+  useEffect(() => {
+    if (!editable || !isSelected) return;
+    const onMove = (e: PointerEvent) => {
+      const d = dragRef.current;
+      const live = liveRef.current;
+      if (!d || !live) return;
+      const p = intersectAtY(e.clientX, e.clientY, d.planeY);
+      if (!p) return;
+      if (d.mode === 'move') {
+        live.cx = d.startCx + (p.x - d.startWx) * MM_PER_METER;
+        live.cy = d.startCy + (p.z - d.startWz) * MM_PER_METER;
+      } else {
+        live.angleDeg = (Math.atan2(p.z - d.cbz, p.x - d.cbx) * 180) / Math.PI;
+      }
+      const lbx = (live.cx - centerMm.x) / MM_PER_METER;
+      const lbz = (live.cy - centerMm.y) / MM_PER_METER;
+      const lrad = (live.angleDeg * Math.PI) / 180;
+      if (boxRef.current) {
+        boxRef.current.position.x = lbx;
+        boxRef.current.position.z = lbz;
+        boxRef.current.rotation.y = -lrad;
+      }
+      if (handleRef.current) {
+        handleRef.current.position.x = lbx + handleD * Math.cos(lrad);
+        handleRef.current.position.z = lbz + handleD * Math.sin(lrad);
+      }
+    };
+    const onUp = () => {
+      if (!dragRef.current) return;
+      const live = liveRef.current;
+      dragRef.current = null;
+      liveRef.current = null;
+      if (live) onPatchRef.current({ cx: live.cx, cy: live.cy, angleDeg: live.angleDeg });
+      onDragEndRef.current?.();
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [editable, isSelected, intersectAtY, centerMm, handleD]);
+
+  const startMove = (e: ThreeEvent<PointerEvent>) => {
+    if (!editable) return;
+    e.stopPropagation();
+    if (!isSelected) { onSelect(); return; }
+    if (isWallBeam) return; // 壁梁は壁固定
+    const p = intersectAtY(e.clientX, e.clientY, by);
+    if (!p) return;
+    dragRef.current = { mode: 'move', startCx: beam.cx, startCy: beam.cy, startWx: p.x, startWz: p.z, planeY: by, cbx: bx, cbz: bz };
+    liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg };
+    onDragStart?.();
+  };
+  const startRotate = (e: ThreeEvent<PointerEvent>) => {
+    if (!editable || isWallBeam) return;
+    e.stopPropagation();
+    dragRef.current = { mode: 'rotate', startCx: beam.cx, startCy: beam.cy, startWx: 0, startWz: 0, planeY: by, cbx: bx, cbz: bz };
+    liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg };
+    onDragStart?.();
+  };
+
+  return (
+    <group>
+      <mesh
+        ref={boxRef}
+        position={[bx, by, bz]}
+        rotation={[0, -angleRad, 0]}
+        castShadow
+        receiveShadow
+        onPointerDown={startMove}
+      >
+        <boxGeometry args={[lengthM, heightM, widthM]} />
+        <meshStandardMaterial color={isSelected ? '#f59e0b' : '#9a9a9a'} roughness={0.85} metalness={0.05} />
+      </mesh>
+      {isSelected && !isWallBeam && editable && (
+        <mesh
+          ref={handleRef}
+          position={[bx + handleD * Math.cos(angleRad), by, bz + handleD * Math.sin(angleRad)]}
+          onPointerDown={startRotate}
+          renderOrder={12}
+        >
+          <sphereGeometry args={[0.13, 16, 16]} />
+          <meshBasicMaterial color="#f97316" depthTest={false} depthWrite={false} />
+        </mesh>
+      )}
+    </group>
+  );
+};
+
 function Beams3D({
   beams,
   centerMm,
   polygonMm,
   roomHeight,
   wallHiddenRef,
+  selectedBeamId,
+  onBeamSelect,
+  onBeamPatch,
+  editable,
+  onDragStart,
+  onDragEnd,
 }: {
   beams: Beam[];
   centerMm: Point | undefined;
   polygonMm?: Point[];
   roomHeight: number;
   wallHiddenRef?: React.MutableRefObject<Record<number, boolean>>;
+  selectedBeamId?: string | null;
+  onBeamSelect?: (id: string | null) => void;
+  onBeamPatch?: (id: string, patch: Partial<Beam>) => void;
+  editable?: boolean;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
 }) {
-  const meshRefs = useRef<Record<string, THREE.Mesh | null>>({});
-  // 壁梁は、その壁がカメラ背面で非表示になっているとき同期して非表示にする。
-  useFrame(() => {
-    const hidden = wallHiddenRef?.current;
-    for (const b of beams) {
-      const m = meshRefs.current[b.id];
-      if (!m) continue;
-      m.visible = b.wallIndex === undefined || !hidden ? true : !hidden[b.wallIndex];
-    }
-  });
   if (!centerMm || beams.length === 0) return null;
-  const n = polygonMm?.length ?? 0;
   return (
     <group>
-      {beams.map((b) => {
-        // 壁梁(wallIndex)は現在の壁ポリゴンから幾何を導出して壁に追従させ、
-        // 室内側へ幅/2 オフセットして壁に乗せる。自由梁は cx/cy/length/angle をそのまま使う。
-        let cx = b.cx;
-        let cy = b.cy;
-        let lengthMm = b.lengthMm;
-        let angleDeg = b.angleDeg;
-        if (b.wallIndex !== undefined && polygonMm && n >= 2) {
-          const p1 = polygonMm[b.wallIndex % n];
-          const p2 = polygonMm[(b.wallIndex + 1) % n];
-          if (p1 && p2) {
-            const len = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
-            cx = (p1.x + p2.x) / 2;
-            cy = (p1.y + p2.y) / 2;
-            lengthMm = len;
-            angleDeg = (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
-            let nx = -(p2.y - p1.y) / len;
-            let ny = (p2.x - p1.x) / len;
-            if (nx * (centerMm.x - cx) + ny * (centerMm.y - cy) < 0) {
-              nx = -nx;
-              ny = -ny;
-            }
-            cx += nx * (b.widthMm / 2);
-            cy += ny * (b.widthMm / 2);
-          }
-        }
-        const bx = (cx - centerMm.x) / MM_PER_METER;
-        const bz = (cy - centerMm.y) / MM_PER_METER;
-        const lengthM = Math.max(0.01, lengthMm / MM_PER_METER);
-        const widthM = Math.max(0.01, b.widthMm / MM_PER_METER);
-        const heightM = Math.max(0.01, b.heightMm / MM_PER_METER);
-        // 天井面（roomHeight）から下げ(drop)た位置に、箱の上端が来るよう吊り下げる。
-        const by = roomHeight - b.dropMm / MM_PER_METER - heightM / 2;
-        const angleRad = (angleDeg * Math.PI) / 180;
-        return (
-          <mesh
-            key={b.id}
-            ref={(el) => { meshRefs.current[b.id] = el; }}
-            position={[bx, by, bz]}
-            rotation={[0, -angleRad, 0]}
-            castShadow
-            receiveShadow
-          >
-            <boxGeometry args={[lengthM, heightM, widthM]} />
-            <meshStandardMaterial color="#9a9a9a" roughness={0.85} metalness={0.05} />
-          </mesh>
-        );
-      })}
+      {beams.map((b) => (
+        <Beam3DMesh
+          key={b.id}
+          beam={b}
+          centerMm={centerMm}
+          polygonMm={polygonMm}
+          roomHeight={roomHeight}
+          isSelected={selectedBeamId === b.id}
+          editable={!!editable}
+          onSelect={() => onBeamSelect?.(b.id)}
+          onPatch={(patch) => onBeamPatch?.(b.id, patch)}
+          onDragStart={onDragStart}
+          onDragEnd={onDragEnd}
+          wallHiddenRef={wallHiddenRef}
+        />
+      ))}
     </group>
   );
 }
@@ -144,6 +282,8 @@ interface RoomViewerProps {
   beams?: Beam[];
   /** スケルトン天井: 天井スラブを非表示にして梁などの上部構造を露出する。 */
   skeletonCeiling?: boolean;
+  /** 3Dでの梁の直接操作（移動/回転）をストアへ反映する。 */
+  onBeamPatch?: (id: string, patch: Partial<Beam>) => void;
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null) => void;
   hideFurniture?: boolean; // New Prop for empty room capture
@@ -2476,6 +2616,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   onFurnitureSelect,
   beams = [],
   skeletonCeiling = false,
+  onBeamPatch,
   hideFurniture = false,
   maskMode = false,
   materialSettings,
@@ -2508,6 +2649,8 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   const postDragSuppressUntilRef = useRef(0);
   // 壁ごとの「カメラ背面で非表示」状態を SketchRoom が書き込み、Beams3D が読む共有ref（梁の壁連動非表示用）。
   const wallHiddenRef = useRef<Record<number, boolean>>({});
+  // 3Dでの梁選択（直接操作のため）。
+  const [selectedBeam3DId, setSelectedBeam3DId] = useState<string | null>(null);
   
   useEffect(() => {
     isDraggingRef.current = isDragging;
@@ -2768,7 +2911,19 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             onHoverNameChange={safeHoverNameChange}
                         />
                     ))}
-                    <Beams3D beams={beams} centerMm={sketchFloorPolygon?.centerMm} polygonMm={sketchFloorPolygon?.polygonMm} roomHeight={roomHeight} wallHiddenRef={wallHiddenRef} />
+                    <Beams3D
+                      beams={beams}
+                      centerMm={sketchFloorPolygon?.centerMm}
+                      polygonMm={sketchFloorPolygon?.polygonMm}
+                      roomHeight={roomHeight}
+                      wallHiddenRef={wallHiddenRef}
+                      selectedBeamId={selectedBeam3DId}
+                      onBeamSelect={setSelectedBeam3DId}
+                      onBeamPatch={onBeamPatch}
+                      editable={!snapshotMode && !maskMode && captureStep !== 'mask'}
+                      onDragStart={beginDragInteraction}
+                      onDragEnd={endDragInteraction}
+                    />
                 </group>
             </CanvasErrorBoundary>
         </Suspense>

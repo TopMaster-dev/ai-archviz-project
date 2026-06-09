@@ -458,6 +458,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
   const selectedBeamIdRef = useRef(selectedBeamId);
   selectedBeamIdRef.current = selectedBeamId;
+  // 自由梁の直接ドラッグ（移動/回転）状態。壁梁は壁固定のため対象外。
+  const beamDragRef = useRef<{ id: string; mode: 'move' | 'rotate'; startMm: Point; startCx: number; startCy: number } | null>(null);
 
   const addBeam = useCallback(() => {
     const id = `beam-${Date.now()}`;
@@ -857,6 +859,39 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       return;
     }
 
+    // --- 天伏図: 既存の自由梁を選択/移動/回転（壁梁は壁固定のため対象外） ---
+    if (isCeilingView && (isSelectMode || isBeamMode)) {
+      // 回転ハンドル（選択中の自由梁の端の先）にヒットしたら回転開始。
+      const sel = beamsRef.current.find(
+        (b) => b.id === selectedBeamIdRef.current && b.wallIndex === undefined,
+      );
+      if (sel) {
+        const rad = (sel.angleDeg * Math.PI) / 180;
+        const hd = sel.lengthMm / 2 + 600;
+        const hPx = worldToScreen({ x: sel.cx + hd * Math.cos(rad), y: sel.cy + hd * Math.sin(rad) });
+        if (Math.hypot(pixels.x - hPx.x, pixels.y - hPx.y) <= 12) {
+          beamDragRef.current = { id: sel.id, mode: 'rotate', startMm: mm, startCx: sel.cx, startCy: sel.cy };
+          tryPointerCapture(e);
+          return;
+        }
+      }
+      // 自由梁の本体にヒットしたら選択＋移動開始。
+      for (const b of beamsRef.current) {
+        if (b.wallIndex !== undefined) continue;
+        const rad = (b.angleDeg * Math.PI) / 180;
+        const dx = mm.x - b.cx;
+        const dy = mm.y - b.cy;
+        const lx = dx * Math.cos(rad) + dy * Math.sin(rad);
+        const ly = -dx * Math.sin(rad) + dy * Math.cos(rad);
+        if (Math.abs(lx) <= b.lengthMm / 2 && Math.abs(ly) <= b.widthMm / 2) {
+          setSelectedBeamId(b.id);
+          beamDragRef.current = { id: b.id, mode: 'move', startMm: mm, startCx: b.cx, startCy: b.cy };
+          tryPointerCapture(e);
+          return;
+        }
+      }
+    }
+
     // --- 梁モード: 壁にスナップして壁梁、空きスペースなら自由梁を配置 ---
     if (isBeamMode) {
       const edgeCount = isClosed ? pointsMm.length : Math.max(0, pointsMm.length - 1);
@@ -1084,6 +1119,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       return;
     }
 
+    // 自由梁の移動/回転ドラッグ。
+    if (beamDragRef.current) {
+      const d = beamDragRef.current;
+      if (d.mode === 'move') {
+        updateBeam(d.id, { cx: d.startCx + (mm.x - d.startMm.x), cy: d.startCy + (mm.y - d.startMm.y) });
+      } else {
+        updateBeam(d.id, { angleDeg: (Math.atan2(mm.y - d.startCy, mm.x - d.startCx) * 180) / Math.PI });
+      }
+      if (canvas) canvas.style.cursor = 'grabbing';
+      return;
+    }
+
     if (isPanning && lastMousePixelsRef.current) {
       viewOffsetRef.current = { 
         x: viewOffsetRef.current.x + (pixels.x - lastMousePixelsRef.current.x), 
@@ -1276,6 +1323,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     if (draggingUnderlayRef.current) {
       draggingUnderlayRef.current = false;
       underlayDragStartRef.current = null;
+    }
+    if (beamDragRef.current) {
+      beamDragRef.current = null;
     }
     const pv = furnitureInteractionPreviewRef.current;
     furnitureInteractionPreviewRef.current = null;
@@ -2040,6 +2090,25 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           ctx.fill();
           ctx.lineWidth = selected ? 2 : 1;
           ctx.stroke();
+
+          // 選択中の自由梁: 回転ハンドル（天伏図のみ）。ドラッグで角度変更、本体ドラッグで移動。
+          if (ceilingV && selected && !isWallBeam) {
+            const endP = worldToScreen({ x: cx + (lengthMm / 2) * ux, y: cy + (lengthMm / 2) * uy });
+            const handP = worldToScreen({ x: cx + (lengthMm / 2 + 600) * ux, y: cy + (lengthMm / 2 + 600) * uy });
+            ctx.beginPath();
+            ctx.moveTo(endP.x, endP.y);
+            ctx.lineTo(handP.x, handP.y);
+            ctx.strokeStyle = 'rgba(249,115,22,0.9)';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+            ctx.beginPath();
+            ctx.arc(handP.x, handP.y, 6, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(249,115,22,0.95)';
+            ctx.fill();
+            ctx.strokeStyle = '#ffffff';
+            ctx.lineWidth = 1.5;
+            ctx.stroke();
+          }
         }
         ctx.restore();
       }

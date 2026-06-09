@@ -2372,6 +2372,10 @@ const App: React.FC = () => {
                         sketchPoints={sketchPoints} 
                         roomHeight={roomHeight / 1000}
                         skeletonCeiling={skeletonCeiling}
+                        onBeamPatch={(id, patch) => {
+                          const next = beams.map((b) => (b.id === id ? { ...b, ...patch } : b));
+                          useProjectStore.getState().setBeams(next);
+                        }}
                         snapshotMode={snapshotMode} 
                         furnitureItems={furnitureItems}
                         onFurnitureUpdate={setFurnitureItemsFrom3D}
