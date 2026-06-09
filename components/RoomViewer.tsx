@@ -53,25 +53,73 @@ if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
 function Beams3D({
   beams,
   centerMm,
+  polygonMm,
   roomHeight,
+  wallHiddenRef,
 }: {
   beams: Beam[];
   centerMm: Point | undefined;
+  polygonMm?: Point[];
   roomHeight: number;
+  wallHiddenRef?: React.MutableRefObject<Record<number, boolean>>;
 }) {
+  const meshRefs = useRef<Record<string, THREE.Mesh | null>>({});
+  // 壁梁は、その壁がカメラ背面で非表示になっているとき同期して非表示にする。
+  useFrame(() => {
+    const hidden = wallHiddenRef?.current;
+    for (const b of beams) {
+      const m = meshRefs.current[b.id];
+      if (!m) continue;
+      m.visible = b.wallIndex === undefined || !hidden ? true : !hidden[b.wallIndex];
+    }
+  });
   if (!centerMm || beams.length === 0) return null;
+  const n = polygonMm?.length ?? 0;
   return (
     <group>
       {beams.map((b) => {
-        const bx = (b.cx - centerMm.x) / MM_PER_METER;
-        const bz = (b.cy - centerMm.y) / MM_PER_METER;
-        const lengthM = Math.max(0.01, b.lengthMm / MM_PER_METER);
+        // 壁梁(wallIndex)は現在の壁ポリゴンから幾何を導出して壁に追従させ、
+        // 室内側へ幅/2 オフセットして壁に乗せる。自由梁は cx/cy/length/angle をそのまま使う。
+        let cx = b.cx;
+        let cy = b.cy;
+        let lengthMm = b.lengthMm;
+        let angleDeg = b.angleDeg;
+        if (b.wallIndex !== undefined && polygonMm && n >= 2) {
+          const p1 = polygonMm[b.wallIndex % n];
+          const p2 = polygonMm[(b.wallIndex + 1) % n];
+          if (p1 && p2) {
+            const len = Math.hypot(p2.x - p1.x, p2.y - p1.y) || 1;
+            cx = (p1.x + p2.x) / 2;
+            cy = (p1.y + p2.y) / 2;
+            lengthMm = len;
+            angleDeg = (Math.atan2(p2.y - p1.y, p2.x - p1.x) * 180) / Math.PI;
+            let nx = -(p2.y - p1.y) / len;
+            let ny = (p2.x - p1.x) / len;
+            if (nx * (centerMm.x - cx) + ny * (centerMm.y - cy) < 0) {
+              nx = -nx;
+              ny = -ny;
+            }
+            cx += nx * (b.widthMm / 2);
+            cy += ny * (b.widthMm / 2);
+          }
+        }
+        const bx = (cx - centerMm.x) / MM_PER_METER;
+        const bz = (cy - centerMm.y) / MM_PER_METER;
+        const lengthM = Math.max(0.01, lengthMm / MM_PER_METER);
         const widthM = Math.max(0.01, b.widthMm / MM_PER_METER);
         const heightM = Math.max(0.01, b.heightMm / MM_PER_METER);
+        // 天井面（roomHeight）から下げ(drop)た位置に、箱の上端が来るよう吊り下げる。
         const by = roomHeight - b.dropMm / MM_PER_METER - heightM / 2;
-        const angleRad = (b.angleDeg * Math.PI) / 180;
+        const angleRad = (angleDeg * Math.PI) / 180;
         return (
-          <mesh key={b.id} position={[bx, by, bz]} rotation={[0, -angleRad, 0]} castShadow receiveShadow>
+          <mesh
+            key={b.id}
+            ref={(el) => { meshRefs.current[b.id] = el; }}
+            position={[bx, by, bz]}
+            rotation={[0, -angleRad, 0]}
+            castShadow
+            receiveShadow
+          >
             <boxGeometry args={[lengthM, heightM, widthM]} />
             <meshStandardMaterial color="#9a9a9a" roughness={0.85} metalness={0.05} />
           </mesh>
@@ -94,6 +142,8 @@ interface RoomViewerProps {
   furnitureItems: FurnitureItem[];
   onFurnitureUpdate: React.Dispatch<React.SetStateAction<FurnitureItem[]>>;
   beams?: Beam[];
+  /** スケルトン天井: 天井スラブを非表示にして梁などの上部構造を露出する。 */
+  skeletonCeiling?: boolean;
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null) => void;
   hideFurniture?: boolean; // New Prop for empty room capture
@@ -1850,7 +1900,9 @@ const SketchRoom = ({
   onOpeningSelect,
   onDragStart,
   onDragEnd,
-  onHoverNameChange
+  onHoverNameChange,
+  skeletonCeiling = false,
+  wallHiddenRef
 }: any) => {
   const { camera } = useThree();
   const [cameraSyncTick, setCameraSyncTick] = useState(0);
@@ -1915,12 +1967,14 @@ const SketchRoom = ({
         <StructuralEdges snapshotMode={snapshotMode} />
       </mesh>
 
-      <mesh 
+      {/* スケルトン天井のときは天井スラブを非表示にして上部構造（梁）を露出する。 */}
+      {!skeletonCeiling && (
+      <mesh
         ref={ceilingRef}
         name="Sketch_Ceiling"
-        position={[0, height, 0]} 
-        rotation={[Math.PI / 2, 0, 0]} 
-        scale={[1, 1, 1]} 
+        position={[0, height, 0]}
+        rotation={[Math.PI / 2, 0, 0]}
+        scale={[1, 1, 1]}
         onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Ceiling', 'Sketch_Ceiling', e.shiftKey || e.metaKey || e.ctrlKey); }}
         onPointerOver={(e) => {
           e.stopPropagation();
@@ -1935,6 +1989,7 @@ const SketchRoom = ({
         </Suspense>
         <StructuralEdges snapshotMode={snapshotMode} />
       </mesh>
+      )}
 
       {mPoints.map((p: any, i: number) => {
         const wallName = `Sketch_Wall_${i}`;
@@ -1966,7 +2021,11 @@ const SketchRoom = ({
           isHidden = false;
         }
         openingsHiddenByWallRef.current[i] = isHidden;
+        // 共有ref へも反映（梁の壁連動非表示用）。
+        if (wallHiddenRef) wallHiddenRef.current[i] = isHidden;
         const hideOpeningsForCamera = isHidden && cameraTick >= 0;
+        // 外側から見たときの近接壁カットアウェイ（スナップショット/マスク描画時は維持）。
+        const cutAwayWall = isHidden && !snapshotMode && !maskMode && captureStep !== 'mask';
 
         const divs = wallDivisions[i] || 1;
         const bottomProd = selections[`${wallName}_0`];
@@ -1974,7 +2033,7 @@ const SketchRoom = ({
         const wainscotHeight = materialSettings[bottomProdId]?.wainscotHeight ?? 900;
 
         return (
-          <group key={i} position={[(p.x + next.x) / 2, 0, (p.z + next.z) / 2]} rotation={[0, rotationY, 0]}>
+          <group key={i} visible={!cutAwayWall} position={[(p.x + next.x) / 2, 0, (p.z + next.z) / 2]} rotation={[0, rotationY, 0]}>
             {Array.from({ length: divs }).map((_, j) => {
                 const subWallName = divs === 1 ? wallName : `${wallName}_${j}`;
                 const segHeightMm = divs === 1 ? (height * 1000) : (j === 0 ? wainscotHeight : Math.max(0.1, (height * 1000) - wainscotHeight));
@@ -2416,8 +2475,9 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   activeFurnitureId,
   onFurnitureSelect,
   beams = [],
+  skeletonCeiling = false,
   hideFurniture = false,
-  maskMode = false, 
+  maskMode = false,
   materialSettings,
   wallDivisions,
   isRendering,
@@ -2446,6 +2506,8 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   const isDraggingRef = useRef(false);
   const dragUnlockTimerRef = useRef<number | null>(null);
   const postDragSuppressUntilRef = useRef(0);
+  // 壁ごとの「カメラ背面で非表示」状態を SketchRoom が書き込み、Beams3D が読む共有ref（梁の壁連動非表示用）。
+  const wallHiddenRef = useRef<Record<number, boolean>>({});
   
   useEffect(() => {
     isDraggingRef.current = isDragging;
@@ -2675,6 +2737,8 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                           onDragStart={beginDragInteraction}
                           onDragEnd={endDragInteraction}
                           onHoverNameChange={safeHoverNameChange}
+                          skeletonCeiling={skeletonCeiling}
+                          wallHiddenRef={wallHiddenRef}
                         />
                     ) : null}
 
@@ -2704,7 +2768,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             onHoverNameChange={safeHoverNameChange}
                         />
                     ))}
-                    <Beams3D beams={beams} centerMm={sketchFloorPolygon?.centerMm} roomHeight={roomHeight} />
+                    <Beams3D beams={beams} centerMm={sketchFloorPolygon?.centerMm} polygonMm={sketchFloorPolygon?.polygonMm} roomHeight={roomHeight} wallHiddenRef={wallHiddenRef} />
                 </group>
             </CanvasErrorBoundary>
         </Suspense>

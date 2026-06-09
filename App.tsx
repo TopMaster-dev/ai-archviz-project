@@ -678,7 +678,9 @@ const App: React.FC = () => {
     },
     []
   );
-  const [roomHeight, setRoomHeight] = useState(2700); 
+  const [roomHeight, setRoomHeight] = useState(2700);
+  // スケルトン天井: 天井スラブを外して梁などの上部構造を露出する（3Dビュー）。
+  const [skeletonCeiling, setSkeletonCeiling] = useState(false);
   
   // Snap Settings
   const [gridSnapSize, setGridSnapSize] = useState(1000); 
@@ -2275,6 +2277,17 @@ const App: React.FC = () => {
                             </button>
                           ))}
                         </div>
+                        <div className="glass p-1.5 rounded-2xl border border-white/10 flex items-center shadow-xl bg-black/40 backdrop-blur-md pointer-events-auto shrink-0 h-[46px]">
+                          <button
+                            onClick={() => setSkeletonCeiling((v) => !v)}
+                            className={`h-[34px] px-3.5 rounded-xl text-[11px] font-black tracking-widest transition-all ${
+                              skeletonCeiling ? 'bg-amber-500 text-black' : 'text-white/60 hover:text-white'
+                            }`}
+                            title="スケルトン天井: 天井スラブを外して梁などの上部構造を表示"
+                          >
+                            スケルトン天井
+                          </button>
+                        </div>
                       </div>
                     )}
                 </div>
@@ -2357,7 +2370,8 @@ const App: React.FC = () => {
                         cameraRef={cameraRef} 
                         modelUrl={customModelUrl} 
                         sketchPoints={sketchPoints} 
-                        roomHeight={roomHeight / 1000} 
+                        roomHeight={roomHeight / 1000}
+                        skeletonCeiling={skeletonCeiling}
                         snapshotMode={snapshotMode} 
                         furnitureItems={furnitureItems}
                         onFurnitureUpdate={setFurnitureItemsFrom3D}
