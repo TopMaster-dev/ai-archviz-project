@@ -100,13 +100,19 @@ const Beam3DMesh: React.FC<{
       cy += ny * (beam.widthMm / 2);
     }
   }
-  const bx = (cx - centerMm.x) / MM_PER_METER;
-  const bz = (cy - centerMm.y) / MM_PER_METER;
-  const lengthM = Math.max(0.01, lengthMm / MM_PER_METER);
-  const widthM = Math.max(0.01, beam.widthMm / MM_PER_METER);
-  const heightM = Math.max(0.01, beam.heightMm / MM_PER_METER);
-  const by = roomHeight - beam.dropMm / MM_PER_METER - heightM / 2;
-  const angleRad = (angleDeg * Math.PI) / 180;
+  // 非有限値（NaN/undefined）の梁寸法で BoxGeometry が NaN になり 3D 全体がクラッシュするのを防ぐ。
+  // ※ Math.max(0.01, NaN) は NaN を返すため、明示的に Number.isFinite で防御する。
+  const finiteOr = (v: number, d: number) => (Number.isFinite(v) ? v : d);
+  const finitePos = (v: number, d: number) => (Number.isFinite(v) && v > 0 ? v : d);
+  const sCx = finiteOr(cx, centerMm.x);
+  const sCy = finiteOr(cy, centerMm.y);
+  const bx = (sCx - centerMm.x) / MM_PER_METER;
+  const bz = (sCy - centerMm.y) / MM_PER_METER;
+  const lengthM = finitePos(lengthMm / MM_PER_METER, 1);
+  const widthM = finitePos(beam.widthMm / MM_PER_METER, 0.15);
+  const heightM = finitePos(beam.heightMm / MM_PER_METER, 0.3);
+  const by = roomHeight - finiteOr(beam.dropMm / MM_PER_METER, 0.2) - heightM / 2;
+  const angleRad = (finiteOr(angleDeg, 0) * Math.PI) / 180;
   const handleD = lengthM / 2 + 0.4;
 
   // 壁梁は所属壁がカメラ背面で非表示のとき同期して非表示。

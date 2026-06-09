@@ -174,11 +174,24 @@ export const useProjectStore = create<ProjectStoreState>()(
             wallDivisions: src.sketch?.wallDivisions ?? d.sketch.wallDivisions,
             underlay: src.sketch?.underlay ?? d.sketch.underlay,
           };
+          // 梁は非有限値（NaN/undefined）を既定値で補完（NaN ジオメトリによる3Dクラッシュ防止）。
+          const fin = (v: number, def: number, positive = false) =>
+            Number.isFinite(v) && (!positive || v > 0) ? v : def;
+          const rawBeams = src.scene?.beams ?? d.scene.beams;
           s.scene = {
-            roomHeightMm: src.scene?.roomHeightMm ?? d.scene.roomHeightMm,
+            roomHeightMm: fin(src.scene?.roomHeightMm as number, d.scene.roomHeightMm, true),
             furniture: src.scene?.furniture ?? d.scene.furniture,
             groups: src.scene?.groups ?? d.scene.groups,
-            beams: src.scene?.beams ?? d.scene.beams,
+            beams: rawBeams.map((b) => ({
+              ...b,
+              cx: fin(b?.cx, 0),
+              cy: fin(b?.cy, 0),
+              lengthMm: fin(b?.lengthMm, 1000, true),
+              angleDeg: fin(b?.angleDeg, 0),
+              widthMm: fin(b?.widthMm, 150, true),
+              dropMm: fin(b?.dropMm, 200),
+              heightMm: fin(b?.heightMm, 300, true),
+            })),
           };
           s.materials = {
             selections: src.materials?.selections ?? d.materials.selections,

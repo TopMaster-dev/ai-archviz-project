@@ -652,6 +652,7 @@ const App: React.FC = () => {
   const beams = useProjectStore((s) => s.scene.beams);
   // sketchPoints の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
   const sketchPoints = useProjectStore((s) => s.sketch.points) as SketchPoint[];
+
   const setSketchPoints = useCallback<React.Dispatch<React.SetStateAction<SketchPoint[]>>>(
     (action) => {
       const current = useProjectStore.getState().sketch.points as SketchPoint[];

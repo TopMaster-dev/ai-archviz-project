@@ -172,4 +172,16 @@ describe('projectStore — load / serialize', () => {
     expect(Array.isArray(s.sketch.points)).toBe(true);
     expect(s.materials.materialSettings).toBeDefined();
   });
+
+  it('sanitizes non-finite beam fields on load (prevents NaN 3D geometry crash)', () => {
+    // 旧/壊れたデータ: widthMm/heightMm/dropMm が欠ける梁。NaN ジオメトリで3Dがクラッシュしないよう既定補完。
+    store.getState().loadProjectState({
+      scene: { beams: [{ id: 'bad', cx: 0, cy: 0, lengthMm: 1000, angleDeg: 0 }] },
+    } as never);
+    const b = store.getState().scene.beams[0];
+    expect(b.widthMm).toBeGreaterThan(0);
+    expect(b.heightMm).toBeGreaterThan(0);
+    expect(Number.isFinite(b.dropMm)).toBe(true);
+    expect(Number.isFinite(b.lengthMm) && b.lengthMm > 0).toBe(true);
+  });
 });
