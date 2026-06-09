@@ -143,4 +143,33 @@ describe('projectStore — load / serialize', () => {
     expect(store.getState().scene.furniture).toHaveLength(1);
     expect(store.getState().scene.roomHeightMm).toBe(2700);
   });
+
+  it('fills defaults when loading partial/legacy project data (no crash)', () => {
+    // 旧スキーマ/部分的な data（scene.beams や aiEdit/camera が欠ける）を読み込んでも
+    // 各フィールドが既定値で補完され、参照クラッシュしないこと。
+    const partial = {
+      sketch: { points: [{ x: 0, y: 0 }] },
+      scene: { furniture: [fakeFurniture('a')] },
+    };
+
+    store.getState().loadProjectState(partial as never);
+    const s = store.getState();
+    expect(Array.isArray(s.scene.beams)).toBe(true);
+    expect(Array.isArray(s.scene.furniture)).toBe(true);
+    expect(s.scene.furniture).toHaveLength(1);
+    expect(s.scene.roomHeightMm).toBeGreaterThan(0);
+    expect(Array.isArray(s.sketch.points)).toBe(true);
+    expect(s.sketch.openings).toBeDefined();
+    expect(s.materials.selections).toBeDefined();
+    expect(s.aiEdit.versions).toBeDefined();
+    expect(s.camera.presets).toBeDefined();
+  });
+
+  it('loads the DB-default empty object without crashing', () => {
+    store.getState().loadProjectState({} as never);
+    const s = store.getState();
+    expect(Array.isArray(s.scene.beams)).toBe(true);
+    expect(Array.isArray(s.sketch.points)).toBe(true);
+    expect(s.materials.materialSettings).toBeDefined();
+  });
 });

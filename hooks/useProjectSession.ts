@@ -48,7 +48,14 @@ function messageOf(e: unknown): string {
   if (isFreePlanLimitError(e)) {
     return `フリープランの保存上限（${FREE_PLAN_PROJECT_LIMIT}件）に達しています。不要なプロジェクトを削除してください。`;
   }
-  return e instanceof Error ? e.message : 'エラーが発生しました。';
+  if (e instanceof Error) return e.message;
+  // Supabase/PostgREST のエラーは Error インスタンスでない素のオブジェクト。実際の message を表面化する。
+  if (e && typeof e === 'object') {
+    const o = e as { message?: unknown; details?: unknown; hint?: unknown };
+    const parts = [o.message, o.details, o.hint].filter((x): x is string => typeof x === 'string' && x.length > 0);
+    if (parts.length > 0) return parts.join(' / ');
+  }
+  return 'エラーが発生しました。';
 }
 
 /**

@@ -164,11 +164,34 @@ export const useProjectStore = create<ProjectStoreState>()(
 
       loadProjectState: (state) =>
         set((s) => {
-          s.sketch = state.sketch;
-          s.scene = state.scene;
-          s.materials = state.materials;
-          s.aiEdit = state.aiEdit;
-          s.camera = state.camera;
+          // 旧スキーマ/部分的な project.data（beams や aiEdit 等が欠ける、または DB 既定の {} ）を
+          // 読み込んでもクラッシュしないよう、空の既定値で各フィールドを補完してから反映する。
+          const d = createEmptyProjectState();
+          const src = (state ?? {}) as Partial<ProjectState>;
+          s.sketch = {
+            points: src.sketch?.points ?? d.sketch.points,
+            openings: src.sketch?.openings ?? d.sketch.openings,
+            wallDivisions: src.sketch?.wallDivisions ?? d.sketch.wallDivisions,
+            underlay: src.sketch?.underlay ?? d.sketch.underlay,
+          };
+          s.scene = {
+            roomHeightMm: src.scene?.roomHeightMm ?? d.scene.roomHeightMm,
+            furniture: src.scene?.furniture ?? d.scene.furniture,
+            groups: src.scene?.groups ?? d.scene.groups,
+            beams: src.scene?.beams ?? d.scene.beams,
+          };
+          s.materials = {
+            selections: src.materials?.selections ?? d.materials.selections,
+            materialSettings: src.materials?.materialSettings ?? d.materials.materialSettings,
+          };
+          s.aiEdit = {
+            versions: src.aiEdit?.versions ?? d.aiEdit.versions,
+            activeVersionId: src.aiEdit?.activeVersionId ?? d.aiEdit.activeVersionId,
+            draftObjects: src.aiEdit?.draftObjects ?? d.aiEdit.draftObjects,
+          };
+          s.camera = {
+            presets: src.camera?.presets ?? d.camera.presets,
+          };
           s.selectedIds = [];
         }),
       reset: () =>
