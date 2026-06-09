@@ -509,26 +509,30 @@ const GLTFCore = ({
     maskMode,
     isSelected,
     snapshotMode,
-    captureStep
+    captureStep,
+    alignTop
 }: {
     modelUrl: string;
     maskMode?: boolean;
     isSelected?: boolean;
     snapshotMode?: boolean;
     captureStep?: 'idle' | 'pt-base' | 'mask';
+    /** true のとき、モデルの「最上端」をグループ原点に合わせる（天井から吊り下げる天井オブジェクト用）。 */
+    alignTop?: boolean;
 }) => {
     const { scene } = useGLTF(modelUrl);
-    
+
     // クローンと座標補正は「最初の1回」だけ行う（ここで計算を確定させる）
     const clonedScene = useMemo(() => {
         const clone = scene.clone();
         const box = new THREE.Box3().setFromObject(clone);
         const center = box.getCenter(new THREE.Vector3());
         clone.position.x = -center.x;
-        clone.position.y = -box.min.y;
+        // 通常は最下端を原点（床置き）。天井オブジェクトは最上端を原点に合わせて天井から吊り下げる。
+        clone.position.y = alignTop ? -box.max.y : -box.min.y;
         clone.position.z = -center.z;
         return clone;
-    }, [scene]);
+    }, [scene, alignTop]);
 
     // maskMode が変わった時は「マテリアル（色）」だけを変える（座標は絶対にいじらない）
     useEffect(() => {
@@ -1186,6 +1190,7 @@ const GLTFFurniture: React.FC<{
                                 maskMode={maskMode}
                                 isSelected={isSelected}
                                 captureStep={captureStep}
+                                alignTop={item.ceilingMount}
                             />
                         </Suspense>
                     </CanvasErrorBoundary>

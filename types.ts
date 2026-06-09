@@ -76,7 +76,7 @@ export interface SelectionState {
 
 export type OpeningType = 'window_fix' | 'window_sliding' | 'window_casement' | 'door_single' | 'door_sliding';
 
-export type ToolMode = 'select' | 'draw' | 'add';
+export type ToolMode = 'select' | 'draw' | 'add' | 'beam';
 export type AddKind = 'door' | 'window' | 'furniture';
 
 export interface Opening {

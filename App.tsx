@@ -1679,6 +1679,9 @@ const App: React.FC = () => {
     });
   };
 
+  // 平面図/天伏図の表示モード（SketchCanvas と共有）。天伏図での家具配置は天井オブジェクト扱い。
+  const [isCeilingView, setIsCeilingView] = useState(false);
+
   const handleAddFurniture = (catalogItem: FurnitureCatalogItem) => {
       const id = `furniture-${Date.now()}`;
       const meta = resolveFurnitureMetadata(catalogItem);
@@ -1704,19 +1707,22 @@ const App: React.FC = () => {
       const initialYaw = degToRad(meta.forwardYawDeg ?? 0);
       const defaultScale = Number.isFinite(catalogItem.defaultScale) ? Number(catalogItem.defaultScale) : 1;
       const defaultY = Number.isFinite(catalogItem.defaultY) ? Number(catalogItem.defaultY) : 0;
+      // 天伏図で配置した家具は天井オブジェクト（ceilingMount）として扱い、天井高さに配置する。
+      const placeOnCeiling = isCeilingView;
       const newItem: FurnitureItem = {
           id,
           type: catalogItem.type,
           name: catalogItem.name,
           modelUrl: catalogItem.url,
-          position: [0, defaultY, 0],
+          position: [0, placeOnCeiling ? roomHeight / 1000 : defaultY, 0],
           rotation: [0, initialYaw, 0],
           scale: [defaultScale, defaultScale, defaultScale],
           footprint2d: {
             width: Number.isFinite(meta.widthMm ?? NaN) ? (meta.widthMm as number) : 1000,
             depth: Number.isFinite(meta.depthMm ?? NaN) ? (meta.depthMm as number) : 700
           },
-          modelForwardYawDeg: meta.forwardYawDeg ?? 0
+          modelForwardYawDeg: meta.forwardYawDeg ?? 0,
+          ceilingMount: placeOnCeiling
       };
       setFurnitureItems(prev => [...prev, newItem]);
       setActiveFurnitureId(id);
@@ -2319,6 +2325,8 @@ const App: React.FC = () => {
                         onUnderlayChange={(u) => useProjectStore.getState().setUnderlay(u)}
                         beams={beams}
                         onBeamsChange={(b) => useProjectStore.getState().setBeams(b)}
+                        isCeilingView={isCeilingView}
+                        onCeilingViewChange={setIsCeilingView}
                      />
                      
                      {!renderState.isRendering && (

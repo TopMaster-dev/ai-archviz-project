@@ -62,6 +62,9 @@ export interface Beam {
   widthMm: number;
   dropMm: number; // 天井からの下がり (mm)
   heightMm: number; // 梁せい (mm)
+  /** 壁に乗る梁: 壁（線分）のインデックス。設定時は cx/cy/長さ/角度を壁から導出し、壁の移動に追従する。
+   *  undefined のときは自由配置の梁（cx/cy/長さ/角度を直接編集）。 */
+  wallIndex?: number;
 }
 
 export interface ProjectState {

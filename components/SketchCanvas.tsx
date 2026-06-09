@@ -220,6 +220,9 @@ interface SketchCanvasProps {
   /** 梁（パラメトリックな2D要素）。 */
   beams?: Beam[];
   onBeamsChange?: (beams: Beam[]) => void;
+  /** 平面図(false)/天伏図(true)の表示モード。App が単一の真実として保持。 */
+  isCeilingView?: boolean;
+  onCeilingViewChange?: (v: boolean) => void;
 }
 
 const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -257,7 +260,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   underlay = null,
   onUnderlayChange,
   beams = [],
-  onBeamsChange
+  onBeamsChange,
+  isCeilingView = false,
+  onCeilingViewChange
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -356,6 +361,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const isAddDoor = toolMode === 'add' && addKind === 'door';
   const isAddWindow = toolMode === 'add' && addKind === 'window';
   const isAddFurniture = toolMode === 'add' && addKind === 'furniture';
+  const isBeamMode = toolMode === 'beam';
 
   const canvasSize = { width: 1100, height: 740 };
   const { centerMm } = getRoomTransform(pointsMm.map((p) => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })));
@@ -442,9 +448,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   // render ループ（rAF）から毎フレーム読み出すため ref に保持する。
   const beamsRef = useRef(beams);
   beamsRef.current = beams;
-  const [isCeilingView, setIsCeilingView] = useState(false);
+  // 平面図/天伏図モードは App が保持（prop）。render ループからは ref 経由で読む。
   const ceilingViewRef = useRef(isCeilingView);
   ceilingViewRef.current = isCeilingView;
+  // 非アクティブ図面（平面 or 天伏）のグレースケール表示時の透明度（下絵と同様に調整可）。
+  const [inactiveLayerOpacity, setInactiveLayerOpacity] = useState(0.3);
+  const inactiveOpacityRef = useRef(inactiveLayerOpacity);
+  inactiveOpacityRef.current = inactiveLayerOpacity;
   const [selectedBeamId, setSelectedBeamId] = useState<string | null>(null);
   const selectedBeamIdRef = useRef(selectedBeamId);
   selectedBeamIdRef.current = selectedBeamId;
@@ -454,8 +464,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const beam: Beam = { id, cx: 0, cy: 0, lengthMm: 3000, angleDeg: 0, widthMm: 150, dropMm: 200, heightMm: 300 };
     onBeamsChange?.([...beamsRef.current, beam]);
     setSelectedBeamId(id);
-    setIsCeilingView(true);
-  }, [onBeamsChange]);
+    onCeilingViewChange?.(true);
+  }, [onBeamsChange, onCeilingViewChange]);
 
   const updateBeam = useCallback(
     (id: string, patch: Partial<Beam>) => {
@@ -844,6 +854,44 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       };
       lastMousePixelsRef.current = pixels;
       tryPointerCapture(e);
+      return;
+    }
+
+    // --- 梁モード: 壁にスナップして壁梁、空きスペースなら自由梁を配置 ---
+    if (isBeamMode) {
+      const edgeCount = isClosed ? pointsMm.length : Math.max(0, pointsMm.length - 1);
+      let bestWall = -1;
+      let bestDist = Infinity;
+      for (let i = 0; i < edgeCount; i++) {
+        const w = getWallSegment(pointsMm, i);
+        if (!w) continue;
+        const l2 = w.length * w.length || 1;
+        let t = ((mm.x - w.p1.x) * w.dx + (mm.y - w.p1.y) * w.dy) / l2;
+        t = Math.max(0, Math.min(1, t));
+        const d = Math.hypot(mm.x - (w.p1.x + t * w.dx), mm.y - (w.p1.y + t * w.dy));
+        if (d < bestDist) {
+          bestDist = d;
+          bestWall = i;
+        }
+      }
+      const snapThresholdMm = 25 / Math.max(viewZoomRef.current, 1e-6);
+      const id = `beam-${Date.now()}`;
+      const wallSeg = bestWall >= 0 && bestDist <= snapThresholdMm ? getWallSegment(pointsMm, bestWall) : null;
+      const beam: Beam = wallSeg
+        ? {
+            id,
+            cx: (wallSeg.p1.x + wallSeg.p2.x) / 2,
+            cy: (wallSeg.p1.y + wallSeg.p2.y) / 2,
+            lengthMm: wallSeg.length,
+            angleDeg: (Math.atan2(wallSeg.dy, wallSeg.dx) * 180) / Math.PI,
+            widthMm: 150,
+            dropMm: 200,
+            heightMm: 300,
+            wallIndex: bestWall,
+          }
+        : { id, cx: mm.x, cy: mm.y, lengthMm: 2000, angleDeg: 0, widthMm: 150, dropMm: 200, heightMm: 300 };
+      onBeamsChange?.([...beamsRef.current, beam]);
+      setSelectedBeamId(id);
       return;
     }
 
@@ -1408,6 +1456,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       const currentZoom = viewZoomRef.current;
       const currentOffset = viewOffsetRef.current;
 
+      // 平面図/天伏図の「非アクティブ図面」をグレースケール＋半透明で描くためのフィルタ。
+      // 天伏図のとき: 床レイヤ（壁・建具・床家具）を減衰。平面図のとき: 天井レイヤ（梁・天井家具）を減衰。
+      // CSS filter の opacity は globalAlpha と独立に効くため、各描画ブロックの内部状態に干渉しにくい。
+      const ceilingV = ceilingViewRef.current;
+      const inactiveFilter = `grayscale(1) opacity(${inactiveOpacityRef.current})`;
+
       // 0. 下絵（背景画像）を最背面に描画
       const ul = underlayRef.current;
       const ulImg = underlayImgRef.current;
@@ -1452,6 +1506,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       // スナップドットは描画しない（ズームアウト時の二重ループ負荷回避）。グリッドスナップは getSnappedMm 等で従来どおり有効。
 
       if (pointsMm.length > 0) {
+        // 床レイヤ（壁・建具）: 天伏図では非アクティブのため減衰。
+        if (ceilingV) ctx.filter = inactiveFilter;
         const gizmoScale = getArrowGizmoScale(currentZoom);
         const gizmoArm = GIZMO_ARM_BASE_PX * gizmoScale;
         const gizmoHead = GIZMO_HEAD_BASE_PX * gizmoScale;
@@ -1666,9 +1722,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           }
           ctx.restore();
         });
+        ctx.filter = 'none';
 
         // Draw Furniture (2D footprint)
         furnitureItemsRef.current.forEach((item) => {
+          // 床家具/天井家具を現在のビューに応じて減衰（天伏図では床家具、平面図では天井家具）。
+          const _inactiveFurn = ceilingV ? !item.ceilingMount : !!item.ceilingMount;
+          ctx.filter = _inactiveFurn ? inactiveFilter : 'none';
           const pose = getFurniturePoseMmForDraw(item);
           const { width, depth } = getFurnitureFootprintMm(item);
           const centerPx = worldToScreen(pose.center);
@@ -1864,8 +1924,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.restore();
           }
         });
+        ctx.filter = 'none';
       }
-      
+
       // Draw Rulers (Internalized)
       ctx.save();
       ctx.fillStyle = '#0a0a0a';
@@ -1908,34 +1969,81 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       ctx.fillStyle = '#050505'; ctx.fillRect(0, 0, rulerSize, rulerSize);
       ctx.restore();
 
-      // 天伏ビュー: 平面を半透明化してから天井レイヤ（梁）を最前面に描画
-      if (ceilingViewRef.current) {
-        ctx.save();
-        ctx.fillStyle = 'rgba(8,10,14,0.55)';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.restore();
-      }
+      // 梁（天井レイヤ）。平面図では非アクティブのため減衰し、天伏図では通常表示。
+      // 壁梁(wallIndex)は現在の壁形状から幾何を導出し、室内側へ半透明の黄色バンドで描く（壁移動に追従）。
+      // 自由梁は中心線の両側に半透明オレンジのバンドで描く。
+      ctx.filter = ceilingV ? 'none' : inactiveFilter;
       const beamList = beamsRef.current;
       if (beamList.length > 0) {
         ctx.save();
-        ctx.lineCap = 'round';
+        const beamCentroid = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
         for (const beam of beamList) {
-          const half = beam.lengthMm / 2;
-          const rad = (beam.angleDeg * Math.PI) / 180;
-          const bdx = Math.cos(rad) * half;
-          const bdy = Math.sin(rad) * half;
-          const bp1 = worldToScreen({ x: beam.cx - bdx, y: beam.cy - bdy });
-          const bp2 = worldToScreen({ x: beam.cx + bdx, y: beam.cy + bdy });
-          ctx.lineWidth = Math.max(2, beam.widthMm * currentZoom);
-          ctx.strokeStyle =
-            beam.id === selectedBeamIdRef.current ? 'rgba(245,158,11,0.95)' : 'rgba(245,200,120,0.7)';
+          let cx = beam.cx;
+          let cy = beam.cy;
+          let lengthMm = beam.lengthMm;
+          let angleDeg = beam.angleDeg;
+          const isWallBeam = beam.wallIndex !== undefined;
+          if (isWallBeam) {
+            const w = getWallSegment(pointsMm, beam.wallIndex as number);
+            if (!w) continue; // 壁が削除された → 描画スキップ
+            cx = (w.p1.x + w.p2.x) / 2;
+            cy = (w.p1.y + w.p2.y) / 2;
+            lengthMm = w.length;
+            angleDeg = (Math.atan2(w.dy, w.dx) * 180) / Math.PI;
+          }
+          const rad = (angleDeg * Math.PI) / 180;
+          const ux = Math.cos(rad);
+          const uy = Math.sin(rad);
+          const half = lengthMm / 2;
+          const ax = cx - ux * half;
+          const ay = cy - uy * half;
+          const bx2 = cx + ux * half;
+          const by2 = cy + uy * half;
+          let px = -uy;
+          let py = ux;
+          let c1, c2, c3, c4;
+          if (isWallBeam) {
+            // 室内側（重心方向）へ widthMm のバンド
+            if (beamCentroid && px * (beamCentroid.x - cx) + py * (beamCentroid.y - cy) < 0) {
+              px = -px;
+              py = -py;
+            }
+            c1 = { x: ax, y: ay };
+            c2 = { x: bx2, y: by2 };
+            c3 = { x: bx2 + px * beam.widthMm, y: by2 + py * beam.widthMm };
+            c4 = { x: ax + px * beam.widthMm, y: ay + py * beam.widthMm };
+          } else {
+            const wh = beam.widthMm / 2;
+            c1 = { x: ax + px * wh, y: ay + py * wh };
+            c2 = { x: bx2 + px * wh, y: by2 + py * wh };
+            c3 = { x: bx2 - px * wh, y: by2 - py * wh };
+            c4 = { x: ax - px * wh, y: ay - py * wh };
+          }
+          const s1 = worldToScreen(c1);
+          const s2 = worldToScreen(c2);
+          const s3 = worldToScreen(c3);
+          const s4 = worldToScreen(c4);
+          const selected = beam.id === selectedBeamIdRef.current;
           ctx.beginPath();
-          ctx.moveTo(bp1.x, bp1.y);
-          ctx.lineTo(bp2.x, bp2.y);
+          ctx.moveTo(s1.x, s1.y);
+          ctx.lineTo(s2.x, s2.y);
+          ctx.lineTo(s3.x, s3.y);
+          ctx.lineTo(s4.x, s4.y);
+          ctx.closePath();
+          if (isWallBeam) {
+            ctx.fillStyle = selected ? 'rgba(250,204,21,0.55)' : 'rgba(250,204,21,0.30)';
+            ctx.strokeStyle = selected ? 'rgba(250,204,21,0.95)' : 'rgba(250,204,21,0.7)';
+          } else {
+            ctx.fillStyle = selected ? 'rgba(249,115,22,0.5)' : 'rgba(249,115,22,0.28)';
+            ctx.strokeStyle = selected ? 'rgba(249,115,22,0.95)' : 'rgba(249,115,22,0.7)';
+          }
+          ctx.fill();
+          ctx.lineWidth = selected ? 2 : 1;
           ctx.stroke();
         }
         ctx.restore();
       }
+      ctx.filter = 'none';
 
       const frameMs = performance.now() - frameStart;
       if (PERF_TRACE && frameMs > PERF_FRAME_WARN_MS && furnitureItemsRef.current.length > 0) {
@@ -2074,12 +2182,40 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       {/* 天伏ビュー / 梁 */}
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         <div className="flex items-center gap-2">
-          <span className="font-bold" title="平面を半透明化して天井レイヤ（梁）を表示">天伏</span>
-          <ToggleSwitch enabled={isCeilingView} onChange={() => setIsCeilingView(!isCeilingView)} />
+          <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
+            <button
+              type="button"
+              onClick={() => onCeilingViewChange?.(false)}
+              className={`rounded-md px-3 py-1 font-bold transition ${!isCeilingView ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+              title="平面図: 床面（壁・建具・床家具）を表示"
+            >
+              平面図
+            </button>
+            <button
+              type="button"
+              onClick={() => onCeilingViewChange?.(true)}
+              className={`rounded-md px-3 py-1 font-bold transition ${isCeilingView ? 'bg-amber-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+              title="天伏図: 天井面（梁・天井オブジェクト）を表示。床面は半透明化。"
+            >
+              天伏図
+            </button>
+          </div>
           <button type="button" onClick={addBeam} className="px-2 py-1 rounded font-bold transition hover:bg-white/10">
             ＋梁
           </button>
           {beams.length > 0 && <span className="text-neutral-500">{beams.length}本</span>}
+        </div>
+        <div className="mt-1.5 flex items-center gap-2 text-[10px] text-neutral-400">
+          <span title="非アクティブな図面（平面/天伏）の表示濃度">非アクティブ濃度</span>
+          <input
+            type="range"
+            min={0}
+            max={0.8}
+            step={0.05}
+            value={inactiveLayerOpacity}
+            onChange={(e) => setInactiveLayerOpacity(Number(e.target.value))}
+            className="w-24"
+          />
         </div>
         {beams.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-1">
@@ -2102,53 +2238,85 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         {(() => {
           const b = beams.find((x) => x.id === selectedBeamId);
           if (!b) return null;
+          const isWall = b.wallIndex !== undefined;
           return (
             <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+              <span
+                className={`rounded px-1.5 py-0.5 ${isWall ? 'bg-yellow-500/20 text-yellow-200' : 'bg-orange-500/20 text-orange-200'}`}
+                title={isWall ? '壁に乗る梁（長さ・角度・位置は壁に追従）' : '自由配置の梁'}
+              >
+                {isWall ? '壁梁' : '自由梁'}
+              </span>
               <label className="flex items-center gap-1">
                 長さ
-                <input
-                  type="number"
+                <NumericField
                   value={Math.round(b.lengthMm)}
-                  onChange={(e) => updateBeam(b.id, { lengthMm: Number(e.target.value) })}
-                  className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
+                  onChange={(n) => updateBeam(b.id, { lengthMm: n })}
+                  dragSensitivity={5}
+                  disabled={isWall}
+                  className="w-16"
                 />
                 mm
               </label>
               <label className="flex items-center gap-1">
                 角度
-                <input
-                  type="number"
+                <NumericField
                   value={Math.round(b.angleDeg)}
-                  onChange={(e) => updateBeam(b.id, { angleDeg: Number(e.target.value) })}
-                  className="w-12 rounded bg-black/40 px-1 py-0.5 text-right"
+                  onChange={(n) => updateBeam(b.id, { angleDeg: n })}
+                  dragSensitivity={1}
+                  disabled={isWall}
+                  className="w-12"
                 />
                 °
               </label>
               <label className="flex items-center gap-1">
                 幅
-                <input
-                  type="number"
+                <NumericField
                   value={Math.round(b.widthMm)}
-                  onChange={(e) => updateBeam(b.id, { widthMm: Number(e.target.value) })}
-                  className="w-12 rounded bg-black/40 px-1 py-0.5 text-right"
+                  onChange={(n) => updateBeam(b.id, { widthMm: Math.max(10, n) })}
+                  dragSensitivity={2}
+                  className="w-14"
                 />
+                mm
+              </label>
+              <label className="flex items-center gap-1">
+                高さ
+                <NumericField
+                  value={Math.round(b.heightMm)}
+                  onChange={(n) => updateBeam(b.id, { heightMm: Math.max(10, n) })}
+                  dragSensitivity={2}
+                  className="w-14"
+                />
+                mm
+              </label>
+              <label className="flex items-center gap-1">
+                下がり
+                <NumericField
+                  value={Math.round(b.dropMm)}
+                  onChange={(n) => updateBeam(b.id, { dropMm: Math.max(0, n) })}
+                  dragSensitivity={2}
+                  className="w-14"
+                />
+                mm
               </label>
               <label className="flex items-center gap-1">
                 X
-                <input
-                  type="number"
+                <NumericField
                   value={Math.round(b.cx)}
-                  onChange={(e) => updateBeam(b.id, { cx: Number(e.target.value) })}
-                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                  onChange={(n) => updateBeam(b.id, { cx: n })}
+                  dragSensitivity={5}
+                  disabled={isWall}
+                  className="w-14"
                 />
               </label>
               <label className="flex items-center gap-1">
                 Y
-                <input
-                  type="number"
+                <NumericField
                   value={Math.round(b.cy)}
-                  onChange={(e) => updateBeam(b.id, { cy: Number(e.target.value) })}
-                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                  onChange={(n) => updateBeam(b.id, { cy: n })}
+                  dragSensitivity={5}
+                  disabled={isWall}
+                  className="w-14"
                 />
               </label>
               <button
@@ -2211,6 +2379,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                 >
                   ドア
                 </button>
+                {isCeilingView && (
+                  <button
+                    type="button"
+                    onClick={() => setToolMode('beam')}
+                    className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isBeamMode ? 'bg-yellow-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                    title="梁: 壁をクリックで壁梁（壁に追従）、空きスペースで自由梁を配置"
+                  >
+                    梁
+                  </button>
+                )}
               </div>
               <div className="w-px h-8 bg-white/10" />
 
