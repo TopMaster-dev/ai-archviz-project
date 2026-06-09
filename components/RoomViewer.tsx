@@ -142,8 +142,16 @@ const Beam3DMesh: React.FC<{
       const p = intersectAtY(e.clientX, e.clientY, d.planeY);
       if (!p) return;
       if (d.mode === 'move') {
-        live.cx = d.startCx + (p.x - d.startWx) * MM_PER_METER;
-        live.cy = d.startCy + (p.z - d.startWz) * MM_PER_METER;
+        // X/Y いずれか優勢な軸方向のみに限定（斜め移動を防ぐ）。
+        const ddx = (p.x - d.startWx) * MM_PER_METER;
+        const ddz = (p.z - d.startWz) * MM_PER_METER;
+        if (Math.abs(ddx) >= Math.abs(ddz)) {
+          live.cx = d.startCx + ddx;
+          live.cy = d.startCy;
+        } else {
+          live.cx = d.startCx;
+          live.cy = d.startCy + ddz;
+        }
       } else {
         live.angleDeg = (Math.atan2(p.z - d.cbz, p.x - d.cbx) * 180) / Math.PI;
       }
@@ -2712,9 +2720,31 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   const safeMeshClick = useCallback(
     (category: MaterialCategory, meshName: string, isMulti: boolean) => {
       if (isInteractionSuppressed()) return;
+      setSelectedBeam3DId(null); // 壁・床・天井を選択したら梁の選択を解除
       onMeshClick(category, meshName, isMulti);
     },
     [isInteractionSuppressed, onMeshClick]
+  );
+
+  // 建具を選択したら梁の選択を解除する。
+  const selectOpeningClearBeam = useCallback(
+    (id: string | null) => {
+      if (id) setSelectedBeam3DId(null);
+      onOpeningSelect(id);
+    },
+    [onOpeningSelect]
+  );
+
+  // 梁を選択したら他の選択（家具・建具）を解除する。
+  const selectBeamClearOthers = useCallback(
+    (id: string | null) => {
+      setSelectedBeam3DId(id);
+      if (id) {
+        onFurnitureSelect(null);
+        onOpeningSelect(null);
+      }
+    },
+    [onFurnitureSelect, onOpeningSelect]
   );
 
   const sketchFloorPolygon = useMemo(() => {
@@ -2762,6 +2792,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
             if (isInteractionSuppressed()) return;
             if (e.type === 'click') {
                 onFurnitureSelect(null);
+                setSelectedBeam3DId(null); // 何もない所をクリックで梁の選択も解除
             }
         }}
         onContextMenu={(e) => e.preventDefault()}
@@ -2882,7 +2913,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                           openings={openings}
                           setOpenings={setOpenings}
                           selectedOpeningId={selectedOpeningId}
-                          onOpeningSelect={onOpeningSelect}
+                          onOpeningSelect={selectOpeningClearBeam}
                           onDragStart={beginDragInteraction}
                           onDragEnd={endDragInteraction}
                           onHoverNameChange={safeHoverNameChange}
@@ -2892,9 +2923,9 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                     ) : null}
 
                     {hideFurniture ? null : furnitureItems.map((item) => (
-                        <GLTFFurniture 
+                        <GLTFFurniture
                             key={item.id} item={item} isSelected={activeFurnitureId === item.id}
-                            onSelect={() => onFurnitureSelect(item.id)}
+                            onSelect={() => { setSelectedBeam3DId(null); onFurnitureSelect(item.id); }}
                             isDraggingRef={isDraggingRef}
                             snapshotMode={snapshotMode || false}
                             maskMode={maskMode}
@@ -2924,7 +2955,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                       roomHeight={roomHeight}
                       wallHiddenRef={wallHiddenRef}
                       selectedBeamId={selectedBeam3DId}
-                      onBeamSelect={setSelectedBeam3DId}
+                      onBeamSelect={selectBeamClearOthers}
                       onBeamPatch={onBeamPatch}
                       editable={!snapshotMode && !maskMode && captureStep !== 'mask'}
                       onDragStart={beginDragInteraction}

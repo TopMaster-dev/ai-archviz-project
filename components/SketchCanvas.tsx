@@ -1123,7 +1123,14 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     if (beamDragRef.current) {
       const d = beamDragRef.current;
       if (d.mode === 'move') {
-        updateBeam(d.id, { cx: d.startCx + (mm.x - d.startMm.x), cy: d.startCy + (mm.y - d.startMm.y) });
+        // X/Y いずれか優勢な軸方向のみに限定（斜め移動を防ぐ）。
+        const dx = mm.x - d.startMm.x;
+        const dy = mm.y - d.startMm.y;
+        if (Math.abs(dx) >= Math.abs(dy)) {
+          updateBeam(d.id, { cx: d.startCx + dx, cy: d.startCy });
+        } else {
+          updateBeam(d.id, { cx: d.startCx, cy: d.startCy + dy });
+        }
       } else {
         updateBeam(d.id, { angleDeg: (Math.atan2(mm.y - d.startCy, mm.x - d.startCx) * 180) / Math.PI });
       }
