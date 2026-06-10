@@ -363,7 +363,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const isAddFurniture = toolMode === 'add' && addKind === 'furniture';
   const isBeamMode = toolMode === 'beam';
 
-  const canvasSize = { width: 1100, height: 740 };
+  const canvasSize = { width: 1100, height: 900 };
   const { centerMm } = getRoomTransform(pointsMm.map((p) => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })));
 
   const screenToWorld = useCallback((px: Point) => ({
@@ -2147,7 +2147,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     <div className="relative flex flex-col items-center group pt-28" ref={containerRef}>
 
       {/* 左サイドツールパネル（下絵 + 天伏/梁）を1列にまとめて自動整列 */}
-      <div className="absolute top-28 left-6 z-40 flex w-[320px] flex-col gap-2">
+      <div className="absolute top-44 left-6 z-40 flex w-[320px] flex-col gap-2">
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         {!underlay ? (
           <button
