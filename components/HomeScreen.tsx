@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Settings } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
+import { createShareLink } from '../lib/db/projects.js';
 import { ByokKeyPanel } from './ByokKeyPanel.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
@@ -37,9 +38,32 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('マイプロジェクト');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 共有（2b）: 閲覧用URLの発行・クリップボードコピーの結果通知。
+  const [sharingId, setSharingId] = useState<string | null>(null);
+  const [shareNotice, setShareNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
+
+  const handleShare = async (id: string) => {
+    setSharingId(id);
+    setShareNotice(null);
+    try {
+      const token = await createShareLink(id);
+      const url = `${window.location.origin}${window.location.pathname}?share=${token}`;
+      try {
+        await navigator.clipboard.writeText(url);
+        setShareNotice('閲覧用URLをコピーしました。リンクを知っている人は誰でも閲覧できます。');
+      } catch {
+        // クリップボード不可（権限・非セキュアコンテキスト等）: 手動コピー用にURLを表示。
+        setShareNotice(url);
+      }
+    } catch {
+      setShareNotice('共有リンクの発行に失敗しました。時間をおいて再度お試しください。');
+    } finally {
+      setSharingId(null);
+    }
+  };
 
   const usage = plan === 'free' ? `${projectCount} / ${projectLimit}` : `${projectCount}`;
 
@@ -196,6 +220,15 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                             </button>
                             <button
                               type="button"
+                              onClick={() => void handleShare(p.id)}
+                              disabled={busy || sharingId === p.id}
+                              title="閲覧用URLを発行してコピー"
+                              className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
+                            >
+                              {sharingId === p.id ? '発行中…' : '共有'}
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => {
                                 if (window.confirm('このプロジェクトを削除しますか？（14日間は復元可能）')) {
                                   void deleteCurrentProject();
@@ -273,6 +306,30 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 作成して開く
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {shareNotice && (
+        <div className="fixed inset-x-0 bottom-4 z-50 flex justify-center px-4">
+          <div className="flex max-w-xl items-start gap-3 rounded-xl border border-white/10 bg-neutral-800 px-4 py-3 shadow-2xl">
+            <p className="min-w-0 flex-1 break-all text-xs text-neutral-200" style={{ userSelect: 'text' }}>
+              {shareNotice.startsWith('http') ? (
+                <>
+                  <span className="mb-1 block text-neutral-400">下のURLをコピーしてください：</span>
+                  {shareNotice}
+                </>
+              ) : (
+                shareNotice
+              )}
+            </p>
+            <button
+              type="button"
+              onClick={() => setShareNotice(null)}
+              className="shrink-0 rounded px-2 py-1 text-xs text-neutral-400 transition hover:bg-white/10"
+            >
+              閉じる
+            </button>
           </div>
         </div>
       )}
