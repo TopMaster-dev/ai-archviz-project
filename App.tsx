@@ -28,6 +28,8 @@ import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue } from './lib/project/projectState.js';
+import { listUserUploads } from './lib/db/uploads.js';
+import { uploadToFurnitureItem, uploadToProduct, isUserUploadProduct } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -1337,7 +1339,26 @@ const App: React.FC = () => {
         setIsLoadingProducts(false);
       }
     };
-    fetchProducts();
+    // ユーザーが Home でアップロードしたテクスチャを素材パレットへ取り込む（#6b）。
+    // App はエディタ入場時にマウントされ直すため、この効果が都度走り最新を反映する。
+    const mergeTextureUploads = async () => {
+      try {
+        const uploads = await listUserUploads('texture');
+        if (!uploads.length) return;
+        const items = uploads.map(uploadToProduct);
+        setProducts((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          const add = items.filter((i) => !seen.has(i.id));
+          return add.length ? [...add, ...prev] : prev;
+        });
+      } catch (e) {
+        console.warn('ユーザーテクスチャの取り込みに失敗:', e);
+      }
+    };
+    void (async () => {
+      await fetchProducts();
+      await mergeTextureUploads();
+    })();
   }, []);
 
   // Fetch Furniture dynamically from API（本番=Cloudinary）。
@@ -1412,7 +1433,27 @@ const App: React.FC = () => {
         setFurnitureCatalogFetchStatus('error');
       }
     };
-    fetchFurniture();
+    // ユーザーがアップロードした3Dモデルを家具カタログへ取り込む（#6b）。
+    // 失敗してもベースカタログは維持。資産しか無い場合も ready にして表示する。
+    const mergeModelUploads = async () => {
+      try {
+        const uploads = await listUserUploads('model');
+        if (!uploads.length) return;
+        const items = uploads.map(uploadToFurnitureItem);
+        setFurnitureCatalog((prev) => {
+          const seen = new Set(prev.map((p) => p.id));
+          const add = items.filter((i) => !seen.has(i.id));
+          return add.length ? [...prev, ...add] : prev;
+        });
+        setFurnitureCatalogFetchStatus('ready');
+      } catch (e) {
+        console.warn('ユーザーモデルの取り込みに失敗:', e);
+      }
+    };
+    void (async () => {
+      await fetchFurniture();
+      await mergeModelUploads();
+    })();
   }, [normalizeFurnitureCatalogItem]);
 
   // 家具モデルの寸法・前方向きメタデータ（2D/3D共通の単一ソース）
@@ -1991,7 +2032,8 @@ const App: React.FC = () => {
 
   const filteredProducts = useMemo(() => {
     let items = products;
-    if (activeCategory) items = items.filter(p => p.category === activeCategory);
+    // ユーザーアップロードのテクスチャは面の種別を問わず適用できるよう、どのカテゴリでも表示する（#6b）。
+    if (activeCategory) items = items.filter(p => p.category === activeCategory || isUserUploadProduct(p));
     if (selectedBrand) items = items.filter(p => p.brand === selectedBrand);
 
     if (sortOrder === 'price-asc') items = [...items].sort((a, b) => a.pricePerUnit - b.pricePerUnit);

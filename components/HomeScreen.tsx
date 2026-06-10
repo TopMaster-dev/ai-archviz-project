@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 import { ByokKeyPanel } from './ByokKeyPanel.js';
+import { UploadPanel } from './UploadPanel.js';
 
 /**
  * ログインと2Dスケッチ（エディタ）の間に表示する独立した「ホーム画面」。
@@ -208,8 +209,11 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
         </section>
 
         <section>
-          <h2 className="mb-3 text-lg font-semibold">設定</h2>
-          <ByokKeyPanel />
+          <h2 className="mb-3 text-lg font-semibold">設定 / アップロード</h2>
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <ByokKeyPanel />
+            <UploadPanel />
+          </div>
         </section>
       </main>
     </div>
