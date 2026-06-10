@@ -31,6 +31,9 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
 
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(projectName);
+  // 新規作成: まず名前を入力してから遷移（2c-iii）。
+  const [creatingNew, setCreatingNew] = useState(false);
+  const [newName, setNewName] = useState('マイプロジェクト');
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
@@ -41,8 +44,10 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     if (id !== projectId) await switchProject(id);
     onEnter();
   };
-  const createAndEnter = async () => {
-    await createNewProject();
+  const confirmCreate = async () => {
+    const name = newName.trim() || 'マイプロジェクト';
+    setCreatingNew(false);
+    await createNewProject(name);
     onEnter();
   };
 
@@ -92,7 +97,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
             </h2>
             <button
               type="button"
-              onClick={() => void createAndEnter()}
+              onClick={() => { setNewName('マイプロジェクト'); setCreatingNew(true); }}
               disabled={busy || atLimit}
               title={atLimit ? 'フリープランの保存上限に達しています' : '新しいプロジェクトを作成して開く'}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
@@ -216,6 +221,49 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           </div>
         </section>
       </main>
+
+      {creatingNew && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setCreatingNew(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="mb-3 text-base font-bold">新しいプロジェクト</h3>
+            <label className="mb-1 block text-xs text-neutral-400">プロジェクト名</label>
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !busy) void confirmCreate();
+                if (e.key === 'Escape') setCreatingNew(false);
+              }}
+              placeholder="マイプロジェクト"
+              className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setCreatingNew(false)}
+                className="rounded-lg bg-neutral-800 px-4 py-2 text-sm transition hover:bg-neutral-700"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void confirmCreate()}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+              >
+                作成して開く
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

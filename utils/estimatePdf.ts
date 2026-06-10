@@ -60,7 +60,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
     table.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;margin-bottom:4px;';
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
-    ['No.', '明細', '数量', '単位', '単価', '金額', '区分', '入力状態'].forEach((text, idx) => {
+    ['No.', '明細', '数量', '単位', '単価', '金額', '区分', '入力状態', '備考'].forEach((text, idx) => {
       const th = document.createElement('th');
       th.textContent = text;
       th.style.cssText = thStyle(idx >= 2 && idx <= 5 ? 'right' : 'left');
@@ -72,7 +72,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
     if (rows.length === 0) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 8;
+      td.colSpan = 9;
       td.textContent = '（該当なし）';
       td.style.cssText = tdStyle('left', 'color:#999;font-style:italic;');
       tr.appendChild(td);
@@ -88,7 +88,8 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
           formatYen(r.unitPrice),
           formatYen(r.amount),
           r.sectionType,
-          r.inputStatus
+          r.inputStatus,
+          r.remark || ''
         ];
         cells.forEach((text, i) => {
           const td = document.createElement('td');
@@ -101,7 +102,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
     }
     const trS = document.createElement('tr');
     const tdL = document.createElement('td');
-    tdL.colSpan = 7;
+    tdL.colSpan = 8;
     tdL.textContent = `${titlePlain} 小計`;
     tdL.style.cssText = tdStyle('right', 'font-weight:700;');
     trS.appendChild(tdL);
@@ -127,7 +128,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   fTable.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;';
   const ftHead = document.createElement('thead');
   const fhr = document.createElement('tr');
-  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態'].forEach((text, idx) => {
+  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態', '備考'].forEach((text, idx) => {
     const th = document.createElement('th');
     th.textContent = text;
     th.style.cssText = thStyle(idx >= 3 && idx <= 5 ? 'right' : 'left');
@@ -139,7 +140,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   if (payload.furniture.length === 0) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 8;
+    td.colSpan = 9;
     td.textContent = '（家具なし）';
     td.style.cssText = tdStyle('left', 'color:#999;font-style:italic;');
     tr.appendChild(td);
@@ -155,7 +156,8 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
         formatYen(r.unitPrice),
         formatYen(r.amount),
         r.sectionType,
-        r.inputStatus
+        r.inputStatus,
+        r.remark || ''
       ].forEach(
         (text, i) => {
           const td = document.createElement('td');
@@ -169,7 +171,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   }
   const fTrSum = document.createElement('tr');
   const fTdL = document.createElement('td');
-  fTdL.colSpan = 7;
+  fTdL.colSpan = 8;
   fTdL.textContent = '家具 小計';
   fTdL.style.cssText = tdStyle('right', 'font-weight:700;');
   fTrSum.appendChild(fTdL);
@@ -190,7 +192,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   aTable.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;';
   const atHead = document.createElement('thead');
   const ahr = document.createElement('tr');
-  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態'].forEach((text, idx) => {
+  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態', '備考'].forEach((text, idx) => {
     const th = document.createElement('th');
     th.textContent = text;
     th.style.cssText = thStyle(idx >= 3 && idx <= 5 ? 'right' : 'left');
@@ -202,7 +204,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   if (payload.aiItems.length === 0) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 8;
+    td.colSpan = 9;
     td.textContent = '（AI追加なし）';
     td.style.cssText = tdStyle('left', 'color:#999;font-style:italic;');
     tr.appendChild(td);
@@ -218,7 +220,8 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
         formatYen(r.unitPrice),
         formatYen(r.amount),
         r.sectionType,
-        r.inputStatus
+        r.inputStatus,
+        r.remark || ''
       ].forEach((text, i) => {
         const td = document.createElement('td');
         td.textContent = text;
@@ -230,7 +233,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   }
   const aTrSum = document.createElement('tr');
   const aTdL = document.createElement('td');
-  aTdL.colSpan = 7;
+  aTdL.colSpan = 8;
   aTdL.textContent = 'AI追加 小計';
   aTdL.style.cssText = tdStyle('right', 'font-weight:700;');
   aTrSum.appendChild(aTdL);
