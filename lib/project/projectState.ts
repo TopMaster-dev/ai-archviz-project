@@ -74,7 +74,10 @@ export interface ProjectState {
     openings: Opening[];
     /** 壁インデックス → 分割数（2 素材の貼り分け）。App.tsx と同じく数値キー。 */
     wallDivisions: Record<number, number>;
-    underlay: UnderlaySettings | null;
+    /** 下絵（平面図用）。旧 `underlay` 単一フィールドはここへ移行。 */
+    underlayPlan: UnderlaySettings | null;
+    /** 下絵（天伏図用）。 */
+    underlayCeiling: UnderlaySettings | null;
   };
   scene: {
     roomHeightMm: number;
@@ -100,7 +103,7 @@ export interface ProjectState {
 export function createEmptyProjectState(): ProjectState {
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
-    sketch: { points: [], openings: [], wallDivisions: {}, underlay: null },
+    sketch: { points: [], openings: [], wallDivisions: {}, underlayPlan: null, underlayCeiling: null },
     scene: { roomHeightMm: 2400, furniture: [], groups: [], beams: [] },
     materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },

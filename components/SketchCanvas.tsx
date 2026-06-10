@@ -370,6 +370,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [isGridSnapEnabled, setIsGridSnapEnabled] = useState(true);
   // 寸法/頂点スナップ（既存ジオメトリの頂点・X/Y整列に吸着）。
   const [isVertexSnapEnabled, setIsVertexSnapEnabled] = useState(true);
+  // 下絵スナップ（背景画像の枠・辺・中心へ吸着）。既定OFF・任意。
+  const [isUnderlaySnapEnabled, setIsUnderlaySnapEnabled] = useState(false);
   
   // Selection & Interaction State
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
@@ -453,6 +455,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   underlayMoveModeRef.current = underlayMoveMode;
   const draggingUnderlayRef = useRef(false);
   const underlayDragStartRef = useRef<{ mm: Point; offsetX: number; offsetY: number } | null>(null);
+  // 下絵リサイズ（右下角ハンドルのドラッグで等比拡縮）。
+  const resizingUnderlayRef = useRef(false);
+  const underlayResizeStartRef = useRef<{ imgW: number } | null>(null);
 
   useEffect(() => {
     if (!underlay?.dataUrl) {
@@ -709,6 +714,42 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       }
     }
 
+    // Priority 2.5: 下絵スナップ（背景画像の枠の角・辺中点・中心へ吸着 / 枠の縦横ラインへ整列）
+    if (isUnderlaySnapEnabled && underlayRef.current?.visible && underlayImgRef.current) {
+      const ul = underlayRef.current;
+      const img = underlayImgRef.current;
+      const mmPerPx = ul.scaleMmPerPx && ul.scaleMmPerPx > 0 ? ul.scaleMmPerPx : 10;
+      const x0 = ul.offsetX;
+      const y0 = ul.offsetY;
+      const x1 = x0 + img.width * mmPerPx;
+      const y1 = y0 + img.height * mmPerPx;
+      const mx = (x0 + x1) / 2;
+      const my = (y0 + y1) / 2;
+      const rawScreen = worldToScreen(rawMm);
+      const UL_PX = 14;
+      // 角・辺中点・中心の9点へ吸着
+      const pts: Point[] = [
+        { x: x0, y: y0 }, { x: x1, y: y0 }, { x: x0, y: y1 }, { x: x1, y: y1 },
+        { x: mx, y: y0 }, { x: mx, y: y1 }, { x: x0, y: my }, { x: x1, y: my }, { x: mx, y: my },
+      ];
+      for (const t of pts) {
+        const ts = worldToScreen(t);
+        if (Math.hypot(ts.x - rawScreen.x, ts.y - rawScreen.y) < UL_PX) return { x: t.x, y: t.y };
+      }
+      // 枠の縦/横ライン（左/中/右・上/中/下）へ軸ごとに整列
+      let sx = rawMm.x;
+      let sy = rawMm.y;
+      let ax = false;
+      let ay = false;
+      for (const X of [x0, mx, x1]) {
+        if (!ax && Math.abs(worldToScreen({ x: X, y: rawMm.y }).x - rawScreen.x) < UL_PX) { sx = X; ax = true; }
+      }
+      for (const Y of [y0, my, y1]) {
+        if (!ay && Math.abs(worldToScreen({ x: rawMm.x, y: Y }).y - rawScreen.y) < UL_PX) { sy = Y; ay = true; }
+      }
+      if (ax || ay) return { x: sx, y: sy };
+    }
+
     // Priority 3: Grid Snap (Absolute Coordinate Snap)
     // If Grid Snap is ON, strictly snap to grid intersections defined by gridSize.
     if (isGridSnapEnabled && gridSize > 0) {
@@ -902,6 +943,29 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       lastMousePixelsRef.current = pixels;
       tryPointerCapture(e);
       return;
+    }
+
+    // --- 下絵 リサイズ: 右下角ハンドルを掴んだら拡縮（移動判定より先に評価） ---
+    if (
+      underlayMoveModeRef.current &&
+      e.button !== 2 &&
+      underlayRef.current?.visible &&
+      underlayImgRef.current
+    ) {
+      const ul = underlayRef.current;
+      const img = underlayImgRef.current;
+      const mmPerPx = ul.scaleMmPerPx && ul.scaleMmPerPx > 0 ? ul.scaleMmPerPx : 10;
+      const br = worldToScreen({
+        x: ul.offsetX + img.width * mmPerPx,
+        y: ul.offsetY + img.height * mmPerPx,
+      });
+      if (Math.hypot(pixels.x - br.x, pixels.y - br.y) <= 12) {
+        resizingUnderlayRef.current = true;
+        underlayResizeStartRef.current = { imgW: img.width };
+        lastMousePixelsRef.current = pixels;
+        tryPointerCapture(e);
+        return;
+      }
     }
 
     // --- 下絵 移動モード: 左ドラッグで下絵を平行移動（他のツール操作には干渉しない） ---
@@ -1170,6 +1234,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const mm = screenToWorld(pixels);
     const canvas = canvasRef.current;
 
+    // 下絵 リサイズドラッグ: 右下角の mm 位置から scaleMmPerPx を再計算（左上固定・等比）。
+    if (resizingUnderlayRef.current && underlayResizeStartRef.current && underlayRef.current) {
+      const ul = underlayRef.current;
+      const newWidthMm = Math.max(100, mm.x - ul.offsetX);
+      onUnderlayChange?.({ ...ul, scaleMmPerPx: newWidthMm / underlayResizeStartRef.current.imgW });
+      if (canvas) canvas.style.cursor = 'nwse-resize';
+      return;
+    }
+
     // 下絵 移動ドラッグ: 開始点からのmm差分を offset に反映。
     if (draggingUnderlayRef.current && underlayDragStartRef.current && underlayRef.current) {
       const start = underlayDragStartRef.current;
@@ -1399,6 +1472,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       draggingUnderlayRef.current = false;
       underlayDragStartRef.current = null;
     }
+    if (resizingUnderlayRef.current) {
+      resizingUnderlayRef.current = false;
+      underlayResizeStartRef.current = null;
+    }
     if (beamDragRef.current) {
       beamDragRef.current = null;
     }
@@ -1599,6 +1676,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         ctx.globalAlpha = Math.max(0, Math.min(1, ul.opacity));
         ctx.drawImage(ulImg, tl.x, tl.y, w, h);
         ctx.restore();
+        // 移動モード時は枠と右下リサイズハンドルを表示（ドラッグで拡縮）。
+        if (underlayMoveModeRef.current) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(16,185,129,0.9)';
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.strokeRect(tl.x, tl.y, w, h);
+          ctx.setLineDash([]);
+          ctx.fillStyle = 'rgba(16,185,129,0.95)';
+          ctx.fillRect(tl.x + w - 6, tl.y + h - 6, 12, 12);
+          ctx.restore();
+        }
       }
 
       // 1. Grid Lines
@@ -2652,6 +2741,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   <div className="flex items-center gap-3">
                       <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider" title="既存の頂点・整列にスナップ">頂点</span>
                       <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
+                  </div>
+
+                  {/* Underlay (下絵) Snap Toggle */}
+                  <div className="flex items-center gap-3">
+                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider" title="下絵画像の枠（角・辺・中心）にスナップ">下絵</span>
+                      <ToggleSwitch enabled={isUnderlaySnapEnabled} onChange={() => setIsUnderlaySnapEnabled(!isUnderlaySnapEnabled)} />
                   </div>
               </div>
 

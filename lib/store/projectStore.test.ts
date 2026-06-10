@@ -173,6 +173,25 @@ describe('projectStore — load / serialize', () => {
     expect(s.materials.materialSettings).toBeDefined();
   });
 
+  it('migrates a legacy single underlay into the plan slot (3f)', () => {
+    const legacy = { dataUrl: 'data:legacy', opacity: 0.5, offsetX: 0, offsetY: 0, visible: true };
+    store.getState().loadProjectState({ sketch: { underlay: legacy } } as never);
+    const s = store.getState();
+    expect(s.sketch.underlayPlan?.dataUrl).toBe('data:legacy');
+    expect(s.sketch.underlayCeiling).toBeNull();
+  });
+
+  it('keeps separate plan/ceiling underlays through a round-trip (3f)', () => {
+    store.getState().setUnderlay('plan', { dataUrl: 'plan', opacity: 0.5, offsetX: 0, offsetY: 0, visible: true } as never);
+    store.getState().setUnderlay('ceiling', { dataUrl: 'ceiling', opacity: 0.5, offsetX: 0, offsetY: 0, visible: true } as never);
+    const snap = store.getState().toProjectState();
+    store.getState().reset();
+    store.getState().loadProjectState(snap);
+    const s = store.getState();
+    expect(s.sketch.underlayPlan?.dataUrl).toBe('plan');
+    expect(s.sketch.underlayCeiling?.dataUrl).toBe('ceiling');
+  });
+
   it('sanitizes non-finite beam fields on load (prevents NaN 3D geometry crash)', () => {
     // 旧/壊れたデータ: widthMm/heightMm/dropMm が欠ける梁。NaN ジオメトリで3Dがクラッシュしないよう既定補完。
     store.getState().loadProjectState({

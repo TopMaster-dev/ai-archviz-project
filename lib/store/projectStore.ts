@@ -34,7 +34,7 @@ export interface ProjectStoreState {
   setSketchPoints(points: Point[]): void;
   setOpenings(openings: Opening[]): void;
   setWallDivisions(wallDivisions: ProjectState['sketch']['wallDivisions']): void;
-  setUnderlay(underlay: UnderlaySettings | null): void;
+  setUnderlay(layer: 'plan' | 'ceiling', underlay: UnderlaySettings | null): void;
 
   // scene / furniture
   setRoomHeight(mm: number): void;
@@ -89,9 +89,10 @@ export const useProjectStore = create<ProjectStoreState>()(
         set((s) => {
           s.sketch.wallDivisions = wallDivisions;
         }),
-      setUnderlay: (underlay) =>
+      setUnderlay: (layer, underlay) =>
         set((s) => {
-          s.sketch.underlay = underlay;
+          if (layer === 'ceiling') s.sketch.underlayCeiling = underlay;
+          else s.sketch.underlayPlan = underlay;
         }),
 
       setRoomHeight: (mm) =>
@@ -172,7 +173,9 @@ export const useProjectStore = create<ProjectStoreState>()(
             points: src.sketch?.points ?? d.sketch.points,
             openings: src.sketch?.openings ?? d.sketch.openings,
             wallDivisions: src.sketch?.wallDivisions ?? d.sketch.wallDivisions,
-            underlay: src.sketch?.underlay ?? d.sketch.underlay,
+            // 旧 `underlay` 単一フィールドは平面図スロットへ移行（後方互換）。
+            underlayPlan: src.sketch?.underlayPlan ?? (src.sketch as { underlay?: UnderlaySettings | null } | undefined)?.underlay ?? d.sketch.underlayPlan,
+            underlayCeiling: src.sketch?.underlayCeiling ?? d.sketch.underlayCeiling,
           };
           // 梁は非有限値（NaN/undefined）を既定値で補完（NaN ジオメトリによる3Dクラッシュ防止）。
           const fin = (v: number, def: number, positive = false) =>
