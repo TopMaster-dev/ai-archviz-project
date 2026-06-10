@@ -11,6 +11,7 @@ export interface Profile {
   display_name: string | null;
   company: string | null;
   graduation_year: number | null;
+  phone: string | null;
   plan: PlanType;
   created_at: string;
 }

@@ -17,6 +17,7 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
   const [role, setRole] = useState<UserRole>('pro');
   const [displayName, setDisplayName] = useState('');
   const [company, setCompany] = useState('');
+  const [phone, setPhone] = useState('');
   const [graduationYear, setGraduationYear] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -33,6 +34,7 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
       role,
       displayName: displayName || undefined,
       company: company || undefined,
+      phone: phone || undefined,
       graduationYear: role === 'student' ? Number(graduationYear) || undefined : undefined,
     });
     setBusy(false);
@@ -97,6 +99,18 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
 
       <Field label="お名前・表示名（任意）">
         <input type="text" value={displayName} onChange={(e) => setDisplayName(e.target.value)} className={inputClass} />
+      </Field>
+
+      <Field label="電話番号（任意）">
+        <input
+          type="tel"
+          inputMode="tel"
+          autoComplete="tel"
+          value={phone}
+          onChange={(e) => setPhone(e.target.value)}
+          placeholder="例: 090-1234-5678"
+          className={inputClass}
+        />
       </Field>
 
       {role !== 'owner' && (

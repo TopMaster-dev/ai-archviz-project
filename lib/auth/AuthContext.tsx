@@ -3,6 +3,11 @@ import type { ReactNode } from 'react';
 import { getSupabase, isSupabaseConfigured } from '../db/supabaseClient.js';
 import { translateAuthError } from './authErrors.js';
 import type { Profile, UserRole } from '../db/types.js';
+import {
+  updateProfile as dbUpdateProfile,
+  updateEmail as dbUpdateEmail,
+  updatePassword as dbUpdatePassword,
+} from '../db/profile.js';
 
 // 認証コンテキスト。属性別サインアップ（プロ/学生/施主、学生は卒業予定年度必須）に対応。
 // Supabase 未構成時は configured=false のゲストモードとして動作する。
@@ -14,6 +19,7 @@ export interface SignUpParams {
   displayName?: string;
   company?: string;
   graduationYear?: number;
+  phone?: string;
 }
 
 export interface AuthContextValue {
@@ -28,6 +34,9 @@ export interface AuthContextValue {
   signOut(): Promise<void>;
   resetPassword(email: string): Promise<{ error: string | null }>;
   refreshProfile(): Promise<void>;
+  updateProfile(patch: { display_name?: string | null; phone?: string | null }): Promise<{ error: string | null }>;
+  updateEmail(email: string): Promise<{ error: string | null }>;
+  updatePassword(password: string): Promise<{ error: string | null }>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -94,6 +103,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           display_name: params.displayName ?? null,
           company: params.company ?? null,
           graduation_year: params.graduationYear ?? null,
+          phone: params.phone ?? null,
         },
       },
     });
@@ -127,6 +137,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadProfile(userId);
   }, [loadProfile, userId]);
 
+  const updateProfile = useCallback(
+    async (patch: { display_name?: string | null; phone?: string | null }) => {
+      try {
+        await dbUpdateProfile(patch);
+        await loadProfile(userId);
+        return { error: null };
+      } catch (e) {
+        return { error: e instanceof Error ? translateAuthError(e.message) : 'プロフィールの更新に失敗しました。' };
+      }
+    },
+    [loadProfile, userId],
+  );
+
+  const updateEmail = useCallback(async (em: string) => {
+    try {
+      await dbUpdateEmail(em);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? translateAuthError(e.message) : 'メールアドレスの変更に失敗しました。' };
+    }
+  }, []);
+
+  const updatePassword = useCallback(async (password: string) => {
+    try {
+      await dbUpdatePassword(password);
+      return { error: null };
+    } catch (e) {
+      return { error: e instanceof Error ? translateAuthError(e.message) : 'パスワードの変更に失敗しました。' };
+    }
+  }, []);
+
   const value = useMemo<AuthContextValue>(
     () => ({
       configured,
@@ -139,8 +180,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signOut,
       resetPassword,
       refreshProfile,
+      updateProfile,
+      updateEmail,
+      updatePassword,
     }),
-    [configured, loading, userId, email, profile, signUp, signIn, signOut, resetPassword, refreshProfile],
+    [configured, loading, userId, email, profile, signUp, signIn, signOut, resetPassword, refreshProfile, updateProfile, updateEmail, updatePassword],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

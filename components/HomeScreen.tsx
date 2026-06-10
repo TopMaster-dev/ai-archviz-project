@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Settings } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 import { ByokKeyPanel } from './ByokKeyPanel.js';
 import { UploadPanel } from './UploadPanel.js';
+import { SettingsModal } from './SettingsModal.js';
 
 /**
  * ログインと2Dスケッチ（エディタ）の間に表示する独立した「ホーム画面」。
@@ -34,6 +36,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   // 新規作成: まず名前を入力してから遷移（2c-iii）。
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('マイプロジェクト');
+  const [settingsOpen, setSettingsOpen] = useState(false);
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
@@ -76,6 +79,15 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           <span className="hidden text-neutral-400 sm:inline" title={email ?? ''}>
             {email}
           </span>
+          <button
+            type="button"
+            onClick={() => setSettingsOpen(true)}
+            title="設定（プロフィール・APIキー）"
+            aria-label="設定"
+            className="flex h-8 w-8 items-center justify-center rounded-md bg-neutral-800 text-neutral-300 transition hover:bg-neutral-700 hover:text-white"
+          >
+            <Settings className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={() => void signOut()}
@@ -264,6 +276,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           </div>
         </div>
       )}
+
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
