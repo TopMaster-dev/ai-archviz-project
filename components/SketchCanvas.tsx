@@ -479,7 +479,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   const addBeam = useCallback(() => {
     const id = `beam-${Date.now()}`;
-    const beam: Beam = { id, cx: 0, cy: 0, lengthMm: 3000, angleDeg: 0, widthMm: 150, dropMm: 200, heightMm: 300 };
+    const beam: Beam = { id, cx: 0, cy: 0, lengthMm: 3000, angleDeg: 0, widthMm: 150, dropMm: 0, heightMm: 300 };
     onBeamsChange?.([...beamsRef.current, beam]);
     setSelectedBeamId(id);
     onCeilingViewChange?.(true);
@@ -936,11 +936,11 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             lengthMm: wallSeg.length,
             angleDeg: (Math.atan2(wallSeg.dy, wallSeg.dx) * 180) / Math.PI,
             widthMm: 150,
-            dropMm: 200,
+            dropMm: 0,
             heightMm: 300,
             wallIndex: bestWall,
           }
-        : { id, cx: mm.x, cy: mm.y, lengthMm: 2000, angleDeg: 0, widthMm: 150, dropMm: 200, heightMm: 300 };
+        : { id, cx: mm.x, cy: mm.y, lengthMm: 2000, angleDeg: 0, widthMm: 150, dropMm: 0, heightMm: 300 };
       onBeamsChange?.([...beamsRef.current, beam]);
       setSelectedBeamId(id);
       return;
@@ -2292,10 +2292,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               天伏図
             </button>
           </div>
-          <button type="button" onClick={addBeam} className="px-2 py-1 rounded font-bold transition hover:bg-white/10">
-            ＋梁
-          </button>
-          {beams.length > 0 && <span className="text-neutral-500">{beams.length}本</span>}
+          {beams.length > 0 && <span className="text-neutral-500">梁 {beams.length}本</span>}
         </div>
         <div className="mt-1.5 flex items-center gap-2 text-[10px] text-neutral-400">
           <span title="非アクティブな図面（平面/天伏）の表示濃度">非アクティブ濃度</span>
@@ -2382,7 +2379,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                 mm
               </label>
               <label className="flex items-center gap-1">
-                下がり
+                天井面からの距離
                 <NumericField
                   value={Math.round(b.dropMm)}
                   onChange={(n) => updateBeam(b.id, { dropMm: Math.max(0, n) })}

@@ -39,7 +39,7 @@ export function ModeToggleBar({
           activeMode === 'sketch' ? activeClassName : inactiveClassName
         }`}
       >
-        2Dスケッチ
+        2Dビュー
       </button>
       <button
         type="button"

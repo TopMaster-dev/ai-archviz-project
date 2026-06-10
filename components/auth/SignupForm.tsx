@@ -7,7 +7,7 @@ import { Field, FormError, FormNotice, inputClass, submitClass } from './formKit
 const ROLE_LABELS: Record<UserRole, string> = {
   pro: 'プロ（設計・施工）',
   student: '学生',
-  owner: '施主',
+  owner: '一般',
 };
 
 export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {

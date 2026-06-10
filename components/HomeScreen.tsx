@@ -167,7 +167,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                               disabled={busy}
                               className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
                             >
-                              改名
+                              名前を変更
                             </button>
                             <button
                               type="button"
