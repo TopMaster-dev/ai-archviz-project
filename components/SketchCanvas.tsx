@@ -266,6 +266,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const canvasBoxRef = useRef<HTMLDivElement | null>(null);
   const pointerCaptureIdRef = useRef<number | null>(null);
   const requestRef = useRef<number | null>(null);
   const mousePosRef = useRef<Point>({ x: 0, y: 0 });
@@ -363,7 +364,22 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const isAddFurniture = toolMode === 'add' && addKind === 'furniture';
   const isBeamMode = toolMode === 'beam';
 
-  const canvasSize = { width: 1100, height: 900 };
+  // キャンバスは利用可能領域いっぱいにレスポンシブ表示する。getCanvasMousePos は表示矩形を
+  // そのまま座標に使うため、属性サイズ(=canvasSize)を実表示サイズ（コンテナ）に一致させる。
+  const [canvasSize, setCanvasSize] = useState({ width: 1100, height: 740 });
+  useEffect(() => {
+    const el = canvasBoxRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const w = Math.max(320, Math.floor(entry.contentRect.width));
+        const h = Math.max(240, Math.floor(entry.contentRect.height));
+        setCanvasSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+      }
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const { centerMm } = getRoomTransform(pointsMm.map((p) => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })));
 
   const screenToWorld = useCallback((px: Point) => ({
@@ -2144,7 +2160,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   };
 
   return (
-    <div className="relative flex flex-col items-center group pt-28" ref={containerRef}>
+    <div className="relative h-full w-full group pt-32 pb-6 pr-6 pl-[352px]" ref={containerRef}>
 
       {/* 左サイドツールパネル（下絵 + 天伏/梁）を1列にまとめて自動整列 */}
       <div className="absolute top-44 left-6 z-40 flex w-[320px] flex-col gap-2">
@@ -2566,7 +2582,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           </div>
       </div>
 
-      <div className="relative pointer-events-auto">
+      <div className="relative pointer-events-auto h-full w-full" ref={canvasBoxRef}>
         {furnitureHint && (
           <div className="absolute bottom-6 left-1/2 z-[60] -translate-x-1/2 pointer-events-none px-5 py-2.5 rounded-2xl border border-amber-500/40 bg-black/85 text-amber-100 text-xs font-bold shadow-xl max-w-[90%] text-center">
             {furnitureHint}
