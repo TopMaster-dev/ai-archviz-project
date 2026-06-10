@@ -214,6 +214,7 @@ const Beam3DMesh: React.FC<{
         castShadow
         receiveShadow
         onPointerDown={startMove}
+        onClick={(e) => { if (editable) e.stopPropagation(); }}
       >
         <boxGeometry args={[lengthM, heightM, widthM]} />
         <meshStandardMaterial color={isSelected ? '#f59e0b' : '#9a9a9a'} roughness={0.85} metalness={0.05} />
@@ -223,6 +224,7 @@ const Beam3DMesh: React.FC<{
           ref={handleRef}
           position={[bx + handleD * Math.cos(angleRad), by, bz + handleD * Math.sin(angleRad)]}
           onPointerDown={startRotate}
+          onClick={(e) => e.stopPropagation()}
           renderOrder={12}
         >
           <sphereGeometry args={[0.13, 16, 16]} />
