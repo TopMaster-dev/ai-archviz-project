@@ -50,7 +50,7 @@ export interface AiEstimateExportRow {
   inputStatus: '完了' | '未入力';
 }
 
-export type SurfaceKey = 'floor' | 'ceiling' | 'wall';
+export type SurfaceKey = 'floor' | 'ceiling' | 'wall' | 'beam';
 
 export interface MaterialSectionPayload {
   key: SurfaceKey;
@@ -94,6 +94,7 @@ function roundYen(n: number): number {
 export function classifySurface(meshName: string): SurfaceKey {
   if (meshName === 'Sketch_Floor') return 'floor';
   if (meshName === 'Sketch_Ceiling') return 'ceiling';
+  if (meshName.startsWith('Beam_')) return 'beam';
   return 'wall';
 }
 
@@ -101,6 +102,8 @@ export function classifySurface(meshName: string): SurfaceKey {
 export function usageLabelFromMesh(meshName: string, wallDivisions: Record<number, number>): string {
   if (meshName === 'Sketch_Floor') return '床';
   if (meshName === 'Sketch_Ceiling') return '天井';
+  if (meshName === 'Sketch_UpperBand') return '上部壁';
+  if (meshName.startsWith('Beam_')) return '梁';
   if (!meshName.startsWith('Sketch_Wall_')) return meshName;
 
   const rest = meshName.replace('Sketch_Wall_', '');
@@ -169,12 +172,13 @@ export function buildEstimateExportPayload(
   const floorMap = new Map<string, AggRow>();
   const ceilingMap = new Map<string, AggRow>();
   const wallMap = new Map<string, AggRow>();
+  const beamMap = new Map<string, AggRow>();
 
   for (const item of costBreakdown) {
     const key = aggregateKeyForProduct(item);
     const surface = classifySurface(item.meshName);
     const target =
-      surface === 'floor' ? floorMap : surface === 'ceiling' ? ceilingMap : wallMap;
+      surface === 'floor' ? floorMap : surface === 'ceiling' ? ceilingMap : surface === 'beam' ? beamMap : wallMap;
     const existing = target.get(key);
     if (existing) {
       existing.area += item.area;
@@ -214,6 +218,7 @@ export function buildEstimateExportPayload(
   });
 
   const wallRows = buildSectionRows(wallMap, globalNo);
+  globalNo = wallRows.nextNo;
   materialSections.push({
     key: 'wall',
     title: '壁',
@@ -221,10 +226,19 @@ export function buildEstimateExportPayload(
     subtotal: roundYen([...wallMap.values()].reduce((s, r) => s + r.cost, 0)),
   });
 
+  const beamRows = buildSectionRows(beamMap, globalNo);
+  materialSections.push({
+    key: 'beam',
+    title: '梁',
+    rows: beamRows.rows,
+    subtotal: roundYen([...beamMap.values()].reduce((s, r) => s + r.cost, 0)),
+  });
+
   const materialsFlat: MaterialExportRow[] = [
     ...floorRows.rows,
     ...ceilRows.rows,
     ...wallRows.rows,
+    ...beamRows.rows,
   ];
 
   const boardMap = new Map<string, MaterialBoardItem>();
@@ -325,6 +339,7 @@ export function buildEstimateCsv(payload: EstimateExportPayload): string {
     floor: '【床】',
     ceiling: '【天井】',
     wall: '【壁】',
+    beam: '【梁】',
   };
 
   for (const sec of payload.materialSections) {

@@ -18,6 +18,7 @@ import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
+import { beamExposedAreaM2 } from './utils/beamArea.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl } from './utils/furnitureThumbnailUrl.js';
 import * as THREE from 'three';
 
@@ -27,7 +28,7 @@ import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
-import type { MaterialSettingsValue } from './lib/project/projectState.js';
+import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
 import { listUserUploads } from './lib/db/uploads.js';
 import { uploadToFurnitureItem, uploadToProduct, isUserUploadProduct } from './lib/uploadsCatalog.js';
 
@@ -733,6 +734,8 @@ const App: React.FC = () => {
   const [activeCategory, setActiveCategory] = useState<MaterialCategory | null>(null);
   // activeMeshを複数選択対応のactiveMeshesに変更
   const [activeMeshes, setActiveMeshes] = useState<string[]>([]);
+  // 3Dで選択中の梁（右パネル表示・素材割当用）（4a）。
+  const [selectedBeam3DId, setSelectedBeam3DId] = useState<string | null>(null);
   // wallDivisions の真実源も統合ストア（Undo/Redo・永続化対象）。setState 互換 API は維持。
   const wallDivisions = useProjectStore((s) => s.sketch.wallDivisions);
   const setWallDivisions = useCallback<React.Dispatch<React.SetStateAction<Record<number, number>>>>(
@@ -1706,6 +1709,20 @@ const App: React.FC = () => {
     }
   };
 
+  // 3Dで梁を選択（RoomViewer から通知）。素材割当のため activeMeshes に Beam_<id> を載せ、
+  // カテゴリは天井材から選べるよう 'Ceiling' にする（4a）。
+  const handleBeam3DSelect = (id: string | null) => {
+    setSelectedBeam3DId(id);
+    if (id) {
+      setActiveMeshes([`Beam_${id}`]);
+      setActiveCategory('Ceiling');
+      setActiveFurnitureId(null);
+      setSelectedOpeningId(null);
+    } else {
+      setActiveMeshes((prev) => prev.filter((m) => !m.startsWith('Beam_')));
+    }
+  };
+
   const handleMaterialUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target) return;
     // Explicitly cast to File[] to avoid 'unknown' type errors on file properties
@@ -1904,7 +1921,9 @@ const App: React.FC = () => {
 
     structuralMeshes.forEach(meshName => {
         const prod = selections[meshName];
-        if (!prod) return; 
+        if (!prod) return;
+        // 削除済みの梁の残骸キー（Beam_<id>）は見積から除外（ゴースト行防止）。
+        if (meshName.startsWith('Beam_') && !beams.some((x) => `Beam_${x.id}` === meshName)) return;
 
         let area = 0;
         if (meshName === 'Sketch_Floor' || meshName === 'Sketch_Ceiling') {
@@ -1959,6 +1978,10 @@ const App: React.FC = () => {
                 }
                 area = (perimMm * skeletonUpperWallMm) / 1000000;
             }
+        } else if (meshName.startsWith('Beam_')) {
+            // 4a: 梁の露出表面積（壁・天井に接する面を除く）。
+            const bx = beams.find((x) => `Beam_${x.id}` === meshName);
+            if (bx) area = beamExposedAreaM2(bx);
         }
 
         if (area > 0 || (area === 0 && !meshName.startsWith('Sketch_'))) {
@@ -1992,7 +2015,7 @@ const App: React.FC = () => {
         }
         return a.meshName.localeCompare(b.meshName);
     });
-  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides, skeletonCeiling, skeletonUpperWallMm]);
+  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides, skeletonCeiling, skeletonUpperWallMm, beams]);
 
   const materialsTotal = useMemo(
     () => costBreakdown.reduce((sum, item) => sum + item.cost, 0),
@@ -2491,7 +2514,8 @@ const App: React.FC = () => {
                           const next = beams.map((b) => (b.id === id ? { ...b, ...patch } : b));
                           useProjectStore.getState().setBeams(next);
                         }}
-                        snapshotMode={snapshotMode} 
+                        onBeamSelect3D={handleBeam3DSelect}
+                        snapshotMode={snapshotMode}
                         furnitureItems={furnitureItems}
                         onFurnitureUpdate={setFurnitureItemsFrom3D}
                         beams={beams}
@@ -2533,7 +2557,12 @@ const App: React.FC = () => {
                     {/* Right Side: Material / Opening / 家具の基本情報 */}
                     <div className="absolute inset-0 z-50 pointer-events-none">
                     {(() => {
-                        const hasAnySelection = activeMeshes.length > 0 || !!selectedOpeningId || !!activeFurnitureId;
+                        const hasAnySelection = activeMeshes.length > 0 || !!selectedOpeningId || !!activeFurnitureId || !!selectedBeam3DId;
+                        const selectedBeam = selectedBeam3DId ? beams.find((b) => b.id === selectedBeam3DId) : null;
+                        const patchSelectedBeam = (patch: Partial<Beam>) => {
+                          if (!selectedBeam3DId) return;
+                          useProjectStore.getState().setBeams(beams.map((b) => (b.id === selectedBeam3DId ? { ...b, ...patch } : b)));
+                        };
                         // 選択されたメッシュを適用中のProduct単位でグループ化
                         const groups = new Map<string, { product: any, area: number, cost: number, meshes: string[] }>();
                         activeMeshes.forEach(meshName => {
@@ -2602,6 +2631,44 @@ const App: React.FC = () => {
                                         <p className="mt-2 text-[10px] text-neutral-300 font-semibold">
                                             面・家具・建具を選択すると、ここにテクスチャや寸法の編集パネルが表示されます。
                                         </p>
+                                    </div>
+                                )}
+                                {selectedBeam && (
+                                    <div className={`${propertyCardBaseClass} px-4 py-3 flex flex-col gap-2`}>
+                                        <div className="flex items-center justify-between">
+                                            <p className="text-[11px] font-black uppercase tracking-widest text-amber-300">
+                                                梁 {selectedBeam.wallIndex !== undefined ? '（壁梁）' : '（自由梁）'}
+                                            </p>
+                                            <button
+                                                type="button"
+                                                onClick={() => { useProjectStore.getState().setBeams(beams.filter((b) => b.id !== selectedBeam.id)); handleBeam3DSelect(null); }}
+                                                className="text-[10px] font-bold text-red-300 hover:text-red-200"
+                                            >
+                                                削除
+                                            </button>
+                                        </div>
+                                        <label className="flex items-center justify-between gap-2 text-[10px] text-neutral-300">
+                                            幅
+                                            <span className="flex items-center gap-1">
+                                                <NumericField value={Math.round(selectedBeam.widthMm)} onChange={(n) => patchSelectedBeam({ widthMm: Math.max(10, n) })} dragSensitivity={2} className="w-16" />
+                                                mm
+                                            </span>
+                                        </label>
+                                        <label className="flex items-center justify-between gap-2 text-[10px] text-neutral-300">
+                                            高さ（せい）
+                                            <span className="flex items-center gap-1">
+                                                <NumericField value={Math.round(selectedBeam.heightMm)} onChange={(n) => patchSelectedBeam({ heightMm: Math.max(10, n) })} dragSensitivity={2} className="w-16" />
+                                                mm
+                                            </span>
+                                        </label>
+                                        <label className="flex items-center justify-between gap-2 text-[10px] text-neutral-300">
+                                            天井面からの距離
+                                            <span className="flex items-center gap-1">
+                                                <NumericField value={Math.round(selectedBeam.dropMm)} onChange={(n) => patchSelectedBeam({ dropMm: Math.max(0, n) })} dragSensitivity={2} className="w-16" />
+                                                mm
+                                            </span>
+                                        </label>
+                                        <p className="text-[9px] text-neutral-500">仕上げ材は下の素材パレットから選択できます（天井材から選択）。</p>
                                     </div>
                                 )}
                                 {Array.from(groups.entries()).map(([prodId, g], index) => {

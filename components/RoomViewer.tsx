@@ -64,7 +64,10 @@ const Beam3DMesh: React.FC<{
   onDragStart?: () => void;
   onDragEnd?: () => void;
   wallHiddenRef?: React.MutableRefObject<Record<number, boolean>>;
-}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef }) => {
+  selections?: Record<string, Product | null>;
+  materialSettings?: any;
+  captureStep?: any;
+}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep }) => {
   const boxRef = useRef<THREE.Mesh>(null);
   const handleRef = useRef<THREE.Mesh>(null);
   const { camera, gl } = useThree();
@@ -209,6 +212,7 @@ const Beam3DMesh: React.FC<{
     <group>
       <mesh
         ref={boxRef}
+        name={`Beam_${beam.id}`}
         position={[bx, by, bz]}
         rotation={[0, -angleRad, 0]}
         castShadow
@@ -217,7 +221,13 @@ const Beam3DMesh: React.FC<{
         onClick={(e) => { if (editable) e.stopPropagation(); }}
       >
         <boxGeometry args={[lengthM, heightM, widthM]} />
-        <meshStandardMaterial color={isSelected ? '#f59e0b' : '#9a9a9a'} roughness={0.85} metalness={0.05} />
+        {selections && selections[`Beam_${beam.id}`] ? (
+          <Suspense fallback={<meshStandardMaterial color="#9a9a9a" />}>
+            <DynamicMaterial product={selections[`Beam_${beam.id}`]} captureStep={captureStep} meshRef={boxRef} materialSettings={materialSettings} surfaceWidthM={lengthM} surfaceHeightM={heightM} />
+          </Suspense>
+        ) : (
+          <meshStandardMaterial color={isSelected ? '#f59e0b' : '#9a9a9a'} roughness={0.85} metalness={0.05} />
+        )}
       </mesh>
       {isSelected && !isWallBeam && editable && (
         <mesh
@@ -247,6 +257,9 @@ function Beams3D({
   editable,
   onDragStart,
   onDragEnd,
+  selections,
+  materialSettings,
+  captureStep,
 }: {
   beams: Beam[];
   centerMm: Point | undefined;
@@ -259,6 +272,9 @@ function Beams3D({
   editable?: boolean;
   onDragStart?: () => void;
   onDragEnd?: () => void;
+  selections?: Record<string, Product | null>;
+  materialSettings?: any;
+  captureStep?: any;
 }) {
   if (!centerMm || beams.length === 0) return null;
   return (
@@ -277,6 +293,9 @@ function Beams3D({
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
           wallHiddenRef={wallHiddenRef}
+          selections={selections}
+          materialSettings={materialSettings}
+          captureStep={captureStep}
         />
       ))}
     </group>
@@ -302,6 +321,8 @@ interface RoomViewerProps {
   skeletonUpperWallMm?: number;
   /** 3Dでの梁の直接操作（移動/回転）をストアへ反映する。 */
   onBeamPatch?: (id: string, patch: Partial<Beam>) => void;
+  /** 3Dで梁を選択/解除したことを App へ通知（右パネル表示・素材割当のため）（4a）。 */
+  onBeamSelect3D?: (id: string | null) => void;
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null) => void;
   hideFurniture?: boolean; // New Prop for empty room capture
@@ -2683,6 +2704,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   skeletonCeiling = false,
   skeletonUpperWallMm = 1000,
   onBeamPatch,
+  onBeamSelect3D,
   hideFurniture = false,
   maskMode = false,
   materialSettings,
@@ -2773,30 +2795,32 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
     (category: MaterialCategory, meshName: string, isMulti: boolean) => {
       if (isInteractionSuppressed()) return;
       setSelectedBeam3DId(null); // 壁・床・天井を選択したら梁の選択を解除
+      onBeamSelect3D?.(null);
       onMeshClick(category, meshName, isMulti);
     },
-    [isInteractionSuppressed, onMeshClick]
+    [isInteractionSuppressed, onMeshClick, onBeamSelect3D]
   );
 
   // 建具を選択したら梁の選択を解除する。
   const selectOpeningClearBeam = useCallback(
     (id: string | null) => {
-      if (id) setSelectedBeam3DId(null);
+      if (id) { setSelectedBeam3DId(null); onBeamSelect3D?.(null); }
       onOpeningSelect(id);
     },
-    [onOpeningSelect]
+    [onOpeningSelect, onBeamSelect3D]
   );
 
   // 梁を選択したら他の選択（家具・建具）を解除する。
   const selectBeamClearOthers = useCallback(
     (id: string | null) => {
       setSelectedBeam3DId(id);
+      onBeamSelect3D?.(id);
       if (id) {
         onFurnitureSelect(null);
         onOpeningSelect(null);
       }
     },
-    [onFurnitureSelect, onOpeningSelect]
+    [onFurnitureSelect, onOpeningSelect, onBeamSelect3D]
   );
 
   const sketchFloorPolygon = useMemo(() => {
@@ -2845,6 +2869,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
             if (e.type === 'click') {
                 onFurnitureSelect(null);
                 setSelectedBeam3DId(null); // 何もない所をクリックで梁の選択も解除
+                onBeamSelect3D?.(null);
             }
         }}
         onContextMenu={(e) => e.preventDefault()}
@@ -2978,7 +3003,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                     {hideFurniture ? null : furnitureItems.map((item) => (
                         <GLTFFurniture
                             key={item.id} item={item} isSelected={activeFurnitureId === item.id}
-                            onSelect={() => { setSelectedBeam3DId(null); onFurnitureSelect(item.id); }}
+                            onSelect={() => { setSelectedBeam3DId(null); onBeamSelect3D?.(null); onFurnitureSelect(item.id); }}
                             isDraggingRef={isDraggingRef}
                             snapshotMode={snapshotMode || false}
                             maskMode={maskMode}
@@ -3013,6 +3038,9 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                       editable={!snapshotMode && !maskMode && captureStep !== 'mask'}
                       onDragStart={beginDragInteraction}
                       onDragEnd={endDragInteraction}
+                      selections={selections}
+                      materialSettings={materialSettings}
+                      captureStep={captureStep}
                     />
                 </group>
             </CanvasErrorBoundary>
