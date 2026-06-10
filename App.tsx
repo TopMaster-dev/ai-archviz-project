@@ -2383,6 +2383,11 @@ const App: React.FC = () => {
                         onBeamsChange={(b) => useProjectStore.getState().setBeams(b)}
                         isCeilingView={isCeilingView}
                         onCeilingViewChange={setIsCeilingView}
+                        onClearAll={() => {
+                          // 確定済みの壁と素材割当をクリア（建具/家具/梁/選択は SketchCanvas 側で実施）
+                          setSketchPoints([]);
+                          setSelections({});
+                        }}
                      />
                      
                      {!renderState.isRendering && (
@@ -2926,6 +2931,27 @@ const App: React.FC = () => {
                                             </div>
                                           )}
                                         </div>
+                                        {isDoorOpening && (
+                                          <div className="flex items-center gap-2 w-full min-w-0 pt-2 border-t border-white/10">
+                                            <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">向き</span>
+                                            <button
+                                              type="button"
+                                              onClick={() => updateOpening({ swingFlipX: !op.swingFlipX })}
+                                              className={`flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${op.swingFlipX ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300' : 'border-white/15 bg-black/40 text-white hover:border-emerald-500/50'}`}
+                                              title="吊り元（左右）を反転"
+                                            >
+                                              左右反転
+                                            </button>
+                                            <button
+                                              type="button"
+                                              onClick={() => updateOpening({ swingFlipY: !op.swingFlipY })}
+                                              className={`flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${op.swingFlipY ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300' : 'border-white/15 bg-black/40 text-white hover:border-emerald-500/50'}`}
+                                              title="開く向き（内外）を反転"
+                                            >
+                                              内外反転
+                                            </button>
+                                          </div>
+                                        )}
                                         <div className="flex flex-col gap-2 w-full pt-2 border-t border-white/10">
                                           <div className="flex flex-col">
                                             <span className="text-[9px] font-black uppercase text-emerald-400 tracking-wider">開口部カラー</span>

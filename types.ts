@@ -87,6 +87,10 @@ export interface Opening {
   width: number;
   height: number;
   bottomOffset: number;   // 床からの高さ (ドアの場合は0)
+  /** ドアの吊り元（左右）反転。未設定=既定。 */
+  swingFlipX?: boolean;
+  /** ドアの開く向き（内外）反転。未設定=室内側へ開く（描画方向に依存しない）。 */
+  swingFlipY?: boolean;
 }
 
 export interface RenderState {

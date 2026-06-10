@@ -12,3 +12,4 @@ pnpm-lock.yaml
 .vercel
 docs
 _renderpdf.mjs
+_clickceiling.mjs

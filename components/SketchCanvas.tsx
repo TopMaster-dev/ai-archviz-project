@@ -133,6 +133,48 @@ function polygonCentroidMm(points: Point[]): Point | null {
   return { x: cx / (3 * twiceA), y: cy / (3 * twiceA) };
 }
 
+/**
+ * 自由梁の壁⇔壁スパン計算。中心(cx,cy)から角度 angleDeg の軸±両方向へレイを飛ばし、
+ * 最も近い壁エッジまでの距離を求め、壁から壁までを梁の長さとする。中心は2交点の中点へ寄せる。
+ * 閉じていない/どちらかの方向で壁に当たらない場合は null（呼び出し側で自由移動にフォールバック）。
+ * すべて mm 空間（points も cx/cy も mm）。
+ */
+function computeWallToWallSpan(
+  points: Point[],
+  closed: boolean,
+  cx: number,
+  cy: number,
+  angleDeg: number,
+): { cx: number; cy: number; lengthMm: number } | null {
+  if (points.length < 2) return null;
+  const rad = (angleDeg * Math.PI) / 180;
+  const ux = Math.cos(rad);
+  const uy = Math.sin(rad);
+  const edgeCount = closed ? points.length : points.length - 1;
+  let tPos = Infinity;
+  let tNeg = Infinity;
+  for (let i = 0; i < edgeCount; i++) {
+    const a = points[i];
+    const b = points[(i + 1) % points.length];
+    const ex = b.x - a.x;
+    const ey = b.y - a.y;
+    const denom = ux * ey - uy * ex; // レイ方向 × エッジ方向
+    if (Math.abs(denom) < 1e-9) continue; // 平行
+    const rx = a.x - cx;
+    const ry = a.y - cy;
+    const t = (rx * ey - ry * ex) / denom; // レイ上の符号付き距離
+    const s = (rx * uy - ry * ux) / denom; // エッジ上の媒介変数（0..1で線分内）
+    if (s < -1e-6 || s > 1 + 1e-6) continue;
+    if (t > 1e-6) tPos = Math.min(tPos, t);
+    else if (t < -1e-6) tNeg = Math.min(tNeg, -t);
+  }
+  if (!Number.isFinite(tPos) || !Number.isFinite(tNeg)) return null;
+  const lengthMm = tPos + tNeg;
+  if (lengthMm < 1) return null;
+  const midOffset = (tPos - tNeg) / 2;
+  return { cx: cx + ux * midOffset, cy: cy + uy * midOffset, lengthMm };
+}
+
 /** 家具回転 UI：二重弧＋矢印。左側弧・矢印のみ Y 軸で反転。描画半径は ringR。 */
 function drawFurnitureRotationRingIcon(
   ctx: CanvasRenderingContext2D,
@@ -223,6 +265,8 @@ interface SketchCanvasProps {
   /** 平面図(false)/天伏図(true)の表示モード。App が単一の真実として保持。 */
   isCeilingView?: boolean;
   onCeilingViewChange?: (v: boolean) => void;
+  /** 全消去: App 側で確定済みの壁/建具/家具/梁/選択もまとめてクリアする。 */
+  onClearAll?: () => void;
 }
 
 const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -262,7 +306,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   beams = [],
   onBeamsChange,
   isCeilingView = false,
-  onCeilingViewChange
+  onCeilingViewChange,
+  onClearAll
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -320,6 +365,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   const [isDrawing, setIsDrawing] = useState(false);
   const [isClosed, setIsClosed] = useState(pointsMm.length >= 3);
+  const isClosedRef = useRef(isClosed);
+  isClosedRef.current = isClosed;
   const [isGridSnapEnabled, setIsGridSnapEnabled] = useState(true);
   // 寸法/頂点スナップ（既存ジオメトリの頂点・X/Y整列に吸着）。
   const [isVertexSnapEnabled, setIsVertexSnapEnabled] = useState(true);
@@ -1139,14 +1186,19 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     if (beamDragRef.current) {
       const d = beamDragRef.current;
       if (d.mode === 'move') {
-        // X/Y いずれか優勢な軸方向のみに限定（斜め移動を防ぐ）。
+        // 自由梁は X/Y 制限なしで自由移動。さらに梁軸に沿って壁⇔壁へ長さを自動連動。
         const dx = mm.x - d.startMm.x;
         const dy = mm.y - d.startMm.y;
-        if (Math.abs(dx) >= Math.abs(dy)) {
-          updateBeam(d.id, { cx: d.startCx + dx, cy: d.startCy });
-        } else {
-          updateBeam(d.id, { cx: d.startCx, cy: d.startCy + dy });
-        }
+        const nextCx = d.startCx + dx;
+        const nextCy = d.startCy + dy;
+        const beam = beamsRef.current.find((x) => x.id === d.id);
+        const span = beam
+          ? computeWallToWallSpan(pointsMmRef.current, isClosedRef.current, nextCx, nextCy, beam.angleDeg)
+          : null;
+        updateBeam(
+          d.id,
+          span ? { cx: span.cx, cy: span.cy, lengthMm: span.lengthMm } : { cx: nextCx, cy: nextCy },
+        );
       } else {
         updateBeam(d.id, { angleDeg: (Math.atan2(mm.y - d.startCy, mm.x - d.startCx) * 180) / Math.PI });
       }
@@ -1752,8 +1804,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           ctx.lineWidth = isSelected ? 2 : 1;
           ctx.strokeRect(-w, -4, w * 2, 8);
 
-          // Door Arc (Enhanced)
+          // Door Arc — 既定は室内側へ開く（部屋重心側＝描画方向に依存しない: 3c）。
+          // op.swingFlipX(吊り元 左右) / op.swingFlipY(内外) で手動反転（3e）。
           if (op.type.startsWith('door')) {
+            const c = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
+            // 壁ローカル -y(現状の弧が向く側) が室内側か。dot((dy,-dx), 重心方向)>=0 で室内。
+            const localMinusYInterior = c
+              ? wall.dy * (c.x - posMm.x) - wall.dx * (c.y - posMm.y) >= 0
+              : true;
+            const sx = op.swingFlipX ? -1 : 1;
+            const sy = (localMinusYInterior ? 1 : -1) * (op.swingFlipY ? -1 : 1);
+            ctx.save();
+            ctx.scale(sx, sy);
             ctx.beginPath();
             ctx.setLineDash([3, 3]);
             ctx.strokeStyle = isSelected ? '#fbbf24' : '#f97316';
@@ -1766,6 +1828,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.moveTo(-w, 0);
             ctx.lineTo(-w, -w * 2);
             ctx.stroke();
+            ctx.restore();
           }
           if (isSelected) {
             // 窓/ドア: 壁平行の左右矢印
@@ -1925,6 +1988,11 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.fillRect(-w, -6, w * 2, 12);
             
             if (type.startsWith('door')) {
+              // プレビューも配置後と同じ室内側へ開く向きで表示（3c）。
+              const c = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
+              const sy = c ? (wall.dy * (c.x - posMm.x) - wall.dx * (c.y - posMm.y) >= 0 ? 1 : -1) : 1;
+              ctx.save();
+              ctx.scale(1, sy);
               ctx.beginPath();
               ctx.setLineDash([3, 3]);
               ctx.strokeStyle = 'rgba(249, 115, 22, 0.4)';
@@ -1935,6 +2003,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               ctx.moveTo(-w, 0);
               ctx.lineTo(-w, -w * 2);
               ctx.stroke();
+              ctx.restore();
             }
             ctx.restore();
           }
@@ -2162,8 +2231,35 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   return (
     <div className="relative h-full w-full group pt-32 pb-6 pr-6 pl-[352px]" ref={containerRef}>
 
-      {/* 左サイドツールパネル（下絵 + 天伏/梁）を1列にまとめて自動整列 */}
+      {/* 左サイドツールパネル（平面/天伏 + 下絵 + 梁）を1列にまとめて自動整列 */}
       <div className="absolute top-44 left-6 z-40 flex w-[320px] flex-col gap-2">
+      {/* 平面図 / 天伏図 切替（独立・最上段）(3b) */}
+      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-1.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+        <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
+          <button
+            type="button"
+            onClick={() => {
+              onCeilingViewChange?.(false);
+              if (isBeamMode) setToolMode('select');
+            }}
+            className={`flex-1 rounded-md px-3 py-1 font-bold transition ${!isCeilingView ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+            title="平面図: 床面（壁・建具・床家具）を表示"
+          >
+            平面図
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              onCeilingViewChange?.(true);
+              if (isDrawMode || isAddWindow || isAddDoor) setToolMode('select');
+            }}
+            className={`flex-1 rounded-md px-3 py-1 font-bold transition ${isCeilingView ? 'bg-amber-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+            title="天伏図: 天井面（梁・天井オブジェクト）を表示。床面は半透明化。"
+          >
+            天伏図
+          </button>
+        </div>
+      </div>
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         {!underlay ? (
           <button
@@ -2271,29 +2367,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         />
       </div>
 
-      {/* 天伏ビュー / 梁 */}
+      {/* 梁 */}
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
-        <div className="flex items-center gap-2">
-          <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
-            <button
-              type="button"
-              onClick={() => onCeilingViewChange?.(false)}
-              className={`rounded-md px-3 py-1 font-bold transition ${!isCeilingView ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-              title="平面図: 床面（壁・建具・床家具）を表示"
-            >
-              平面図
-            </button>
-            <button
-              type="button"
-              onClick={() => onCeilingViewChange?.(true)}
-              className={`rounded-md px-3 py-1 font-bold transition ${isCeilingView ? 'bg-amber-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-              title="天伏図: 天井面（梁・天井オブジェクト）を表示。床面は半透明化。"
-            >
-              天伏図
-            </button>
+        {beams.length > 0 && (
+          <div className="flex items-center gap-2">
+            <span className="text-neutral-500">梁 {beams.length}本</span>
           </div>
-          {beams.length > 0 && <span className="text-neutral-500">梁 {beams.length}本</span>}
-        </div>
+        )}
         <div className="mt-1.5 flex items-center gap-2 text-[10px] text-neutral-400">
           <span title="非アクティブな図面（平面/天伏）の表示濃度">非アクティブ濃度</span>
           <input
@@ -2441,33 +2521,38 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                 >
                   選択
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setToolMode('draw')}
-                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isDrawMode ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                >
-                  壁
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setToolMode('add');
-                    setAddKind('window');
-                  }}
-                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddWindow ? 'bg-sky-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                >
-                  窓
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setToolMode('add');
-                    setAddKind('door');
-                  }}
-                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddDoor ? 'bg-orange-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                >
-                  ドア
-                </button>
+                {/* 天伏図では壁・窓・ドアツールを隠す（3k）。選択と梁のみ。 */}
+                {!isCeilingView && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setToolMode('draw')}
+                      className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isDrawMode ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                    >
+                      壁
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setToolMode('add');
+                        setAddKind('window');
+                      }}
+                      className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddWindow ? 'bg-sky-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                    >
+                      窓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setToolMode('add');
+                        setAddKind('door');
+                      }}
+                      className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddDoor ? 'bg-orange-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                    >
+                      ドア
+                    </button>
+                  </>
+                )}
                 {isCeilingView && (
                   <button
                     type="button"
@@ -2494,8 +2579,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                       {getDeleteLabel()}
                   </button>
                   
-                  <button 
-                      onClick={() => { setPointsMm([]); setIsClosed(false); setIsDrawing(false); setSelectedPointIndex(null); setSelectedEdgeIndex(null); }} 
+                  <button
+                      onClick={() => {
+                        if (!window.confirm('壁・窓・ドア・家具・梁をすべて削除します。よろしいですか？')) return;
+                        // ローカル（描画中の壁・選択）
+                        setPointsMm([]); setIsClosed(false); setIsDrawing(false);
+                        setSelectedPointIndex(null); setSelectedEdgeIndex(null); setSelectedBeamId(null);
+                        // App 保有のコレクション（建具・家具・梁）と選択をクリア
+                        setOpenings([]); onFurnitureUpdate([]); onBeamsChange?.([]);
+                        onFurnitureSelect(null); onOpeningSelect(null);
+                        // 確定済みの壁(sketchPoints)と素材割当も App 側で消す
+                        onClearAll?.();
+                      }}
                       className="h-11 px-6 rounded-xl text-xs text-red-400/80 hover:text-red-400 hover:bg-red-500/10 font-black uppercase tracking-wider transition-all border border-red-500/10"
                   >
                       全消去
