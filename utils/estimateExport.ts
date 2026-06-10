@@ -83,6 +83,8 @@ export interface EstimateExportPayload {
 
 export interface BuildEstimateOptions {
   wallDivisions: Record<number, number>;
+  /** 建材ラインのメモ（productId キー）。CSV/PDF の備考へ反映（4c）。 */
+  materialMemoByProductId?: Record<string, string>;
 }
 
 function roundYen(n: number): number {
@@ -126,6 +128,7 @@ type AggRow = {
   brand: string;
   prodName: string;
   productId: string;
+  memo?: string;
 };
 
 function buildSectionRows(
@@ -144,7 +147,7 @@ function buildSectionRows(
       unit: '㎡',
       unitPrice: roundYen(row.unitPrice),
       amount: roundYen(row.cost),
-      remark: '',
+      remark: row.memo ?? '',
       sectionType: '3D確定',
       inputStatus: '完了',
     });
@@ -184,6 +187,7 @@ export function buildEstimateExportPayload(
         brand: item.brand,
         prodName: item.prodName,
         productId: item.productId,
+        memo: options.materialMemoByProductId?.[item.productId],
       });
     }
   }
@@ -258,7 +262,7 @@ export function buildEstimateExportPayload(
       quantity: 1,
       unitPrice: roundYen(price),
       amount: roundYen(price),
-      remark: '',
+      remark: (f.customMemo ?? '').trim(),
       sectionType: '3D確定',
       inputStatus: price > 0 ? '完了' : '未入力',
     });

@@ -408,6 +408,8 @@ type EstimatePanelDetailScrollProps = {
   activeMeshes: string[];
   materialUnitPriceOverrides: Record<string, number>;
   setMaterialUnitPriceOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  materialMemoOverrides: Record<string, string>;
+  setMaterialMemoOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   furnitureItems: any[];
   activeFurnitureId: string | null;
   setFurnitureItems: React.Dispatch<React.SetStateAction<any[]>>;
@@ -428,6 +430,8 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
   activeMeshes,
   materialUnitPriceOverrides,
   setMaterialUnitPriceOverrides,
+  materialMemoOverrides,
+  setMaterialMemoOverrides,
   furnitureItems,
   activeFurnitureId,
   setFurnitureItems,
@@ -504,6 +508,20 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     />
                     <span className="text-[9px] font-bold text-neutral-500">円/㎡</span>
                   </div>
+                  <input
+                    value={materialMemoOverrides[item.productId] ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setMaterialMemoOverrides((prev) => {
+                        const copy = { ...prev };
+                        if (v === '') delete copy[item.productId];
+                        else copy[item.productId] = v;
+                        return copy;
+                      });
+                    }}
+                    placeholder="メモ（任意）"
+                    className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                  />
                 </div>
               );
             })}
@@ -558,6 +576,15 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     />
                     <span className="text-[9px] font-bold text-neutral-500">円/個</span>
                   </div>
+                  <input
+                    value={f.customMemo ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setFurnitureItems((prev) => prev.map((item) => (item.id === f.id ? { ...item, customMemo: v } : item)));
+                    }}
+                    placeholder="メモ（任意）"
+                    className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                  />
                   {!(f.customPrice && f.customPrice > 0) && (
                     <div className="mt-1 text-[10px] font-black text-amber-300">価格未入力</div>
                   )}
@@ -618,6 +645,12 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                       削除
                     </button>
                   </div>
+                  <input
+                    value={item.memo ?? ''}
+                    onChange={(e) => handleUpdateAiEstimateItem(item.id, { memo: e.target.value })}
+                    placeholder="メモ（任意）"
+                    className="mt-2 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                  />
                   {missing && <div className="mt-1 text-[10px] font-black text-amber-300">名称・ブランド・金額の入力で完了になります</div>}
                 </div>
               );
@@ -685,7 +718,9 @@ const App: React.FC = () => {
   const [roomHeight, setRoomHeight] = useState(2700);
   // スケルトン天井: 天井スラブを外して梁などの上部構造を露出する（3Dビュー）。
   const [skeletonCeiling, setSkeletonCeiling] = useState(false);
-  
+  // スケルトン天井時の上部壁バンドの高さ(mm)。既定1000（4b）。
+  const [skeletonUpperWallMm, setSkeletonUpperWallMm] = useState(1000);
+
   // Snap Settings
   const [gridSnapSize, setGridSnapSize] = useState(1000); 
   const [lengthSnapSize, setLengthSnapSize] = useState(1000);
@@ -781,6 +816,8 @@ const App: React.FC = () => {
   const [showCostPanel, setShowCostPanel] = useState(false);
   const [aiEstimateItems, setAiEstimateItems] = useState<AiEstimateItem[]>([]);
   const [materialUnitPriceOverrides, setMaterialUnitPriceOverrides] = useState<Record<string, number>>({});
+  // 建材ラインのメモ（productId キー、セッション内のみ）（4c）。
+  const [materialMemoOverrides, setMaterialMemoOverrides] = useState<Record<string, string>>({});
   const [estimateGuardOpen, setEstimateGuardOpen] = useState(false);
   const [pendingExportKind, setPendingExportKind] = useState<'pdf' | 'csv' | null>(null);
   const [showDebugModal, setShowDebugModal] = useState(false);
@@ -1911,6 +1948,17 @@ const App: React.FC = () => {
                 }
                 area = Math.max(0, grossArea - holeSum);
             }
+        } else if (meshName === 'Sketch_UpperBand') {
+            // 4b: 上部壁バンド = 周長(mm) × バンド高さ(mm)（スケルトン天井時のみ計上）。
+            if (skeletonCeiling && sketchPoints.length >= 3) {
+                let perimMm = 0;
+                for (let i = 0; i < sketchPoints.length; i++) {
+                    const a = sketchPoints[i];
+                    const b = sketchPoints[(i + 1) % sketchPoints.length];
+                    perimMm += Math.hypot(a.x - b.x, a.y - b.y) / 0.05;
+                }
+                area = (perimMm * skeletonUpperWallMm) / 1000000;
+            }
         }
 
         if (area > 0 || (area === 0 && !meshName.startsWith('Sketch_'))) {
@@ -1932,6 +1980,7 @@ const App: React.FC = () => {
         const getScore = (name: string) => {
             if (name === 'Sketch_Floor') return 1;
             if (name.startsWith('Sketch_Wall')) return 2;
+            if (name === 'Sketch_UpperBand') return 2.5;
             if (name === 'Sketch_Ceiling') return 3;
             return 4;
         };
@@ -1943,7 +1992,7 @@ const App: React.FC = () => {
         }
         return a.meshName.localeCompare(b.meshName);
     });
-  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides]);
+  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides, skeletonCeiling, skeletonUpperWallMm]);
 
   const materialsTotal = useMemo(
     () => costBreakdown.reduce((sum, item) => sum + item.cost, 0),
@@ -1978,8 +2027,9 @@ const App: React.FC = () => {
     () =>
       buildEstimateExportPayload(costBreakdown as CostBreakdownEntry[], furnitureItems, aiEstimateItems, {
         wallDivisions,
+        materialMemoByProductId: materialMemoOverrides,
       }),
-    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions]
+    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides]
   );
   const canExportEstimate =
     estimatePayload.materialSections.some((s) => s.rows.length > 0) ||
@@ -2182,6 +2232,8 @@ const App: React.FC = () => {
                 activeMeshes={activeMeshes}
                 materialUnitPriceOverrides={materialUnitPriceOverrides}
                 setMaterialUnitPriceOverrides={setMaterialUnitPriceOverrides}
+                materialMemoOverrides={materialMemoOverrides}
+                setMaterialMemoOverrides={setMaterialMemoOverrides}
                 furnitureItems={furnitureItems}
                 activeFurnitureId={activeFurnitureId}
                 setFurnitureItems={setFurnitureItems}
@@ -2215,6 +2267,7 @@ const App: React.FC = () => {
       handleRemoveAiEstimateItem,
       handleUpdateAiEstimateItem,
       materialUnitPriceOverrides,
+      materialMemoOverrides,
       materialsTotal,
       missingInputCount,
       showCostPanel,
@@ -2332,6 +2385,18 @@ const App: React.FC = () => {
                             スケルトン天井
                           </button>
                         </div>
+                        {skeletonCeiling && (
+                          <div className="glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-2 shadow-xl bg-black/40 backdrop-blur-md pointer-events-auto shrink-0 h-[46px] px-3">
+                            <span className="text-[10px] font-bold text-white/60">上部壁</span>
+                            <NumericField
+                              value={skeletonUpperWallMm}
+                              onChange={(v) => setSkeletonUpperWallMm(Math.max(0, v))}
+                              dragSensitivity={10}
+                              className="w-16"
+                            />
+                            <span className="text-[10px] text-white/40">mm</span>
+                          </div>
+                        )}
                       </div>
                     )}
                 </div>
@@ -2421,6 +2486,7 @@ const App: React.FC = () => {
                         sketchPoints={sketchPoints} 
                         roomHeight={roomHeight / 1000}
                         skeletonCeiling={skeletonCeiling}
+                        skeletonUpperWallMm={skeletonUpperWallMm}
                         onBeamPatch={(id, patch) => {
                           const next = beams.map((b) => (b.id === id ? { ...b, ...patch } : b));
                           useProjectStore.getState().setBeams(next);

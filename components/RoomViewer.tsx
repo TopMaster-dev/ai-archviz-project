@@ -298,6 +298,8 @@ interface RoomViewerProps {
   beams?: Beam[];
   /** スケルトン天井: 天井スラブを非表示にして梁などの上部構造を露出する。 */
   skeletonCeiling?: boolean;
+  /** スケルトン天井時の上部壁バンドの高さ(mm)。既定1000。 */
+  skeletonUpperWallMm?: number;
   /** 3Dでの梁の直接操作（移動/回転）をストアへ反映する。 */
   onBeamPatch?: (id: string, patch: Partial<Beam>) => void;
   activeFurnitureId: string | null;
@@ -2038,6 +2040,39 @@ const WallSegment: React.FC<{
   );
 };
 
+// 4b: スケルトン天井の上部壁バンド（壁グループ内で1枚=薄い箱）。自前の ref を持ち
+// DynamicMaterial(meshRef 必須) に渡す。実寸テクスチャは surfaceWidthM/Height で投影。
+const UpperBandSegment: React.FC<{
+  length: number;
+  bandM: number;
+  yTop: number;
+  selections: any;
+  materialSettings: any;
+  captureStep: any;
+  shadowEnabled: boolean;
+  isDraggingRef: React.MutableRefObject<boolean>;
+  onMeshClick: (category: any, name: string, isMulti: boolean) => void;
+  onHoverNameChange?: (name: string | null) => void;
+}> = ({ length, bandM, yTop, selections, materialSettings, captureStep, shadowEnabled, isDraggingRef, onMeshClick, onHoverNameChange }) => {
+  const ref = useRef<THREE.Mesh>(null);
+  return (
+    <mesh
+      ref={ref}
+      name="Sketch_UpperBand"
+      position={[0, yTop - bandM / 2, 0]}
+      onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Wall', 'Sketch_UpperBand', e.shiftKey || e.metaKey || e.ctrlKey); }}
+      onPointerOver={(e) => { e.stopPropagation(); onHoverNameChange?.('Sketch_UpperBand'); }}
+      onPointerOut={() => onHoverNameChange?.(null)}
+      receiveShadow={shadowEnabled}
+    >
+      <boxGeometry args={[length, bandM, 0.02]} />
+      <Suspense fallback={<meshStandardMaterial color="#cccccc" />}>
+        <DynamicMaterial product={selections['Sketch_UpperBand']} captureStep={captureStep} meshRef={ref} materialSettings={materialSettings} surfaceWidthM={length} surfaceHeightM={bandM} />
+      </Suspense>
+    </mesh>
+  );
+};
+
 const SketchRoom = ({ 
   points, 
   selections, 
@@ -2058,6 +2093,7 @@ const SketchRoom = ({
   onDragEnd,
   onHoverNameChange,
   skeletonCeiling = false,
+  skeletonUpperWallMm = 1000,
   wallHiddenRef
 }: any) => {
   const { camera } = useThree();
@@ -2123,8 +2159,7 @@ const SketchRoom = ({
         <StructuralEdges snapshotMode={snapshotMode} />
       </mesh>
 
-      {/* スケルトン天井のときは天井スラブを非表示にして上部構造（梁）を露出する。 */}
-      {!skeletonCeiling && (
+      {/* 天井スラブ。スケルトン天井でも天井（上面）は表示する（4b: 天井アリ）。 */}
       <mesh
         ref={ceilingRef}
         name="Sketch_Ceiling"
@@ -2145,7 +2180,6 @@ const SketchRoom = ({
         </Suspense>
         <StructuralEdges snapshotMode={snapshotMode} />
       </mesh>
-      )}
 
       {mPoints.map((p: any, i: number) => {
         const wallName = `Sketch_Wall_${i}`;
@@ -2260,6 +2294,21 @@ const SketchRoom = ({
                   />
                 );
             })}
+            {/* 4b: スケルトン天井の上部壁バンド（既定1000mm・数値調整可・テクスチャ可）。 */}
+            {skeletonCeiling && skeletonUpperWallMm > 0 && (
+              <UpperBandSegment
+                length={length}
+                bandM={skeletonUpperWallMm / 1000}
+                yTop={height}
+                selections={selections}
+                materialSettings={materialSettings}
+                captureStep={captureStep}
+                shadowEnabled={shadowEnabled}
+                isDraggingRef={isDraggingRef}
+                onMeshClick={onMeshClick}
+                onHoverNameChange={onHoverNameChange}
+              />
+            )}
           </group>
         );
       })}
@@ -2632,6 +2681,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   onFurnitureSelect,
   beams = [],
   skeletonCeiling = false,
+  skeletonUpperWallMm = 1000,
   onBeamPatch,
   hideFurniture = false,
   maskMode = false,
@@ -2920,6 +2970,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                           onDragEnd={endDragInteraction}
                           onHoverNameChange={safeHoverNameChange}
                           skeletonCeiling={skeletonCeiling}
+                          skeletonUpperWallMm={skeletonUpperWallMm}
                           wallHiddenRef={wallHiddenRef}
                         />
                     ) : null}
