@@ -1,54 +1,21 @@
-import { useState } from 'react';
-import { useAuth } from '../../lib/auth/AuthContext.js';
+import { Home } from 'lucide-react';
 
 /**
- * エディタ画面右上のアカウントチップ。
- * プロジェクト管理 / APIキー設定はホーム画面へ集約したため、ここはホーム遷移とログアウトのみ。
+ * エディタ画面右上の「ホームに戻る」ボタン（5b）。
+ * 旧・丸いアカウントアイコン（ホーム＋ログアウトのドロップダウン）を廃止し、
+ * 視認性の高い明示ボタンに置き換え。ログアウトはホーム画面／設定画面に集約する。
  */
 export function AccountMenu({ onHome }: { onHome?: () => void }) {
-  const { email, signOut } = useAuth();
-  const [open, setOpen] = useState(false);
-  const initial = (email ?? '?').charAt(0).toUpperCase();
-
+  if (!onHome) return null;
   return (
-    <div className="fixed right-2 top-2 z-[1000] text-xs">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        title={email ?? 'アカウント'}
-        className="flex h-8 w-8 items-center justify-center rounded-full bg-emerald-600 font-semibold text-white shadow ring-1 ring-black/20 transition hover:bg-emerald-500"
-      >
-        {initial}
-      </button>
-      {open && (
-        <div className="absolute right-0 mt-2 w-56 rounded-lg bg-neutral-800 p-3 text-neutral-200 shadow-xl ring-1 ring-white/10">
-          <p className="mb-2 truncate text-[11px] text-neutral-400" title={email ?? ''}>
-            {email ?? 'ログイン中'}
-          </p>
-          {onHome && (
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                onHome();
-              }}
-              className="mb-1.5 w-full rounded-md bg-neutral-700/70 py-1.5 text-center transition hover:bg-neutral-700"
-            >
-              ホーム（プロジェクト一覧）
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              void signOut();
-            }}
-            className="w-full rounded-md bg-neutral-700/70 py-1.5 text-center transition hover:bg-neutral-700"
-          >
-            ログアウト
-          </button>
-        </div>
-      )}
-    </div>
+    <button
+      type="button"
+      onClick={onHome}
+      title="ホームに戻る（プロジェクト一覧）"
+      className="fixed right-4 top-[88px] z-[1001] flex items-center gap-1.5 rounded-xl bg-neutral-800/90 px-3.5 py-2 text-xs font-bold text-white shadow-xl ring-1 ring-white/10 backdrop-blur transition hover:bg-neutral-700"
+    >
+      <Home className="h-3.5 w-3.5" />
+      ホームに戻る
+    </button>
   );
 }

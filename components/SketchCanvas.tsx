@@ -2321,7 +2321,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     <div className="relative h-full w-full group pt-32 pb-6 pr-6 pl-[352px]" ref={containerRef}>
 
       {/* 左サイドツールパネル（平面/天伏 + 下絵 + 梁）を1列にまとめて自動整列 */}
-      <div className="absolute top-44 left-6 z-40 flex w-[320px] flex-col gap-2">
+      <div className="absolute top-28 left-6 z-40 flex w-[320px] flex-col gap-2">
       {/* 平面図 / 天伏図 切替（独立・最上段）(3b) */}
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-1.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
