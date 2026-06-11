@@ -9,6 +9,7 @@ import { RoomViewer } from './components/RoomViewer.js';
 import { CameraPresetBar } from './components/CameraPresetBar.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
+import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { FurnitureAssetStrip, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -3121,24 +3122,13 @@ const App: React.FC = () => {
                                           )}
                                         </div>
                                         {isDoorOpening && (
-                                          <div className="flex items-center gap-2 w-full min-w-0 pt-2 border-t border-white/10">
-                                            <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">向き</span>
-                                            <button
-                                              type="button"
-                                              onClick={() => updateOpening({ swingFlipX: !op.swingFlipX })}
-                                              className={`flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${op.swingFlipX ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300' : 'border-white/15 bg-black/40 text-white hover:border-emerald-500/50'}`}
-                                              title="吊り元（左右）を反転"
-                                            >
-                                              左右反転
-                                            </button>
-                                            <button
-                                              type="button"
-                                              onClick={() => updateOpening({ swingFlipY: !op.swingFlipY })}
-                                              className={`flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${op.swingFlipY ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300' : 'border-white/15 bg-black/40 text-white hover:border-emerald-500/50'}`}
-                                              title="開く向き（内外）を反転"
-                                            >
-                                              内外反転
-                                            </button>
+                                          <div className="pt-2 border-t border-white/10">
+                                            <DoorSwingControls
+                                              swingFlipX={op.swingFlipX}
+                                              swingFlipY={op.swingFlipY}
+                                              onToggleX={() => updateOpening({ swingFlipX: !op.swingFlipX })}
+                                              onToggleY={() => updateOpening({ swingFlipY: !op.swingFlipY })}
+                                            />
                                           </div>
                                         )}
                                         <div className="flex flex-col gap-2 w-full pt-2 border-t border-white/10">
@@ -3454,6 +3444,25 @@ const App: React.FC = () => {
               </ul>
           </div>
           )}
+
+          {/* 2Dビューでドア選択時: 向き（左右反転 / 内外反転）。3Dと同一コンポーネント・同一状態で連動。 */}
+          {viewMode === 'sketch' && (() => {
+            const selDoor = selectedOpeningId
+              ? openings.find((o) => o.id === selectedOpeningId && o.type.startsWith('door'))
+              : null;
+            if (!selDoor) return null;
+            return (
+              <div className="absolute top-[140px] right-6 z-30 glass p-4 rounded-2xl border border-white/10 shadow-2xl bg-black/60 backdrop-blur-xl pointer-events-auto w-[230px]">
+                <h3 className="text-[10px] font-black text-neutral-400 mb-3 uppercase tracking-widest">ドアの向き（2D/3D連動）</h3>
+                <DoorSwingControls
+                  swingFlipX={selDoor.swingFlipX}
+                  swingFlipY={selDoor.swingFlipY}
+                  onToggleX={() => setOpenings((prev) => prev.map((o) => (o.id === selDoor.id ? { ...o, swingFlipX: !o.swingFlipX } : o)))}
+                  onToggleY={() => setOpenings((prev) => prev.map((o) => (o.id === selDoor.id ? { ...o, swingFlipY: !o.swingFlipY } : o)))}
+                />
+              </div>
+            );
+          })()}
 
       </div>
 
