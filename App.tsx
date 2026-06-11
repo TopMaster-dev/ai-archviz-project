@@ -1964,8 +1964,68 @@ const App: React.FC = () => {
     };
   }, [sketchPoints]);
 
+  // メッシュ名から幾何学的な面積(m²)を返す（素材割当の有無に依存しない）。見積計算と選択パネルで
+  // 共有し、未割当（未設定）の面でも面積が0にならないようにする（260612: 未設定壁の面積0バグ修正）。
+  const areaForMeshM2 = useCallback((meshName: string): number => {
+    if (meshName === 'Sketch_Floor' || meshName === 'Sketch_Ceiling') {
+      return calculateArea(sketchPoints);
+    }
+    if (meshName.startsWith('Sketch_Wall_')) {
+      const parts = meshName.replace('Sketch_Wall_', '').split('_');
+      const baseIdx = parseInt(parts[0], 10);
+      const nextPt = sketchPoints[(baseIdx + 1) % sketchPoints.length];
+      if (!sketchPoints[baseIdx] || !nextPt) return 0;
+      const distMm = Math.hypot(sketchPoints[baseIdx].x - nextPt.x, sketchPoints[baseIdx].y - nextPt.y) / 0.05;
+      const divs = wallDivisions[baseIdx] || 1;
+      let segBottomMm = 0;
+      let segTopMm = roomHeight;
+      let grossArea = 0;
+      if (divs === 1) {
+        grossArea = (distMm * roomHeight) / 1000000;
+        segBottomMm = 0;
+        segTopMm = roomHeight;
+      } else {
+        const subIdx = parseInt(parts[1], 10);
+        const bottomProd = selections[`Sketch_Wall_${baseIdx}_0`];
+        const bottomProdId = bottomProd ? bottomProd.id : 'default_no_tex';
+        const bottomHeight = materialSettings[bottomProdId]?.wainscotHeight ?? 900;
+        const segHeight = subIdx === 0 ? bottomHeight : Math.max(0, roomHeight - bottomHeight);
+        grossArea = (distMm * segHeight) / 1000000;
+        if (subIdx === 0) {
+          segBottomMm = 0;
+          segTopMm = bottomHeight;
+        } else {
+          segBottomMm = bottomHeight;
+          segTopMm = roomHeight;
+        }
+      }
+      let holeSum = 0;
+      for (const op of openings) {
+        if (op.wallIndex !== baseIdx) continue;
+        holeSum += openingHoleAreaM2OnWallSegment(op, segBottomMm, segTopMm);
+      }
+      return Math.max(0, grossArea - holeSum);
+    }
+    if (meshName === 'Sketch_UpperBand') {
+      if (skeletonCeiling && sketchPoints.length >= 3) {
+        let perimMm = 0;
+        for (let i = 0; i < sketchPoints.length; i++) {
+          const a = sketchPoints[i];
+          const b = sketchPoints[(i + 1) % sketchPoints.length];
+          perimMm += Math.hypot(a.x - b.x, a.y - b.y) / 0.05;
+        }
+        return (perimMm * skeletonUpperWallMm) / 1000000;
+      }
+      return 0;
+    }
+    if (meshName.startsWith('Beam_')) {
+      const bx = beams.find((x) => `Beam_${x.id}` === meshName);
+      return bx ? beamExposedAreaM2(bx, roomHeight) : 0;
+    }
+    return 0;
+  }, [sketchPoints, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams]);
+
   const costBreakdown = useMemo(() => {
-    const floorArea = calculateArea(sketchPoints);
     const results: any[] = [];
     const structuralMeshes = ['Sketch_Floor', 'Sketch_Ceiling'];
     if (sketchPoints.length >= 3) {
@@ -1981,64 +2041,7 @@ const App: React.FC = () => {
         // 削除済みの梁の残骸キー（Beam_<id>）は見積から除外（ゴースト行防止）。
         if (meshName.startsWith('Beam_') && !beams.some((x) => `Beam_${x.id}` === meshName)) return;
 
-        let area = 0;
-        if (meshName === 'Sketch_Floor' || meshName === 'Sketch_Ceiling') {
-            area = floorArea;
-        } else if (meshName.startsWith('Sketch_Wall_')) {
-            const parts = meshName.replace('Sketch_Wall_', '').split('_');
-            const baseIdx = parseInt(parts[0], 10);
-            const nextPt = sketchPoints[(baseIdx + 1) % sketchPoints.length];
-            
-            if (sketchPoints[baseIdx] && nextPt) {
-                const distMm = Math.hypot(sketchPoints[baseIdx].x - nextPt.x, sketchPoints[baseIdx].y - nextPt.y) / 0.05;
-                const divs = wallDivisions[baseIdx] || 1;
-                let segBottomMm = 0;
-                let segTopMm = roomHeight;
-                let grossArea = 0;
-
-                if (divs === 1) {
-                    grossArea = (distMm * roomHeight) / 1000000;
-                    segBottomMm = 0;
-                    segTopMm = roomHeight;
-                } else {
-                    const subIdx = parseInt(parts[1], 10);
-                    const bottomProd = selections[`Sketch_Wall_${baseIdx}_0`];
-                    const bottomProdId = bottomProd ? bottomProd.id : 'default_no_tex';
-                    const bottomHeight = materialSettings[bottomProdId]?.wainscotHeight ?? 900;
-                    const segHeight = subIdx === 0 ? bottomHeight : Math.max(0, roomHeight - bottomHeight);
-                    grossArea = (distMm * segHeight) / 1000000;
-                    if (subIdx === 0) {
-                        segBottomMm = 0;
-                        segTopMm = bottomHeight;
-                    } else {
-                        segBottomMm = bottomHeight;
-                        segTopMm = roomHeight;
-                    }
-                }
-
-                let holeSum = 0;
-                for (const op of openings) {
-                    if (op.wallIndex !== baseIdx) continue;
-                    holeSum += openingHoleAreaM2OnWallSegment(op, segBottomMm, segTopMm);
-                }
-                area = Math.max(0, grossArea - holeSum);
-            }
-        } else if (meshName === 'Sketch_UpperBand') {
-            // 4b: 上部壁バンド = 周長(mm) × バンド高さ(mm)（スケルトン天井時のみ計上）。
-            if (skeletonCeiling && sketchPoints.length >= 3) {
-                let perimMm = 0;
-                for (let i = 0; i < sketchPoints.length; i++) {
-                    const a = sketchPoints[i];
-                    const b = sketchPoints[(i + 1) % sketchPoints.length];
-                    perimMm += Math.hypot(a.x - b.x, a.y - b.y) / 0.05;
-                }
-                area = (perimMm * skeletonUpperWallMm) / 1000000;
-            }
-        } else if (meshName.startsWith('Beam_')) {
-            // 2a: 梁の露出表面積（壁・天井・床に接する面を除く）。天井高で床接触も判定。
-            const bx = beams.find((x) => `Beam_${x.id}` === meshName);
-            if (bx) area = beamExposedAreaM2(bx, roomHeight);
-        }
+        const area = areaForMeshM2(meshName);
 
         if (area > 0 || (area === 0 && !meshName.startsWith('Sketch_'))) {
             results.push({ 
@@ -2071,7 +2074,7 @@ const App: React.FC = () => {
         }
         return a.meshName.localeCompare(b.meshName);
     });
-  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides, skeletonCeiling, skeletonUpperWallMm, beams]);
+  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides, skeletonCeiling, skeletonUpperWallMm, beams, areaForMeshM2]);
 
   const materialsTotal = useMemo(
     () => costBreakdown.reduce((sum, item) => sum + item.cost, 0),
@@ -2625,7 +2628,8 @@ const App: React.FC = () => {
                             const prod = selections[meshName];
                             const prodId = prod ? prod.id : 'default_no_tex';
                             const costItem = costBreakdown.find(c => c.meshName === meshName);
-                            const area = costItem?.area || 0;
+                            // 面積は素材未割当でも幾何学的に算出して表示する（260612 バグ修正）。
+                            const area = areaForMeshM2(meshName);
                             const cost = costItem?.cost || 0;
                             if (groups.has(prodId)) {
                                 const g = groups.get(prodId)!;
