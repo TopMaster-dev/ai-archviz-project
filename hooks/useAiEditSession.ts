@@ -32,10 +32,18 @@ function loadStored(): { versions: AiEditVersion[]; activeVersionId: string | nu
   }
 }
 
-export function useAiEditSession() {
-  const [versions, setVersions] = useState<AiEditVersion[]>(() => loadStored()?.versions ?? []);
-  const [activeVersionId, setActiveVersionId] = useState<string | null>(
-    () => loadStored()?.activeVersionId ?? null
+/**
+ * @param options.persistLocal localStorage に履歴を保持するか（既定 true）。
+ *   写真AI編集プロジェクト（2a）はプロジェクトごとに DB 保存するため false を渡し、
+ *   グローバルな localStorage を介した他プロジェクトへの履歴の混入を防ぐ。
+ */
+export function useAiEditSession(options?: { persistLocal?: boolean }) {
+  const persistLocal = options?.persistLocal ?? true;
+  const [versions, setVersions] = useState<AiEditVersion[]>(() =>
+    persistLocal ? loadStored()?.versions ?? [] : []
+  );
+  const [activeVersionId, setActiveVersionId] = useState<string | null>(() =>
+    persistLocal ? loadStored()?.activeVersionId ?? null : null
   );
   const lastHydratedActiveId = useRef<string | null>(null);
   const skipHydrateOnce = useRef(false);
@@ -242,6 +250,21 @@ export function useAiEditSession() {
 
   const activeVersion = versions.find((v) => v.id === activeVersionId) ?? null;
 
+  /**
+   * 履歴を外部データ（プロジェクトごとの保存内容）で丸ごと置き換える（2a・写真AI編集の per-project 化）。
+   * プロジェクト切替時に、そのプロジェクトに紐づく aiEdit を読み込むために使う。
+   */
+  const replaceAll = useCallback(
+    (vers: AiEditVersion[], activeId: string | null) => {
+      lastHydratedActiveId.current = null;
+      skipHydrateOnce.current = false;
+      setVersions(vers);
+      setActiveVersionId(activeId ?? (vers.length ? vers[vers.length - 1].id : null));
+      resetDraft();
+    },
+    [resetDraft],
+  );
+
   const clearSession = useCallback(() => {
     lastHydratedActiveId.current = null;
     skipHydrateOnce.current = false;
@@ -264,6 +287,8 @@ export function useAiEditSession() {
   }, [versions, activeVersionId]);
 
   useEffect(() => {
+    // 写真AI編集（persistLocal=false）は localStorage を使わない（プロジェクト間の混入防止）。
+    if (!persistLocal) return;
     try {
       if (versions.length === 0) {
         localStorage.removeItem(STORAGE_KEY);
@@ -273,7 +298,7 @@ export function useAiEditSession() {
     } catch {
       /* quota */
     }
-  }, [versions, activeVersionId]);
+  }, [versions, activeVersionId, persistLocal]);
 
   return {
     versions,
@@ -301,6 +326,7 @@ export function useAiEditSession() {
     selectVersion,
     appendVersionAfterEdit,
     clearSession,
+    replaceAll,
     resetDraft,
   };
 }

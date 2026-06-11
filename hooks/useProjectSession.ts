@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useStore } from 'zustand';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectStore } from '../lib/store/projectStore.js';
@@ -13,7 +13,7 @@ import {
   isFreePlanLimitError,
   FREE_PLAN_PROJECT_LIMIT,
 } from '../lib/db/projects.js';
-import { createEmptyProjectState, type ProjectState } from '../lib/project/projectState.js';
+import { createEmptyProjectState, type ProjectState, type ProjectKind } from '../lib/project/projectState.js';
 import { refreshGeminiKey, resetGeminiKeyCache } from '../lib/byok.js';
 import type { ProjectSummary, PlanType } from '../lib/db/types.js';
 
@@ -38,10 +38,14 @@ export interface ProjectSession {
   /** 直近の操作エラー（上限超過の案内などを含む）。 */
   error: string | null;
   switchProject(id: string): Promise<void>;
-  createNewProject(name?: string): Promise<void>;
+  createNewProject(name?: string, kind?: ProjectKind): Promise<void>;
   duplicateCurrentProject(): Promise<void>;
   renameCurrentProject(name: string): Promise<void>;
   deleteCurrentProject(): Promise<void>;
+  /** 現在のプロジェクトの一覧用サムネイル（data URL）を保存する。背景副作用（busy/status に影響しない）。 */
+  setProjectThumbnail(dataUrl: string): Promise<void>;
+  /** 写真AI編集（2a）の現在ストア内容をデバウンス保存する。aiEdit は temporal 対象外で autosave されないため別途呼ぶ。 */
+  persistAiEdit(): void;
 }
 
 function messageOf(e: unknown): string {
@@ -177,7 +181,7 @@ export function useProjectSession(): ProjectSession {
   );
 
   const createNewProject = useCallback(
-    async (name: string = DEFAULT_PROJECT_NAME) => {
+    async (name: string = DEFAULT_PROJECT_NAME, kind: ProjectKind = 'full') => {
       if (busy) return;
       setBusy(true);
       setError(null);
@@ -185,6 +189,7 @@ export function useProjectSession(): ProjectSession {
       try {
         await flush(projectId);
         const blank = createEmptyProjectState();
+        blank.kind = kind; // 2a: 写真AI編集専用('photo') か 空間デザイン('full')。
         // 先に行を作成（ここで上限トリガが発火しうる）。失敗時はエディタ状態を変えない。
         const id = await createProject(name, blank);
         loadInto(blank);
@@ -283,6 +288,36 @@ export function useProjectSession(): ProjectSession {
     }
   }, [projectId, busy, loadInto]);
 
+  // 現在プロジェクトの一覧用サムネイルを保存（2c-i）。AI レンダー結果から生成して呼ばれる。
+  // 背景副作用として扱い、busy/status や autosave には干渉しない。失敗は握りつぶす。
+  const setProjectThumbnail = useCallback(
+    async (dataUrl: string) => {
+      if (!configured || !userId || !projectId || !dataUrl) return;
+      try {
+        await saveProject(projectId, { thumbnail_url: dataUrl });
+        // 再フェッチ不要で一覧の該当行へ即時反映。
+        setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, thumbnail_url: dataUrl } : p)));
+      } catch (e) {
+        console.error('[project session] thumbnail save failed', e);
+      }
+    },
+    [configured, userId, projectId],
+  );
+
+  // 写真AI編集（2a）の保存。aiEdit は temporal（Undo）対象外のため通常 autosave されない。
+  // 変更が来るたびにデバウンスして data 全体（kind/aiEdit を含む）を保存する。失敗は握りつぶす。
+  const aiEditSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const persistAiEdit = useCallback(() => {
+    if (!configured || !userId || !projectId) return;
+    const id = projectId;
+    if (aiEditSaveTimer.current) clearTimeout(aiEditSaveTimer.current);
+    aiEditSaveTimer.current = setTimeout(() => {
+      void saveProject(id, { data: useProjectStore.getState().toProjectState() }).catch((e) =>
+        console.error('[project session] aiEdit save failed', e),
+      );
+    }, 800);
+  }, [configured, userId, projectId]);
+
   // ドキュメント変更シグナル = temporal 履歴長（sketch/scene/materials の変更で増える）。
   const version = useStore(useProjectStore.temporal, (t) => t.pastStates.length);
   const enabled = configured && !!userId && !!projectId && status !== 'loading' && !busy;
@@ -319,5 +354,7 @@ export function useProjectSession(): ProjectSession {
     duplicateCurrentProject,
     renameCurrentProject,
     deleteCurrentProject,
+    setProjectThumbnail,
+    persistAiEdit,
   };
 }

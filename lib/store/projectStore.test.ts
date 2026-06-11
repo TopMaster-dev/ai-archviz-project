@@ -192,6 +192,46 @@ describe('projectStore — load / serialize', () => {
     expect(s.sketch.underlayCeiling?.dataUrl).toBe('ceiling');
   });
 
+  it('defaults kind to "full" for legacy data and round-trips "photo" (2a)', () => {
+    // 旧プロジェクト（kind 無し）は 'full' として扱う。
+    store.getState().loadProjectState({ sketch: { points: [] } } as never);
+    expect(store.getState().kind).toBe('full');
+
+    // 'photo' を設定 → 直列化 → 再読込で保持される。
+    store.getState().loadProjectState({ kind: 'photo' } as never);
+    expect(store.getState().kind).toBe('photo');
+    const snap = store.getState().toProjectState();
+    expect(snap.kind).toBe('photo');
+    store.getState().reset();
+    expect(store.getState().kind).toBe('full');
+    store.getState().loadProjectState(snap);
+    expect(store.getState().kind).toBe('photo');
+  });
+
+  it('persists aiEdit via setAiEdit and round-trips it (2a photo persistence)', () => {
+    const versions = [
+      {
+        id: 'v0',
+        parentId: null,
+        createdAt: 1,
+        baseImageDataUrl: 'data:base',
+        outputImageDataUrl: 'data:out',
+        styleRefDataUrl: null,
+        styleMemo: '',
+        objects: [],
+      },
+    ];
+    store.getState().setAiEdit({ versions: versions as never, activeVersionId: 'v0', draftObjects: [] });
+    expect(store.getState().aiEdit.versions).toHaveLength(1);
+    const snap = store.getState().toProjectState();
+    expect(snap.aiEdit.activeVersionId).toBe('v0');
+    store.getState().reset();
+    expect(store.getState().aiEdit.versions).toHaveLength(0);
+    store.getState().loadProjectState(snap);
+    expect(store.getState().aiEdit.versions).toHaveLength(1);
+    expect(store.getState().aiEdit.activeVersionId).toBe('v0');
+  });
+
   it('sanitizes non-finite beam fields on load (prevents NaN 3D geometry crash)', () => {
     // 旧/壊れたデータ: widthMm/heightMm/dropMm が欠ける梁。NaN ジオメトリで3Dがクラッシュしないよう既定補完。
     store.getState().loadProjectState({

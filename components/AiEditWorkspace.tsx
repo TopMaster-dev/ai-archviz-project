@@ -117,6 +117,12 @@ type Props = {
     styleMemo: string;
     objects: AiEditObjectReference[];
   }) => void;
+  /** 写真AI編集専用モード（2a）。2D/3D タブを隠し、空状態を写真アップロードにする。 */
+  photoOnly?: boolean;
+  /** 写真専用モードでホームへ戻る（オーバーレイが画面右上の「ホームに戻る」を覆うため自前で出す）。 */
+  onExitToHome?: () => void;
+  /** 写真専用の空状態で、アップロードした写真をベース画像(v0)として登録する。 */
+  onUploadBaseImage?: (dataUrl: string) => void;
 };
 
 export function AiEditWorkspace({
@@ -148,6 +154,9 @@ export function AiEditWorkspace({
   onRemovePlacementAt,
   estimatePanel,
   onEditSuccess,
+  photoOnly = false,
+  onExitToHome,
+  onUploadBaseImage,
 }: Props) {
   const [highResExportOpen, setHighResExportOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -160,6 +169,7 @@ export function AiEditWorkspace({
 
   const styleInputRef = useRef<HTMLInputElement>(null);
   const objectInputRef = useRef<HTMLInputElement>(null);
+  const baseInputRef = useRef<HTMLInputElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
 
@@ -246,6 +256,42 @@ export function AiEditWorkspace({
       /* ignore */
     }
   };
+
+  // 写真専用モード（2a）: アップロード写真をベース画像(v0)として登録。保存サイズを抑えるため縮小。
+  const onPickBaseFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f || !f.type.startsWith('image/')) return;
+    try {
+      const url = await readFileAsDataUrl(f);
+      const sized = await downscaleDataUrlIfNeeded(url, 1536);
+      onUploadBaseImage?.(sized);
+    } catch {
+      /* ignore */
+    }
+  };
+
+  // 上部左のバー: 通常は 2D/3D/AI のモード切替、写真専用モードでは「ホームに戻る」ボタン（2a）。
+  const renderModeBarOrHome = () =>
+    photoOnly ? (
+      <button
+        type="button"
+        onClick={onExitToHome}
+        title="ホームに戻る（プロジェクト一覧）"
+        className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-white/10 bg-black/40 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-white/80 shadow-xl backdrop-blur-md transition hover:text-white"
+      >
+        ← ホームに戻る
+      </button>
+    ) : (
+      <ModeToggleBar
+        activeMode="ai"
+        onSwitchToSketch={onSwitchToSketch}
+        onSwitchTo3D={onSwitchTo3D}
+        onSwitchToAi={onSwitchToAiEdit}
+        canSwitchTo3D={canSwitchTo3D}
+        className="shrink-0"
+      />
+    );
 
   const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
   const hasSituationInput =
@@ -403,30 +449,49 @@ export function AiEditWorkspace({
     return (
       <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950 text-white pl-3 pr-0 pt-0 pb-0">
         <div className="absolute top-6 left-6 right-6 z-50 flex items-start justify-between pointer-events-none">
-          <ModeToggleBar
-            activeMode="ai"
-            onSwitchToSketch={onSwitchToSketch}
-            onSwitchTo3D={onSwitchTo3D}
-            onSwitchToAi={onSwitchToAiEdit}
-            canSwitchTo3D={canSwitchTo3D}
-            className="shrink-0"
-          />
+          {renderModeBarOrHome()}
         </div>
-        <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-          <button
-            type="button"
-            disabled
-            className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
-            title="履歴の仕上がり画像が必要です"
-          >
-            <Download className="w-4 h-4 shrink-0" />
-            <span className="text-[11px] font-black uppercase tracking-widest">この画像を書き出し</span>
-          </button>
-        </div>
+        {!photoOnly && (
+          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+            <button
+              type="button"
+              disabled
+              className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+              title="履歴の仕上がり画像が必要です"
+            >
+              <Download className="w-4 h-4 shrink-0" />
+              <span className="text-[11px] font-black uppercase tracking-widest">この画像を書き出し</span>
+            </button>
+          </div>
+        )}
         <div className="flex-1 flex items-center justify-center pt-20">
-        <p className="text-sm text-neutral-400 text-center max-w-md">
-          編集履歴がありません。3Dビューで AI レンダリングを実行してください。
-        </p>
+          {photoOnly ? (
+            <div className="flex flex-col items-center gap-4 text-center">
+              <p className="text-sm text-neutral-300">写真をアップロードして、AI画像編集を始めましょう。</p>
+              <input
+                ref={baseInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={onPickBaseFile}
+              />
+              <button
+                type="button"
+                onClick={() => baseInputRef.current?.click()}
+                className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-6 py-3 text-sm font-bold text-white transition hover:bg-emerald-500"
+              >
+                <ImagePlus className="h-4 w-4" />
+                写真をアップロード
+              </button>
+              <p className="text-[11px] text-neutral-500">
+                JPEG / PNG。アップロード後、シチュエーション・エリア編集・書き出しがご利用いただけます。
+              </p>
+            </div>
+          ) : (
+            <p className="text-sm text-neutral-400 text-center max-w-md">
+              編集履歴がありません。3Dビューで AI レンダリングを実行してください。
+            </p>
+          )}
         </div>
       </div>
     );
@@ -435,14 +500,7 @@ export function AiEditWorkspace({
   return (
     <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950 text-white pl-3 pr-0 pt-0 pb-0 gap-3">
       <div className="absolute top-6 left-6 right-6 z-50 flex items-start justify-between pointer-events-none">
-        <ModeToggleBar
-          activeMode="ai"
-          onSwitchToSketch={onSwitchToSketch}
-          onSwitchTo3D={onSwitchTo3D}
-          onSwitchToAi={onSwitchToAiEdit}
-          canSwitchTo3D={canSwitchTo3D}
-          className="shrink-0"
-        />
+        {renderModeBarOrHome()}
       </div>
       <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
         <button

@@ -20,6 +20,8 @@ function genId(): string {
 }
 
 export interface ProjectStoreState {
+  /** プロジェクト種別（'full' | 'photo'）。Undo 対象外。 */
+  kind: ProjectState['kind'];
   // --- ドキュメント（Undo 対象） ---
   sketch: ProjectState['sketch'];
   scene: ProjectState['scene'];
@@ -59,6 +61,9 @@ export interface ProjectStoreState {
   groupSelection(label?: string): void;
   ungroup(groupId: string): void;
 
+  // aiEdit（写真AI編集の永続化・2a。Undo 対象外、autosave は temporal 起因のため別途保存する）
+  setAiEdit(aiEdit: ProjectState['aiEdit']): void;
+
   // load / replace
   loadProjectState(state: ProjectState): void;
   reset(): void;
@@ -70,6 +75,7 @@ const initial = createEmptyProjectState();
 export const useProjectStore = create<ProjectStoreState>()(
   temporal(
     immer((set, get) => ({
+      kind: initial.kind,
       sketch: initial.sketch,
       scene: initial.scene,
       materials: initial.materials,
@@ -163,12 +169,19 @@ export const useProjectStore = create<ProjectStoreState>()(
           s.scene.groups = s.scene.groups.filter((g) => g.id !== groupId);
         }),
 
+      setAiEdit: (aiEdit) =>
+        set((s) => {
+          s.aiEdit = aiEdit;
+        }),
+
       loadProjectState: (state) =>
         set((s) => {
           // 旧スキーマ/部分的な project.data（beams や aiEdit 等が欠ける、または DB 既定の {} ）を
           // 読み込んでもクラッシュしないよう、空の既定値で各フィールドを補完してから反映する。
           const d = createEmptyProjectState();
           const src = (state ?? {}) as Partial<ProjectState>;
+          // 旧プロジェクト（kind 無し）は 'full' として扱う。
+          s.kind = src.kind ?? d.kind;
           s.sketch = {
             points: src.sketch?.points ?? d.sketch.points,
             openings: src.sketch?.openings ?? d.sketch.openings,
@@ -213,6 +226,7 @@ export const useProjectStore = create<ProjectStoreState>()(
       reset: () =>
         set((s) => {
           const e = createEmptyProjectState();
+          s.kind = e.kind;
           s.sketch = e.sketch;
           s.scene = e.scene;
           s.materials = e.materials;
@@ -224,6 +238,7 @@ export const useProjectStore = create<ProjectStoreState>()(
         const s = get();
         return {
           schemaVersion: PROJECT_SCHEMA_VERSION,
+          kind: s.kind,
           sketch: s.sketch,
           scene: s.scene,
           materials: s.materials,

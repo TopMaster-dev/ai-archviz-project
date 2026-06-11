@@ -27,6 +27,9 @@ import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { useProjectStore } from './lib/store/projectStore.js';
+import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
+import { useShellNav } from './lib/shell/shellNavContext.js';
+import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
 import { listUserUploads } from './lib/db/uploads.js';
@@ -1036,7 +1039,15 @@ const App: React.FC = () => {
   const [maskMode, setMaskMode] = useState(false);
   const [aiEditOpen, setAiEditOpen] = useState(false);
 
-  const aiEditSession = useAiEditSession();
+  // ログイン時のみ存在するプロジェクトセッション（ゲストでは null）。一覧サムネ保存に使う（2c-i）。
+  const projectSession = useOptionalProjectSession();
+  // 2a: プロジェクト種別。'photo' のときは写真AI編集専用UIにする。
+  const activeKind = useProjectStore((s) => s.kind);
+  // 2a: 写真専用オーバーレイからホームへ戻るための goHome（ゲストでは null）。
+  const shellNav = useShellNav();
+
+  // 写真プロジェクトはプロジェクトごとに DB 保存するため localStorage を使わない（混入防止・2a）。
+  const aiEditSession = useAiEditSession({ persistLocal: activeKind !== 'photo' });
 
   const {
     renderState,
@@ -1054,10 +1065,14 @@ const App: React.FC = () => {
       aiEditSession.addVersionFromRender(url);
       // レンダ完了後（ローディング解除後）に AI 編集へ遷移
       setAiEditOpen(true);
+      // 2c-i: このレンダー結果を一覧用サムネイルとして保存（ログイン時のみ／失敗は無視）。
+      void makeThumbnailDataUrl(url)
+        .then((thumb) => projectSession?.setProjectThumbnail(thumb))
+        .catch(() => {});
     },
   });
 
-  const { versions: aiEditVersions } = aiEditSession;
+  const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
     setRenderState((prev) => {
       if (prev.resultImageUrl) return prev;
@@ -1066,6 +1081,46 @@ const App: React.FC = () => {
       return { ...prev, resultImageUrl: last.outputImageDataUrl };
     });
   }, [aiEditVersions]);
+
+  // === 2a: 写真AI編集プロジェクトの per-project 永続化 ===
+  const photoProjectId = projectSession?.projectId ?? null;
+  const persistAiEdit = projectSession?.persistAiEdit;
+  const replaceAllAiEdit = aiEditSession.replaceAll;
+  const lastSeededPhotoProjectRef = useRef<string | null>(null);
+  const skipNextAiEditPersistRef = useRef(false);
+
+  // 種別が 'photo' のときは AI編集ワークスペースを常に開いた状態にする（写真専用UI）。
+  useEffect(() => {
+    if (activeKind === 'photo') setAiEditOpen(true);
+  }, [activeKind, photoProjectId]);
+
+  // プロジェクト切替時、そのプロジェクトに保存された aiEdit をセッションへ読み込む（photo のみ）。
+  useEffect(() => {
+    if (activeKind !== 'photo' || !photoProjectId) {
+      lastSeededPhotoProjectRef.current = null; // 非photoへ移ったら再入時に再シードできるよう解除
+      return;
+    }
+    if (lastSeededPhotoProjectRef.current === photoProjectId) return;
+    const ae = useProjectStore.getState().aiEdit;
+    skipNextAiEditPersistRef.current = true; // 読み込み直後の冗長保存を抑止
+    replaceAllAiEdit(ae.versions ?? [], ae.activeVersionId ?? null);
+    lastSeededPhotoProjectRef.current = photoProjectId;
+  }, [activeKind, photoProjectId, replaceAllAiEdit]);
+
+  // photo の編集（versions/active 変更）をストアへ反映し、デバウンス保存する。
+  useEffect(() => {
+    if (activeKind !== 'photo' || !photoProjectId) return;
+    if (skipNextAiEditPersistRef.current) {
+      skipNextAiEditPersistRef.current = false;
+      return;
+    }
+    useProjectStore.getState().setAiEdit({
+      versions: aiEditVersions,
+      activeVersionId: aiEditActiveVersionId,
+      draftObjects: [],
+    });
+    persistAiEdit?.();
+  }, [activeKind, photoProjectId, aiEditVersions, aiEditActiveVersionId, persistAiEdit]);
 
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -3659,7 +3714,10 @@ const App: React.FC = () => {
                         onSetReplacePlacementMode={aiEditSession.setReplacePlacementMode}
                         onCommitPlacementRect={aiEditSession.commitPlacementRect}
                         onRemovePlacementAt={aiEditSession.removePlacementAt}
-                        estimatePanel={renderEstimatePanel(true)}
+                        estimatePanel={activeKind === 'photo' ? null : renderEstimatePanel(true)}
+                        photoOnly={activeKind === 'photo'}
+                        onExitToHome={shellNav?.goHome}
+                        onUploadBaseImage={(url) => aiEditSession.addVersionFromRender(url)}
                         onEditSuccess={(p) => {
                             aiEditSession.appendVersionAfterEdit({
                                 parentId: p.parentId,

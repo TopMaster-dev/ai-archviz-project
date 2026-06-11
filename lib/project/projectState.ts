@@ -67,8 +67,13 @@ export interface Beam {
   wallIndex?: number;
 }
 
+/** プロジェクト種別（2a）。'full' = 空間デザイン（2D/3D エディタ）。'photo' = 写真アップロード→AI画像編集だけ。 */
+export type ProjectKind = 'full' | 'photo';
+
 export interface ProjectState {
   schemaVersion: number;
+  /** プロジェクト種別。既定 'full'。'photo' は写真AI編集専用（2a）。 */
+  kind: ProjectKind;
   sketch: {
     points: Point[];
     openings: Opening[];
@@ -103,6 +108,7 @@ export interface ProjectState {
 export function createEmptyProjectState(): ProjectState {
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
+    kind: 'full',
     sketch: { points: [], openings: [], wallDivisions: {}, underlayPlan: null, underlayCeiling: null },
     scene: { roomHeightMm: 2400, furniture: [], groups: [], beams: [] },
     materials: { selections: {}, materialSettings: {} },

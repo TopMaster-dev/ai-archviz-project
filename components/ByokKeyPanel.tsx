@@ -71,7 +71,9 @@ export function ByokKeyPanel() {
         <>
           <p className="mb-2 text-[11px] leading-snug text-neutral-500">
             AI生成にはご自身のキーを使用します。
-            {last4 ? `設定済み（末尾 ${last4}）。` : '未設定です。'}
+            {last4
+              ? `設定済み（末尾 ${last4}）。`
+              : '未設定です。テスト期間中は、キー未設定でも共有のキーでAI機能をご利用いただけます。'}
           </p>
           <input
             type="password"

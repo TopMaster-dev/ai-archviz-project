@@ -19,3 +19,11 @@ export function useProjectSessionContext(): ProjectSession {
   }
   return ctx;
 }
+
+/**
+ * Provider の外側（ゲストモードでは App は Provider なしで描画される）でも安全に使える版。
+ * セッションが無ければ null を返す。サムネイル保存など「ログイン時のみの副作用」に使う。
+ */
+export function useOptionalProjectSession(): ProjectSession | null {
+  return useContext(ProjectSessionContext);
+}

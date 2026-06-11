@@ -3,6 +3,7 @@ import { HomeScreen } from '../HomeScreen.js';
 import { AccountMenu } from './AccountMenu.js';
 import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
+import { ShellNavProvider } from '../../lib/shell/shellNavContext.js';
 
 /**
  * ログイン後のシェル。ホーム画面（プロジェクト管理）とエディタ（2D/3D）を切り替える。
@@ -18,11 +19,11 @@ export function AuthedShell({ children }: { children: ReactNode }) {
   }
 
   return (
-    <>
+    <ShellNavProvider goHome={() => setEntered(false)}>
       {children}
       <AccountMenu onHome={() => setEntered(false)} />
       <ProjectSaveIndicator />
       <UndoRedoBar />
-    </>
+    </ShellNavProvider>
   );
 }

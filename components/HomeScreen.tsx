@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Settings } from 'lucide-react';
+import { Settings, Image as ImageIcon } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 import { createShareLink } from '../lib/db/projects.js';
@@ -12,6 +12,27 @@ import { SettingsModal } from './SettingsModal.js';
  * プロジェクトの一覧/選択/作成/複製/改名/削除、Gemini APIキー設定、ログアウトを集約する。
  * 「開く」でエディタへ遷移する（onEnter）。
  */
+/** プロジェクト一覧の各行に表示するサムネイル（2c-i）。未生成/読み込み失敗時はプレースホルダー。 */
+function ProjectThumb({ url, name }: { url: string | null; name: string }) {
+  const [failed, setFailed] = useState(false);
+  const show = url && !failed;
+  return (
+    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-neutral-800 text-neutral-500">
+      {show ? (
+        <img
+          src={url}
+          alt=""
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      ) : (
+        <ImageIcon className="h-5 w-5" aria-label={`${name} のサムネイル（未生成）`} />
+      )}
+    </div>
+  );
+}
+
 export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const { email, signOut } = useAuth();
   const {
@@ -34,9 +55,10 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
 
   const [renaming, setRenaming] = useState(false);
   const [nameDraft, setNameDraft] = useState(projectName);
-  // 新規作成: まず名前を入力してから遷移（2c-iii）。
+  // 新規作成: まず名前と種別を選んでから遷移（2c-iii / 2a）。
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('マイプロジェクト');
+  const [newKind, setNewKind] = useState<'full' | 'photo'>('full');
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 共有（2b）: 閲覧用URLの発行・クリップボードコピーの結果通知。
   const [sharingId, setSharingId] = useState<string | null>(null);
@@ -74,7 +96,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const confirmCreate = async () => {
     const name = newName.trim() || 'マイプロジェクト';
     setCreatingNew(false);
-    await createNewProject(name);
+    await createNewProject(name, newKind);
     onEnter();
   };
 
@@ -133,7 +155,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
             </h2>
             <button
               type="button"
-              onClick={() => { setNewName('マイプロジェクト'); setCreatingNew(true); }}
+              onClick={() => { setNewName('マイプロジェクト'); setNewKind('full'); setCreatingNew(true); }}
               disabled={busy || atLimit}
               title={atLimit ? 'フリープランの保存上限に達しています' : '新しいプロジェクトを作成して開く'}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
@@ -169,6 +191,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                     }`}
                   >
                     <div className="flex items-center justify-between gap-3">
+                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                      <ProjectThumb url={p.thumbnail_url} name={p.name} />
                       <button
                         type="button"
                         onClick={() => void switchProject(p.id)}
@@ -195,6 +219,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                         )}
                         <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
                       </button>
+                      </div>
 
                       <div className="flex shrink-0 items-center gap-1.5 text-xs">
                         {active && (
@@ -289,6 +314,35 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               placeholder="マイプロジェクト"
               className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
             />
+
+            <label className="mb-1 block text-xs text-neutral-400">種類</label>
+            <div className="mb-4 grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setNewKind('full')}
+                className={`rounded-lg border p-3 text-left transition ${
+                  newKind === 'full'
+                    ? 'border-emerald-500/60 bg-emerald-500/10'
+                    : 'border-neutral-700 bg-neutral-950 hover:border-neutral-600'
+                }`}
+              >
+                <span className="block text-sm font-semibold">空間デザイン</span>
+                <span className="mt-0.5 block text-[11px] text-neutral-400">2D作図 → 3D → AIレンダリング</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setNewKind('photo')}
+                className={`rounded-lg border p-3 text-left transition ${
+                  newKind === 'photo'
+                    ? 'border-emerald-500/60 bg-emerald-500/10'
+                    : 'border-neutral-700 bg-neutral-950 hover:border-neutral-600'
+                }`}
+              >
+                <span className="block text-sm font-semibold">写真をAI編集</span>
+                <span className="mt-0.5 block text-[11px] text-neutral-400">写真をアップロードしてAI画像編集</span>
+              </button>
+            </div>
+
             <div className="flex justify-end gap-2">
               <button
                 type="button"
