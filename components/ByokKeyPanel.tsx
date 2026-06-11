@@ -79,7 +79,7 @@ export function ByokKeyPanel() {
             type="password"
             value={keyInput}
             onChange={(e) => setKeyInput(e.target.value)}
-            placeholder={last4 ? '新しいキーで更新' : 'AIza...'}
+            placeholder={last4 ? '新しいキーで更新' : 'AIza... または AQ....'}
             autoComplete="off"
             spellCheck={false}
             className="mb-2 w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1.5 text-neutral-100 outline-none focus:border-emerald-500"

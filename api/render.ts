@@ -1,4 +1,5 @@
 import { generateGeminiImage } from '../lib/gemini.js';
+import { extractGeminiApiKey } from '../lib/geminiKey.js';
 
 export default async function handler(req: any, res: any) {
     // CORS Headers
@@ -20,8 +21,8 @@ export default async function handler(req: any, res: any) {
         const headerKey = req.headers['x-gemini-key'];
         const userKey = typeof headerKey === 'string' ? headerKey : Array.isArray(headerKey) ? headerKey[0] : '';
         const rawApiKey = userKey || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || '';
-        const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
-        const apiKey = keyMatch ? keyMatch[0] : '';
+        // 従来(AIzaSy...)と新フォーマット(AQ....)の両対応（260612）。
+        const apiKey = extractGeminiApiKey(rawApiKey);
 
         if (!apiKey) {
             return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });

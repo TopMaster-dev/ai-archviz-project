@@ -7,6 +7,7 @@ import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
 import { generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives } from './lib/gemini.js';
+import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { normalizeObjectReference } from './lib/aiEditNormalize.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
 import type { AiEditObjectReference } from './types.js';
@@ -126,9 +127,8 @@ export default defineConfig(({ mode }) => {
                         // 1. Secrets / 環境変数からの取得 (VITE_ を最優先)
                         const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         
-                        // 2. 正規表現による抽出（文字数制限を外し、AIzaSyから始まる文字列を確実にキャッチ）
-                        const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
-                        const apiKey = keyMatch ? keyMatch[0] : '';
+                        // 2. キー抽出（従来 AIzaSy... と新フォーマット AQ.... の両対応・260612）
+                        const apiKey = extractGeminiApiKey(rawApiKey);
 
                         console.log("=========== API KEY SECURE CHECK (Denoise) ===========");
                         console.log("Extracted Key:", apiKey ? `VALID FORMAT (Ends with: ${apiKey.slice(-4)})` : "INVALID FORMAT OR EMPTY");
@@ -137,7 +137,7 @@ export default defineConfig(({ mode }) => {
                         if (!apiKey) {
                             res.statusCode = 400;
                             res.setHeader('Content-Type', 'application/json');
-                            return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキー(AIzaSy...)が見つかりません。Secretsと.envの両方に VITE_GEMINI_API_KEY が設定されているか確認し、サーバーを再起動してください。' }));
+                            return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキー(AIzaSy... または AQ....)が見つかりません。Secretsと.envの両方に VITE_GEMINI_API_KEY が設定されているか確認し、サーバーを再起動してください。' }));
                         }
 
                         const { image } = JSON.parse(body);
@@ -245,9 +245,8 @@ export default defineConfig(({ mode }) => {
                         // 1. Secrets / 環境変数からの取得 (VITE_ を最優先)
                         const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         
-                        // 2. 正規表現による抽出（文字数制限を外し、AIzaSyから始まる文字列を確実にキャッチ）
-                        const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
-                        const apiKey = keyMatch ? keyMatch[0] : '';
+                        // 2. キー抽出（従来 AIzaSy... と新フォーマット AQ.... の両対応・260612）
+                        const apiKey = extractGeminiApiKey(rawApiKey);
 
                         console.log("=========== API KEY SECURE CHECK (Render) ===========");
                         console.log("Extracted Key:", apiKey ? `VALID FORMAT (Ends with: ${apiKey.slice(-4)})` : "INVALID FORMAT OR EMPTY");
@@ -256,7 +255,7 @@ export default defineConfig(({ mode }) => {
                         if (!apiKey) {
                             res.statusCode = 400;
                             res.setHeader('Content-Type', 'application/json');
-                            return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキー(AIzaSy...)が見つかりません。Secretsと.envの両方に VITE_GEMINI_API_KEY が設定されているか確認し、サーバーを再起動してください。' }));
+                            return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキー(AIzaSy... または AQ....)が見つかりません。Secretsと.envの両方に VITE_GEMINI_API_KEY が設定されているか確認し、サーバーを再起動してください。' }));
                         }
 
                         const parsed = JSON.parse(body) as {
@@ -306,8 +305,8 @@ export default defineConfig(({ mode }) => {
                 req.on('end', async () => {
                     try {
                         const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
-                        const keyMatch = rawApiKey.match(/AIzaSy[\w-]+/);
-                        const apiKey = keyMatch ? keyMatch[0] : '';
+                        // 従来(AIzaSy...)と新フォーマット(AQ....)の両対応（260612）
+                        const apiKey = extractGeminiApiKey(rawApiKey);
 
                         if (!apiKey) {
                             res.statusCode = 400;
