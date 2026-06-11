@@ -16,6 +16,9 @@ import {
   wallLocalXToOpeningRatio,
   sketchAngleToYaw,
   yawToSketchRotation,
+  intersectLines2D,
+  getWallBeamBandCornersMm,
+  resolveDoorSwing3D,
 } from './sketchTransform.js';
 import type { Point } from '../types.js';
 
@@ -135,5 +138,73 @@ describe('angle conventions', () => {
   it('sketch angle <-> yaw is a sign flip and reversible', () => {
     expect(sketchAngleToYaw(0.7)).toBeCloseTo(-0.7);
     expect(yawToSketchRotation(sketchAngleToYaw(1.23))).toBeCloseTo(1.23);
+  });
+});
+
+describe('wall-beam corner miter (260611 #2b)', () => {
+  it('intersectLines2D returns the crossing point, null for parallel', () => {
+    const p = intersectLines2D({ x: 0, y: 100 }, { x: 1, y: 0 }, { x: 100, y: 0 }, { x: 0, y: 1 });
+    expect(p?.x).toBeCloseTo(100);
+    expect(p?.y).toBeCloseTo(100);
+    expect(intersectLines2D({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 0, y: 5 }, { x: 2, y: 0 })).toBeNull();
+  });
+
+  it('miters the inner corners against neighbouring wall-beams (square room)', () => {
+    // 1000mm 角の閉ポリゴン、4辺すべてに幅100mmの壁梁。重心(500,500)。
+    const square: Point[] = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 0 },
+      { x: 1000, y: 1000 },
+      { x: 0, y: 1000 },
+    ];
+    const widths = new Map([
+      [0, 100],
+      [1, 100],
+      [2, 100],
+      [3, 100],
+    ]);
+    const corners = getWallBeamBandCornersMm(square, widths, 0, { x: 500, y: 500 });
+    expect(corners).not.toBeNull();
+    // 外側は壁芯の頂点
+    expect(corners!.c1).toEqual({ x: 0, y: 0 });
+    expect(corners!.c2).toEqual({ x: 1000, y: 0 });
+    // 内側は両隣とのマイター交点（100,100）と（900,100）
+    expect(corners!.c4.x).toBeCloseTo(100);
+    expect(corners!.c4.y).toBeCloseTo(100);
+    expect(corners!.c3.x).toBeCloseTo(900);
+    expect(corners!.c3.y).toBeCloseTo(100);
+  });
+
+  it('falls back to a square cap when a neighbour has no beam', () => {
+    const square: Point[] = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 0 },
+      { x: 1000, y: 1000 },
+      { x: 0, y: 1000 },
+    ];
+    // only edge 0 has a beam → both ends square-capped at the straight inner offset (y=100)
+    const widths = new Map([[0, 100]]);
+    const corners = getWallBeamBandCornersMm(square, widths, 0, { x: 500, y: 500 });
+    expect(corners!.c4).toEqual({ x: 0, y: 100 });
+    expect(corners!.c3).toEqual({ x: 1000, y: 100 });
+  });
+});
+
+describe('door swing 2D->3D linkage signs (260611 Sec1)', () => {
+  it('default: hinge on p1 side, opens toward interior', () => {
+    const s = resolveDoorSwing3D(false, false, true, false);
+    expect(s.hingeXSign).toBe(-1); // !axisFlipped → p1 side is -X
+    expect(s.openZSign).toBe(1); // +Z is interior
+  });
+
+  it('swingFlipX flips hinge side; swingFlipY flips open direction', () => {
+    expect(resolveDoorSwing3D(true, false, true, false).hingeXSign).toBe(1);
+    expect(resolveDoorSwing3D(false, true, true, false).openZSign).toBe(-1);
+  });
+
+  it('axis flip and exterior +Z invert the defaults (keeps 2D/3D consistent)', () => {
+    const s = resolveDoorSwing3D(false, false, false, true);
+    expect(s.hingeXSign).toBe(1); // axisFlipped → p1 side is +X
+    expect(s.openZSign).toBe(-1); // +Z is exterior → interior is -Z
   });
 });

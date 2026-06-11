@@ -41,6 +41,97 @@ export const getWallLengthMm = (points: Point[], wallIndex: number): number | nu
   return scaledToMm(seg.length);
 };
 
+/** 2直線 (a0 + t·aDir) と (b0 + s·bDir) の交点。平行/縮退/非有限時は null。 */
+export const intersectLines2D = (a0: Point, aDir: Point, b0: Point, bDir: Point): Point | null => {
+  const denom = aDir.x * bDir.y - aDir.y * bDir.x;
+  if (!Number.isFinite(denom) || Math.abs(denom) < 1e-9) return null;
+  const t = ((b0.x - a0.x) * bDir.y - (b0.y - a0.y) * bDir.x) / denom;
+  const p = { x: a0.x + t * aDir.x, y: a0.y + t * aDir.y };
+  if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return null;
+  return p;
+};
+
+/** エッジ p1->p2 の、重心側（室内側）を向く単位法線。 */
+const inwardUnitNormal = (p1: Point, p2: Point, centroid: Point): Point => {
+  const dx = p2.x - p1.x;
+  const dy = p2.y - p1.y;
+  const len = Math.hypot(dx, dy) || 1;
+  let nx = -dy / len;
+  let ny = dx / len;
+  const mx = (p1.x + p2.x) / 2;
+  const my = (p1.y + p2.y) / 2;
+  if (nx * (centroid.x - mx) + ny * (centroid.y - my) < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+  return { x: nx, y: ny };
+};
+
+export interface BeamBandCorners {
+  /** c1=壁p1(外側), c2=壁p2(外側), c3=p2内側(マイター), c4=p1内側(マイター) */
+  c1: Point;
+  c2: Point;
+  c3: Point;
+  c4: Point;
+}
+
+/**
+ * 壁梁の室内側バンドの四隅(mm)を、隣接する壁梁とマイター接合して返す（260611 #2b）。
+ * 入隅では隙間、出角では重なりが生じる「直角キャップ」を、隣接エッジの内側オフセット線との
+ * 交点で接合して解消する。隣接エッジに壁梁が無い／交点が求まらない場合は直角キャップにフォールバック。
+ *
+ * @param points     スケッチ頂点（mm, 閉ポリゴン）
+ * @param widthByWallIndex 壁梁が乗っているエッジ index → そのバンド幅(mm)
+ * @param wallIndex  対象の壁梁のエッジ index
+ * @param centroid   ポリゴン重心(mm)。内側方向の判定に使う。
+ */
+export const getWallBeamBandCornersMm = (
+  points: Point[],
+  widthByWallIndex: Map<number, number>,
+  wallIndex: number,
+  centroid: Point,
+): BeamBandCorners | null => {
+  const n = points.length;
+  if (n < 2) return null;
+  const seg = getWallSegment(points, wallIndex);
+  if (!seg) return null;
+  const width = widthByWallIndex.get(wallIndex) ?? 0;
+  const nThis = inwardUnitNormal(seg.p1, seg.p2, centroid);
+  const dirThis = { x: seg.dx, y: seg.dy };
+  // このエッジの内側オフセット線上の通過点（p1側・p2側）
+  const inA: Point = { x: seg.p1.x + nThis.x * width, y: seg.p1.y + nThis.y * width };
+  const inB: Point = { x: seg.p2.x + nThis.x * width, y: seg.p2.y + nThis.y * width };
+
+  let c4: Point = inA; // p1内側（既定=直角キャップ）
+  let c3: Point = inB; // p2内側（既定=直角キャップ）
+
+  // 開始頂点 point[wallIndex] を共有する前エッジ (wallIndex-1) とマイター
+  const prevIdx = (wallIndex - 1 + n) % n;
+  if (prevIdx !== wallIndex && widthByWallIndex.has(prevIdx)) {
+    const prev = getWallSegment(points, prevIdx);
+    if (prev) {
+      const nPrev = inwardUnitNormal(prev.p1, prev.p2, centroid);
+      const wPrev = widthByWallIndex.get(prevIdx) ?? 0;
+      const prevInner: Point = { x: prev.p1.x + nPrev.x * wPrev, y: prev.p1.y + nPrev.y * wPrev };
+      const m = intersectLines2D(inA, dirThis, prevInner, { x: prev.dx, y: prev.dy });
+      if (m) c4 = m;
+    }
+  }
+  // 終了頂点 point[(wallIndex+1)%n] を共有する次エッジ (wallIndex+1) とマイター
+  const nextIdx = (wallIndex + 1) % n;
+  if (nextIdx !== wallIndex && widthByWallIndex.has(nextIdx)) {
+    const next = getWallSegment(points, nextIdx);
+    if (next) {
+      const nNext = inwardUnitNormal(next.p1, next.p2, centroid);
+      const wNext = widthByWallIndex.get(nextIdx) ?? 0;
+      const nextInner: Point = { x: next.p1.x + nNext.x * wNext, y: next.p1.y + nNext.y * wNext };
+      const m = intersectLines2D(inB, dirThis, nextInner, { x: next.dx, y: next.dy });
+      if (m) c3 = m;
+    }
+  }
+  return { c1: seg.p1, c2: seg.p2, c3, c4 };
+};
+
 export const getWallAngle2D = (p1: Point, p2: Point) => Math.atan2(p2.y - p1.y, p2.x - p1.x);
 
 export const getWallRotationY = (p1: { x: number; z: number }, p2: { x: number; z: number }, isCCW: boolean) => {
@@ -83,6 +174,28 @@ export const clampOpeningRatioWithCollisions = (
   const wallPos = targetRatio * wallLength;
   const clampedX = Math.max(minX, Math.min(maxX, wallPos));
   return clampedX / wallLength;
+};
+
+/**
+ * 3Dドアの吊り元(hinge)と開き方向(open)の符号を、2D平面図と同じ規約で返す（260611 Sec1）。
+ * 既定（フラグ無し）は「室内側へ開く・p1側が吊り元」。
+ *  - swingFlipX: 吊り元の左右を反転（2Dの sx と一致）。
+ *  - swingFlipY: 開く内外を反転（2Dの sy と一致）。
+ *  - isLocalPlusZIndoor: 壁ローカル +Z が室内側か（2Dの「室内側へ開く」アンカーと対応）。
+ *  - isAxisFlipped: 壁ローカルXが反転しているか（isCCW。建具配置 openingRatioToWallLocalX と同じ補正）。
+ * @returns hingeXSign 吊り元のローカルX符号(±1) / openZSign 開く先のローカルZ符号(±1)
+ */
+export const resolveDoorSwing3D = (
+  swingFlipX: boolean | undefined,
+  swingFlipY: boolean | undefined,
+  isLocalPlusZIndoor: boolean,
+  isAxisFlipped: boolean,
+): { hingeXSign: number; openZSign: number } => {
+  // 2D既定は p1側が吊り元。3DローカルXは isAxisFlipped(isCCW) で反転するため補正する。
+  const hingeXSign = (isAxisFlipped ? 1 : -1) * (swingFlipX ? -1 : 1);
+  // 既定は室内側(+Z=室内なら +1)へ。swingFlipY で内外反転。
+  const openZSign = (isLocalPlusZIndoor ? 1 : -1) * (swingFlipY ? -1 : 1);
+  return { hingeXSign, openZSign };
 };
 
 export const getRoomTransform = (scaledPoints: Point[]): RoomTransformResult => {

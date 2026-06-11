@@ -67,7 +67,8 @@ const Beam3DMesh: React.FC<{
   selections?: Record<string, Product | null>;
   materialSettings?: any;
   captureStep?: any;
-}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep }) => {
+  onHoverNameChange?: (name: string | null) => void;
+}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep, onHoverNameChange }) => {
   const boxRef = useRef<THREE.Mesh>(null);
   const handleRef = useRef<THREE.Mesh>(null);
   const { camera, gl } = useThree();
@@ -219,14 +220,17 @@ const Beam3DMesh: React.FC<{
         receiveShadow
         onPointerDown={startMove}
         onClick={(e) => { if (editable) e.stopPropagation(); }}
+        onPointerOver={(e) => { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); }}
+        onPointerOut={() => onHoverNameChange?.(null)}
       >
         <boxGeometry args={[lengthM, heightM, widthM]} />
         {selections && selections[`Beam_${beam.id}`] ? (
-          <Suspense fallback={<meshStandardMaterial color="#9a9a9a" />}>
+          <Suspense fallback={<meshStandardMaterial color={DEFAULT_SURFACE_COLOR} />}>
             <DynamicMaterial product={selections[`Beam_${beam.id}`]} captureStep={captureStep} meshRef={boxRef} materialSettings={materialSettings} surfaceWidthM={lengthM} surfaceHeightM={heightM} />
           </Suspense>
         ) : (
-          <meshStandardMaterial color={isSelected ? '#f59e0b' : '#9a9a9a'} roughness={0.85} metalness={0.05} />
+          // 2c: 未割当の梁は壁・天井と同じ既定色。選択/ホバーは OutlinePass で表示（2d）するため色は変えない。
+          <meshStandardMaterial color={DEFAULT_SURFACE_COLOR} roughness={0.8} metalness={0.05} />
         )}
       </mesh>
       {isSelected && !isWallBeam && editable && (
@@ -260,6 +264,7 @@ function Beams3D({
   selections,
   materialSettings,
   captureStep,
+  onHoverNameChange,
 }: {
   beams: Beam[];
   centerMm: Point | undefined;
@@ -275,6 +280,7 @@ function Beams3D({
   selections?: Record<string, Product | null>;
   materialSettings?: any;
   captureStep?: any;
+  onHoverNameChange?: (name: string | null) => void;
 }) {
   if (!centerMm || beams.length === 0) return null;
   return (
@@ -296,6 +302,7 @@ function Beams3D({
           selections={selections}
           materialSettings={materialSettings}
           captureStep={captureStep}
+          onHoverNameChange={onHoverNameChange}
         />
       ))}
     </group>
@@ -452,6 +459,8 @@ interface TexturedMaterialProps {
   materialSettings: any;
   surfaceWidthM?: number;
   surfaceHeightM?: number;
+  /** 壁など片面ジオメトリで両面描画する（凹形状でも面が消えないように・260611 Sec3）。 */
+  doubleSided?: boolean;
 }
 
 const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
@@ -461,6 +470,7 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
   materialSettings,
   surfaceWidthM,
   surfaceHeightM,
+  doubleSided,
 }) => {
   const texture = useTexture(textureUrl);
   /** useTexture は URL 単位でキャッシュするため、腰壁の上下など同一 URL の面で repeat が競合する。インスタンスごとに clone する */
@@ -520,7 +530,7 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
       roughness={settings.roughness ?? product.pbr.roughness}
       metalness={settings.metalness ?? product.pbr.metalness}
       envMapIntensity={1.0}
-      side={THREE.FrontSide}
+      side={doubleSided ? THREE.DoubleSide : THREE.FrontSide}
       polygonOffset
       polygonOffsetFactor={1}
       polygonOffsetUnits={1}
@@ -528,7 +538,7 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
   );
 };
 
-const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any }> = ({
+const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any; doubleSided?: boolean }> = ({
   product,
   captureStep,
   isFloor,
@@ -536,17 +546,19 @@ const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any }
   materialSettings,
   surfaceWidthM,
   surfaceHeightM,
+  doubleSided,
 }) => {
+  const side = doubleSided ? THREE.DoubleSide : THREE.FrontSide;
   if (captureStep === 'mask') {
-    return <meshBasicMaterial color={0x000000} />;
+    return <meshBasicMaterial color={0x000000} side={side} />;
   }
 
   if (!product || !product.textureUrl) {
-    return <meshStandardMaterial color={isFloor ? 0x8b5a2b : 0xcccccc} roughness={0.8} />;
+    return <meshStandardMaterial color={isFloor ? 0x8b5a2b : DEFAULT_SURFACE_COLOR} roughness={0.8} side={side} />;
   }
 
   return (
-    <Suspense fallback={<meshStandardMaterial color={isFloor ? 0x8b5a2b : 0xcccccc} roughness={0.8} />}>
+    <Suspense fallback={<meshStandardMaterial color={isFloor ? 0x8b5a2b : DEFAULT_SURFACE_COLOR} roughness={0.8} side={side} />}>
       <TexturedMaterial
         textureUrl={product.textureUrl}
         meshRef={meshRef}
@@ -554,11 +566,14 @@ const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any }
         materialSettings={materialSettings}
         surfaceWidthM={surfaceWidthM}
         surfaceHeightM={surfaceHeightM}
+        doubleSided={doubleSided}
       />
     </Suspense>
   );
 };
 
+// 既定（未割当）のサーフェス色。壁・天井・梁で共有し、梁の初期色を壁/天井と揃える（260611 2c）。
+const DEFAULT_SURFACE_COLOR = 0xcccccc;
 const OUTLINE_SELECTED_COLOR = '#ff8800';
 const OUTLINE_HOVER_COLOR = '#38bdf8';
 const FURNITURE_NAME_PREFIX = 'Furniture_';
@@ -1682,6 +1697,10 @@ const DraggableOpening = ({
                 type={op.type as any}
                 doorColor={doorColor}
                 frameColor={doorFrameColor}
+                swingFlipX={op.swingFlipX}
+                swingFlipY={op.swingFlipY}
+                isLocalPlusZIndoor={isLocalPlusZIndoor}
+                isAxisFlipped={isAxisFlipped}
               />
             ) : (
               <ParametricWindow
@@ -1919,7 +1938,8 @@ const WallSegment: React.FC<{
         receiveShadow={shadowEnabled}
       >
         <shapeGeometry args={[wallShape]} />
-        <Suspense fallback={<meshStandardMaterial color="#cccccc" />}>
+        {/* 壁は片面ジオメトリ。凹形状でも面が裏返って消えないよう両面描画する（260611 Sec3） */}
+        <Suspense fallback={<meshStandardMaterial color="#cccccc" side={THREE.DoubleSide} />}>
           <DynamicMaterial
             product={prod}
             captureStep={captureStep}
@@ -1927,6 +1947,7 @@ const WallSegment: React.FC<{
             materialSettings={materialSettings}
             surfaceWidthM={lengthM}
             surfaceHeightM={actualWallH}
+            doubleSided
           />
         </Suspense>
       </mesh>
@@ -2053,7 +2074,7 @@ const WallSegment: React.FC<{
               receiveShadow={shadowEnabled}
             >
               <primitive object={baseboardGeometry} attach="geometry" />
-              <meshStandardMaterial color={bbColor} side={THREE.FrontSide} roughness={0.7} />
+              <meshStandardMaterial color={bbColor} side={THREE.DoubleSide} roughness={0.7} />
             </mesh>
           );
         })()}
@@ -2849,8 +2870,10 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
     const names = [...activeMeshes];
     if (activeFurnitureId) names.push(`${FURNITURE_NAME_PREFIX}${activeFurnitureId}`);
     if (selectedOpeningId) names.push(`${OPENING_NAME_PREFIX}${selectedOpeningId}`);
+    // 2d: 選択中の梁も他オブジェクトと同じ OutlinePass で強調する。
+    if (selectedBeam3DId) names.push(`Beam_${selectedBeam3DId}`);
     return names;
-  }, [activeMeshes, activeFurnitureId, selectedOpeningId]);
+  }, [activeMeshes, activeFurnitureId, selectedOpeningId, selectedBeam3DId]);
 
   return (
     <div className="w-full h-full bg-[#0a0a0a] relative">
@@ -3041,6 +3064,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                       selections={selections}
                       materialSettings={materialSettings}
                       captureStep={captureStep}
+                      onHoverNameChange={safeHoverNameChange}
                     />
                 </group>
             </CanvasErrorBoundary>

@@ -1,6 +1,6 @@
 import React from 'react';
 import * as THREE from 'three';
-import { DOOR_FRAME_THICKNESS_MM } from '../utils/sketchTransform.js';
+import { DOOR_FRAME_THICKNESS_MM, resolveDoorSwing3D } from '../utils/sketchTransform.js';
 
 interface OpeningProps {
   width: number;
@@ -131,6 +131,14 @@ interface DoorProps extends OpeningProps {
   doorColor?: string;
   frameColor?: string;
   handleColor?: string;
+  /** 吊り元の左右（2D平面図の swingFlipX と連動・260611 Sec1） */
+  swingFlipX?: boolean;
+  /** 開く内外（2D平面図の swingFlipY と連動） */
+  swingFlipY?: boolean;
+  /** 壁ローカル +Z が室内側か（3D側で算出して渡す） */
+  isLocalPlusZIndoor?: boolean;
+  /** 壁ローカルXの反転（isCCW） */
+  isAxisFlipped?: boolean;
 }
 
 export const ParametricDoor: React.FC<DoorProps> = ({
@@ -141,6 +149,10 @@ export const ParametricDoor: React.FC<DoorProps> = ({
   doorColor = '#8b4513',
   frameColor = '#444',
   handleColor = '#ffd700',
+  swingFlipX,
+  swingFlipY,
+  isLocalPlusZIndoor = true,
+  isAxisFlipped = false,
 }) => {
   const w = width / 1000;
   const h = height / 1000;
@@ -191,21 +203,28 @@ export const ParametricDoor: React.FC<DoorProps> = ({
             <meshStandardMaterial color={doorColor} roughness={0.8} side={THREE.FrontSide} />
           </mesh>
         </group>
-      ) : (
-        <>
-          {/* Door Leaf */}
-          <mesh position={[0, h / 2, 0]}>
-            <boxGeometry args={[w, h, 0.04]} />
-            <meshStandardMaterial color={doorColor} roughness={0.8} side={THREE.FrontSide} />
-          </mesh>
-          
-          {/* Handle */}
-          <mesh position={[w / 2 - 0.1, h / 2, 0.03]}>
-            <sphereGeometry args={[0.02, 16, 16]} />
-            <meshStandardMaterial color={handleColor} metalness={0.8} roughness={0.2} side={THREE.FrontSide} />
-          </mesh>
-        </>
-      )}
+      ) : (() => {
+        // 開き戸: 吊り元と開き方向を2D平面図と連動させる（260611 Sec1）。
+        const { hingeXSign, openZSign } = resolveDoorSwing3D(swingFlipX, swingFlipY, isLocalPlusZIndoor, isAxisFlipped);
+        const OPEN_ANGLE = Math.PI / 2.6; // 約69°: 開き方向が分かる程度に開く
+        const beta = openZSign * hingeXSign * OPEN_ANGLE;
+        const hingeX = hingeXSign * (w / 2);
+        const handleX = -hingeXSign * (w - 0.1); // 自由端側
+        return (
+          <group position={[hingeX, 0, 0]} rotation={[0, beta, 0]}>
+            {/* Door Leaf: 吊り元(ローカル原点)から反対側へ w 伸びる */}
+            <mesh position={[-hingeXSign * (w / 2), h / 2, 0]}>
+              <boxGeometry args={[w, h, 0.04]} />
+              <meshStandardMaterial color={doorColor} roughness={0.8} side={THREE.DoubleSide} />
+            </mesh>
+            {/* Handle: 自由端側 */}
+            <mesh position={[handleX, h / 2, 0.03]}>
+              <sphereGeometry args={[0.02, 16, 16]} />
+              <meshStandardMaterial color={handleColor} metalness={0.8} roughness={0.2} side={THREE.FrontSide} />
+            </mesh>
+          </group>
+        );
+      })()}
     </group>
   );
 };

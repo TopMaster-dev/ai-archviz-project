@@ -7,6 +7,7 @@ import {
   SKETCH_BASE_SCALE,
   getRoomTransform,
   getWallSegment,
+  getWallBeamBandCornersMm,
   lerpPoint,
   getWallAngle2D,
   furniturePositionToMm,
@@ -2208,6 +2209,11 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       if (beamList.length > 0) {
         ctx.save();
         const beamCentroid = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
+        // 2b: 壁梁を隣接マイター接合するため、壁梁が乗っているエッジ index → バンド幅(mm) を集める。
+        const wallBeamWidths = new Map<number, number>();
+        for (const bb of beamList) {
+          if (bb.wallIndex !== undefined) wallBeamWidths.set(bb.wallIndex, bb.widthMm);
+        }
         for (const beam of beamList) {
           let cx = beam.cx;
           let cy = beam.cy;
@@ -2234,15 +2240,26 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           let py = ux;
           let c1, c2, c3, c4;
           if (isWallBeam) {
-            // 室内側（重心方向）へ widthMm のバンド
-            if (beamCentroid && px * (beamCentroid.x - cx) + py * (beamCentroid.y - cy) < 0) {
-              px = -px;
-              py = -py;
+            // 室内側（重心方向）へ widthMm のバンド。隣接壁梁とマイター接合し入隅の隙間/出角の重なりを解消（2b）。
+            const mitered = beamCentroid
+              ? getWallBeamBandCornersMm(pointsMm, wallBeamWidths, beam.wallIndex as number, beamCentroid)
+              : null;
+            if (mitered) {
+              c1 = mitered.c1;
+              c2 = mitered.c2;
+              c3 = mitered.c3;
+              c4 = mitered.c4;
+            } else {
+              // フォールバック: 従来の直角キャップ。
+              if (beamCentroid && px * (beamCentroid.x - cx) + py * (beamCentroid.y - cy) < 0) {
+                px = -px;
+                py = -py;
+              }
+              c1 = { x: ax, y: ay };
+              c2 = { x: bx2, y: by2 };
+              c3 = { x: bx2 + px * beam.widthMm, y: by2 + py * beam.widthMm };
+              c4 = { x: ax + px * beam.widthMm, y: ay + py * beam.widthMm };
             }
-            c1 = { x: ax, y: ay };
-            c2 = { x: bx2, y: by2 };
-            c3 = { x: bx2 + px * beam.widthMm, y: by2 + py * beam.widthMm };
-            c4 = { x: ax + px * beam.widthMm, y: ay + py * beam.widthMm };
           } else {
             const wh = beam.widthMm / 2;
             c1 = { x: ax + px * wh, y: ay + py * wh };

@@ -2034,9 +2034,9 @@ const App: React.FC = () => {
                 area = (perimMm * skeletonUpperWallMm) / 1000000;
             }
         } else if (meshName.startsWith('Beam_')) {
-            // 4a: 梁の露出表面積（壁・天井に接する面を除く）。
+            // 2a: 梁の露出表面積（壁・天井・床に接する面を除く）。天井高で床接触も判定。
             const bx = beams.find((x) => `Beam_${x.id}` === meshName);
-            if (bx) area = beamExposedAreaM2(bx);
+            if (bx) area = beamExposedAreaM2(bx, roomHeight);
         }
 
         if (area > 0 || (area === 0 && !meshName.startsWith('Sketch_'))) {
