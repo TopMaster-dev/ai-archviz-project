@@ -12,12 +12,12 @@ import { SettingsModal } from './SettingsModal.js';
  * プロジェクトの一覧/選択/作成/複製/改名/削除、Gemini APIキー設定、ログアウトを集約する。
  * 「開く」でエディタへ遷移する（onEnter）。
  */
-/** プロジェクト一覧の各行に表示するサムネイル（2c-i）。未生成/読み込み失敗時はプレースホルダー。 */
+/** プロジェクトカードのサムネイル（2c-i）。親の aspect 比に追従して全面表示。未生成/失敗時はプレースホルダー。 */
 function ProjectThumb({ url, name }: { url: string | null; name: string }) {
   const [failed, setFailed] = useState(false);
   const show = url && !failed;
   return (
-    <div className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md border border-white/10 bg-neutral-800 text-neutral-500">
+    <div className="flex h-full w-full items-center justify-center bg-neutral-800 text-neutral-600">
       {show ? (
         <img
           src={url}
@@ -27,7 +27,7 @@ function ProjectThumb({ url, name }: { url: string | null; name: string }) {
           className="h-full w-full object-cover"
         />
       ) : (
-        <ImageIcon className="h-5 w-5" aria-label={`${name} のサムネイル（未生成）`} />
+        <ImageIcon className="h-10 w-10" aria-label={`${name} のサムネイル（未生成）`} />
       )}
     </div>
   );
@@ -144,7 +144,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-3xl px-6 py-8">
+      <main className="mx-auto max-w-5xl px-6 py-8">
         <section className="mb-8">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">
@@ -178,50 +178,54 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               プロジェクトがありません。「＋ 新規作成」から始めてください。
             </p>
           ) : (
-            <ul className="space-y-2">
+            <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {projects.map((p) => {
                 const active = p.id === projectId;
                 return (
                   <li
                     key={p.id}
-                    className={`rounded-xl border p-3 transition ${
+                    className={`flex flex-col overflow-hidden rounded-xl border transition ${
                       active
-                        ? 'border-emerald-500/50 bg-emerald-500/5'
-                        : 'border-white/10 bg-neutral-900/40'
+                        ? 'border-emerald-500/60 bg-emerald-500/5'
+                        : 'border-white/10 bg-neutral-900/40 hover:border-white/25'
                     }`}
                   >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex min-w-0 flex-1 items-center gap-3">
+                    {/* サムネイル（クリックで選択） */}
+                    <button
+                      type="button"
+                      onClick={() => void switchProject(p.id)}
+                      onDoubleClick={() => void openProject(p.id)}
+                      disabled={busy}
+                      title="クリックで選択 / ダブルクリックで開く"
+                      className="block aspect-video w-full overflow-hidden bg-neutral-800 disabled:opacity-60"
+                    >
                       <ProjectThumb url={p.thumbnail_url} name={p.name} />
-                      <button
-                        type="button"
-                        onClick={() => void switchProject(p.id)}
-                        disabled={busy}
-                        className="min-w-0 flex-1 text-left disabled:opacity-60"
-                      >
-                        {active && renaming ? (
-                          <input
-                            autoFocus
-                            value={nameDraft}
-                            onChange={(e) => setNameDraft(e.target.value)}
-                            onBlur={() => {
-                              setRenaming(false);
-                              void renameCurrentProject(nameDraft);
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                            }}
-                            onClick={(e) => e.stopPropagation()}
-                            className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm outline-none focus:border-emerald-500"
-                          />
-                        ) : (
-                          <span className="block truncate text-sm font-medium">{p.name}</span>
-                        )}
-                        <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
-                      </button>
-                      </div>
+                    </button>
 
-                      <div className="flex shrink-0 items-center gap-1.5 text-xs">
+                    {/* 情報 + 操作 */}
+                    <div className="flex flex-1 flex-col gap-2 p-3">
+                      {active && renaming ? (
+                        <input
+                          autoFocus
+                          value={nameDraft}
+                          onChange={(e) => setNameDraft(e.target.value)}
+                          onBlur={() => {
+                            setRenaming(false);
+                            void renameCurrentProject(nameDraft);
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                          }}
+                          className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm outline-none focus:border-emerald-500"
+                        />
+                      ) : (
+                        <span className="block truncate text-sm font-semibold" title={p.name}>
+                          {p.name}
+                        </span>
+                      )}
+                      <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
+
+                      <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1 text-xs">
                         {active && (
                           <>
                             <button
@@ -270,7 +274,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                           type="button"
                           onClick={() => void openProject(p.id)}
                           disabled={busy}
-                          className="rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                          className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
                         >
                           開く →
                         </button>
