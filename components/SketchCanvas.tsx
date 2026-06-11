@@ -2410,9 +2410,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                 className={`px-2 py-1 rounded transition disabled:opacity-40 ${
                   underlayMoveMode ? 'bg-emerald-500 text-black' : 'hover:bg-white/10'
                 }`}
-                title="オンにしてキャンバスをドラッグで下絵を移動"
+                title="オンにして下絵をドラッグで移動、右下角のハンドルをドラッグでサイズ変更"
               >
-                移動
+                移動/拡縮
               </button>
               <button
                 type="button"
@@ -2461,6 +2461,23 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
                 />
               </label>
+            </div>
+            {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）＋ サイズ変更のヒント */}
+            <div className="flex items-center gap-2 text-[10px] text-neutral-400">
+              <button
+                type="button"
+                onClick={() => setIsUnderlaySnapEnabled((v) => !v)}
+                disabled={!underlay.visible}
+                className={`px-2 py-0.5 rounded border transition disabled:opacity-40 ${
+                  isUnderlaySnapEnabled
+                    ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                    : 'border-white/15 text-neutral-300 hover:bg-white/10'
+                }`}
+                title="壁の頂点を下絵の枠・辺・中心へ吸着する"
+              >
+                下絵スナップ {isUnderlaySnapEnabled ? 'ON' : 'OFF'}
+              </button>
+              <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
             </div>
           </div>
         )}
