@@ -33,7 +33,8 @@ import {
   getFurnitureFootprintMm,
   getEffectiveOpeningWidthMm,
   MM_PER_METER,
-  clampFurnitureItemToRoom
+  clampFurnitureItemToRoom,
+  computeWallToWallSpan
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
@@ -77,9 +78,10 @@ const Beam3DMesh: React.FC<{
   const ndc = useMemo(() => new THREE.Vector2(), []);
   const tmpHit = useMemo(() => new THREE.Vector3(), []);
   const dragRef = useRef<{ mode: 'move' | 'rotate'; startCx: number; startCy: number; startWx: number; startWz: number; planeY: number; cbx: number; cbz: number } | null>(null);
-  const liveRef = useRef<{ cx: number; cy: number; angleDeg: number } | null>(null);
+  const liveRef = useRef<{ cx: number; cy: number; angleDeg: number; lengthMm: number } | null>(null);
   const onPatchRef = useRef(onPatch); onPatchRef.current = onPatch;
   const onDragEndRef = useRef(onDragEnd); onDragEndRef.current = onDragEnd;
+  const polygonMmRef = useRef(polygonMm); polygonMmRef.current = polygonMm;
 
   const isWallBeam = beam.wallIndex !== undefined;
   const n = polygonMm?.length ?? 0;
@@ -146,15 +148,19 @@ const Beam3DMesh: React.FC<{
       const p = intersectAtY(e.clientX, e.clientY, d.planeY);
       if (!p) return;
       if (d.mode === 'move') {
-        // X/Y いずれか優勢な軸方向のみに限定（斜め移動を防ぐ）。
-        const ddx = (p.x - d.startWx) * MM_PER_METER;
-        const ddz = (p.z - d.startWz) * MM_PER_METER;
-        if (Math.abs(ddx) >= Math.abs(ddz)) {
-          live.cx = d.startCx + ddx;
-          live.cy = d.startCy;
+        // 自由梁は X/Y 制限なしで自由移動。さらに梁軸に沿って壁⇔壁へ長さを自動連動（2Dと同仕様・260612）。
+        const nextCx = d.startCx + (p.x - d.startWx) * MM_PER_METER;
+        const nextCy = d.startCy + (p.z - d.startWz) * MM_PER_METER;
+        const poly = polygonMmRef.current;
+        const span =
+          poly && poly.length >= 2 ? computeWallToWallSpan(poly, true, nextCx, nextCy, live.angleDeg) : null;
+        if (span) {
+          live.cx = span.cx;
+          live.cy = span.cy;
+          live.lengthMm = span.lengthMm;
         } else {
-          live.cx = d.startCx;
-          live.cy = d.startCy + ddz;
+          live.cx = nextCx;
+          live.cy = nextCy;
         }
       } else {
         live.angleDeg = (Math.atan2(p.z - d.cbz, p.x - d.cbx) * 180) / Math.PI;
@@ -162,14 +168,18 @@ const Beam3DMesh: React.FC<{
       const lbx = (live.cx - centerMm.x) / MM_PER_METER;
       const lbz = (live.cy - centerMm.y) / MM_PER_METER;
       const lrad = (live.angleDeg * Math.PI) / 180;
+      const liveLengthM = (Number.isFinite(live.lengthMm) ? live.lengthMm : beam.lengthMm) / MM_PER_METER;
+      const liveHandleD = liveLengthM / 2 + 0.4;
       if (boxRef.current) {
         boxRef.current.position.x = lbx;
         boxRef.current.position.z = lbz;
         boxRef.current.rotation.y = -lrad;
+        // 長さ変化はジオメトリ固定のため X スケールでライブ表現（離した時に正規化＋実ジオメトリへ反映）。
+        boxRef.current.scale.x = lengthM > 0 ? liveLengthM / lengthM : 1;
       }
       if (handleRef.current) {
-        handleRef.current.position.x = lbx + handleD * Math.cos(lrad);
-        handleRef.current.position.z = lbz + handleD * Math.sin(lrad);
+        handleRef.current.position.x = lbx + liveHandleD * Math.cos(lrad);
+        handleRef.current.position.z = lbz + liveHandleD * Math.sin(lrad);
       }
     };
     const onUp = () => {
@@ -177,7 +187,9 @@ const Beam3DMesh: React.FC<{
       const live = liveRef.current;
       dragRef.current = null;
       liveRef.current = null;
-      if (live) onPatchRef.current({ cx: live.cx, cy: live.cy, angleDeg: live.angleDeg });
+      // ライブスケールを正規化（コミット後の実ジオメトリと二重適用しないように）。
+      if (boxRef.current) boxRef.current.scale.x = 1;
+      if (live) onPatchRef.current({ cx: live.cx, cy: live.cy, angleDeg: live.angleDeg, lengthMm: live.lengthMm });
       onDragEndRef.current?.();
     };
     window.addEventListener('pointermove', onMove);
@@ -198,14 +210,14 @@ const Beam3DMesh: React.FC<{
     const p = intersectAtY(e.clientX, e.clientY, by);
     if (!p) return;
     dragRef.current = { mode: 'move', startCx: beam.cx, startCy: beam.cy, startWx: p.x, startWz: p.z, planeY: by, cbx: bx, cbz: bz };
-    liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg };
+    liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
     onDragStart?.();
   };
   const startRotate = (e: ThreeEvent<PointerEvent>) => {
     if (!editable || isWallBeam) return;
     e.stopPropagation();
     dragRef.current = { mode: 'rotate', startCx: beam.cx, startCy: beam.cy, startWx: 0, startWz: 0, planeY: by, cbx: bx, cbz: bz };
-    liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg };
+    liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
     onDragStart?.();
   };
 

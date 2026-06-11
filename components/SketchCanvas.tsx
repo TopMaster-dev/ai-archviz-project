@@ -8,6 +8,7 @@ import {
   getRoomTransform,
   getWallSegment,
   getWallBeamBandCornersMm,
+  computeWallToWallSpan,
   lerpPoint,
   getWallAngle2D,
   furniturePositionToMm,
@@ -132,48 +133,6 @@ function polygonCentroidMm(points: Point[]): Point | null {
   }
   if (Math.abs(twiceA) < 1e-9) return null;
   return { x: cx / (3 * twiceA), y: cy / (3 * twiceA) };
-}
-
-/**
- * 自由梁の壁⇔壁スパン計算。中心(cx,cy)から角度 angleDeg の軸±両方向へレイを飛ばし、
- * 最も近い壁エッジまでの距離を求め、壁から壁までを梁の長さとする。中心は2交点の中点へ寄せる。
- * 閉じていない/どちらかの方向で壁に当たらない場合は null（呼び出し側で自由移動にフォールバック）。
- * すべて mm 空間（points も cx/cy も mm）。
- */
-function computeWallToWallSpan(
-  points: Point[],
-  closed: boolean,
-  cx: number,
-  cy: number,
-  angleDeg: number,
-): { cx: number; cy: number; lengthMm: number } | null {
-  if (points.length < 2) return null;
-  const rad = (angleDeg * Math.PI) / 180;
-  const ux = Math.cos(rad);
-  const uy = Math.sin(rad);
-  const edgeCount = closed ? points.length : points.length - 1;
-  let tPos = Infinity;
-  let tNeg = Infinity;
-  for (let i = 0; i < edgeCount; i++) {
-    const a = points[i];
-    const b = points[(i + 1) % points.length];
-    const ex = b.x - a.x;
-    const ey = b.y - a.y;
-    const denom = ux * ey - uy * ex; // レイ方向 × エッジ方向
-    if (Math.abs(denom) < 1e-9) continue; // 平行
-    const rx = a.x - cx;
-    const ry = a.y - cy;
-    const t = (rx * ey - ry * ex) / denom; // レイ上の符号付き距離
-    const s = (rx * uy - ry * ux) / denom; // エッジ上の媒介変数（0..1で線分内）
-    if (s < -1e-6 || s > 1 + 1e-6) continue;
-    if (t > 1e-6) tPos = Math.min(tPos, t);
-    else if (t < -1e-6) tNeg = Math.min(tNeg, -t);
-  }
-  if (!Number.isFinite(tPos) || !Number.isFinite(tNeg)) return null;
-  const lengthMm = tPos + tNeg;
-  if (lengthMm < 1) return null;
-  const midOffset = (tPos - tNeg) / 2;
-  return { cx: cx + ux * midOffset, cy: cy + uy * midOffset, lengthMm };
 }
 
 /** 家具回転 UI：二重弧＋矢印。左側弧・矢印のみ Y 軸で反転。描画半径は ringR。 */

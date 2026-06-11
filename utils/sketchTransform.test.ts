@@ -19,6 +19,7 @@ import {
   intersectLines2D,
   getWallBeamBandCornersMm,
   resolveDoorSwing3D,
+  computeWallToWallSpan,
 } from './sketchTransform.js';
 import type { Point } from '../types.js';
 
@@ -187,6 +188,42 @@ describe('wall-beam corner miter (260611 #2b)', () => {
     const corners = getWallBeamBandCornersMm(square, widths, 0, { x: 500, y: 500 });
     expect(corners!.c4).toEqual({ x: 0, y: 100 });
     expect(corners!.c3).toEqual({ x: 1000, y: 100 });
+  });
+});
+
+describe('computeWallToWallSpan (260612 free-beam wall-to-wall, shared 2D/3D)', () => {
+  const square: Point[] = [
+    { x: 0, y: 0 },
+    { x: 1000, y: 0 },
+    { x: 1000, y: 1000 },
+    { x: 0, y: 1000 },
+  ];
+
+  it('spans a centered horizontal beam wall-to-wall', () => {
+    const s = computeWallToWallSpan(square, true, 500, 500, 0);
+    expect(s).not.toBeNull();
+    expect(s!.lengthMm).toBeCloseTo(1000);
+    expect(s!.cx).toBeCloseTo(500);
+    expect(s!.cy).toBeCloseTo(500);
+  });
+
+  it('recenters an off-center beam to the wall midpoint, keeping wall-to-wall length', () => {
+    const s = computeWallToWallSpan(square, true, 700, 500, 0); // +X→1000 (t300), -X→0 (t700)
+    expect(s!.lengthMm).toBeCloseTo(1000);
+    expect(s!.cx).toBeCloseTo(500);
+    expect(s!.cy).toBeCloseTo(500);
+  });
+
+  it('works at an angle (vertical beam spans top-to-bottom)', () => {
+    const s = computeWallToWallSpan(square, true, 300, 600, 90);
+    expect(s!.lengthMm).toBeCloseTo(1000);
+    expect(s!.cx).toBeCloseTo(300);
+    expect(s!.cy).toBeCloseTo(500);
+  });
+
+  it('returns null when a ray does not hit walls on both sides (open polyline)', () => {
+    const line: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }];
+    expect(computeWallToWallSpan(line, false, 500, 500, 0)).toBeNull();
   });
 });
 
