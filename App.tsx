@@ -6,6 +6,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/cont
 import { MaterialCategory, Product, RenderState, FurnitureItem, FurnitureCatalogItem, Opening, ToolMode, AddKind, CameraPreset, CameraBlendRequest, AiEstimateItem } from './types.js';
 import { NumericField } from './components/NumericField.js';
 import { RoomViewer } from './components/RoomViewer.js';
+import { ModelRoot } from './components/ModelRoot.js';
 import { CameraPresetBar } from './components/CameraPresetBar.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
@@ -155,6 +156,8 @@ const resizeImage = (base64Str: string, maxWidth: number = 1536, maxHeight: numb
 // localStorageは廃止し、セッション中はメモリで保持する
 const globalThumbnailCache: Record<string, string> = {};
 const generationQueue: string[] = [];
+// 生成に失敗した（壊れた/未対応の）モデル URL。再生成で無駄にループしないよう以後はスキップする。
+const thumbnailFailedUrls = new Set<string>();
 const thumbnailEnqueueTimers = new Map<string, number>();
 const cacheListeners = new Set<() => void>();
 const notifyCacheUpdate = () => cacheListeners.forEach(l => l());
@@ -187,7 +190,13 @@ const scheduleIdleTask = (task: () => void, fallbackDelayMs = 220) => {
 };
 
 export const requestThumbnail = (url: string) => {
-    if (globalThumbnailCache[url] || generationQueue.includes(url) || thumbnailEnqueueTimers.has(url)) return;
+    if (
+        globalThumbnailCache[url] ||
+        thumbnailFailedUrls.has(url) ||
+        generationQueue.includes(url) ||
+        thumbnailEnqueueTimers.has(url)
+    )
+        return;
     const timerId = window.setTimeout(() => {
         thumbnailEnqueueTimers.delete(url);
         if (!globalThumbnailCache[url] && !generationQueue.includes(url)) {
@@ -199,9 +208,13 @@ export const requestThumbnail = (url: string) => {
 };
 
 const ModelThumbnailInner = ({ url, onRender }: { url: string, onRender: (dataUrl: string) => void }) => {
-    const { scene } = useGLTF(url);
+    // glTF/FBX/OBJ を ModelRoot で読み込み、サムネイル描画は ModelThumbnailScene が担う。
+    return <ModelRoot url={url}>{(scene) => <ModelThumbnailScene scene={scene} onRender={onRender} />}</ModelRoot>;
+};
+
+const ModelThumbnailScene = ({ scene, onRender }: { scene: THREE.Object3D, onRender: (dataUrl: string) => void }) => {
     const { gl, scene: threeScene, camera } = useThree();
-    
+
     const cloned = useMemo(() => {
         const c = scene.clone();
         const box = new THREE.Box3().setFromObject(c);
@@ -237,6 +250,25 @@ const ModelThumbnailInner = ({ url, onRender }: { url: string, onRender: (dataUr
     return <primitive object={cloned} />;
 };
 
+// サムネイル生成 Canvas 用のエラーバウンダリ。壊れた/未対応の FBX・OBJ は useLoader が
+// レンダー中に例外を投げる（Suspense は例外を捕捉しない）ため、これが無いとアプリ全体が
+// 白画面でクラッシュする。捕捉したら当該 URL をキューから除外して次へ進める。
+class ThumbnailErrorBoundary extends React.Component<
+    { onError: () => void; children: React.ReactNode },
+    { failed: boolean }
+> {
+    state = { failed: false };
+    static getDerivedStateFromError() {
+        return { failed: true };
+    }
+    componentDidCatch() {
+        this.props.onError();
+    }
+    render() {
+        return this.state.failed ? null : this.props.children;
+    }
+}
+
 const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
     const [currentUrl, setCurrentUrl] = useState<string | null>(null);
     const [tick, setTick] = useState(0);
@@ -262,6 +294,8 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
     const dequeueCurrent = useCallback((reason: 'success' | 'timeout' | 'error') => {
         const active = currentUrlRef.current;
         if (!active) return;
+        // 読み込み失敗（壊れた/未対応モデル）は失敗集合に記録し、以後の再生成を抑止する。
+        if (reason === 'error') thumbnailFailedUrls.add(active);
         if (generationQueue[0] === active) {
             generationQueue.shift();
         } else {
@@ -315,7 +349,9 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
                 <ambientLight intensity={1.5} />
                 <directionalLight position={[5, 10, 5]} intensity={1.5} />
                 <Suspense fallback={null}>
-                    <ModelThumbnailInner url={currentUrl} onRender={handleRender} />
+                    <ThumbnailErrorBoundary key={currentUrl} onError={() => dequeueCurrent('error')}>
+                        <ModelThumbnailInner url={currentUrl} onRender={handleRender} />
+                    </ThumbnailErrorBoundary>
                 </Suspense>
             </Canvas>
         </div>
@@ -1872,7 +1908,8 @@ const App: React.FC = () => {
       const defaultScale = Number.isFinite(catalogItem.defaultScale) ? Number(catalogItem.defaultScale) : 1;
       const defaultY = Number.isFinite(catalogItem.defaultY) ? Number(catalogItem.defaultY) : 0;
       // 天伏図で配置した家具は天井オブジェクト（ceilingMount）として扱い、天井高さに配置する。
-      const placeOnCeiling = isCeilingView;
+      // ただし 3D ビューでの配置は常に「床」をデフォルトにする（天伏図モードは 2D 専用の判定）。
+      const placeOnCeiling = viewMode === '3D' ? false : isCeilingView;
       const newItem: FurnitureItem = {
           id,
           type: catalogItem.type,
@@ -2406,11 +2443,18 @@ const App: React.FC = () => {
         name="file-upload"
         ref={fileInputRef} 
         className="hidden" 
-        accept=".glb,.gltf" 
+        accept=".glb,.gltf,.fbx,.obj"
         onChange={(e) => {
           const file = e.target.files?.[0];
-          if (file) { setCustomModelUrl(URL.createObjectURL(file)); setViewMode('3D'); }
-        }} 
+          if (file) {
+            // blob: URL は拡張子を持たないため、ローダ判定用に元ファイルの拡張子を fragment で付与する。
+            const dot = file.name.lastIndexOf('.');
+            const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase() : '';
+            const objectUrl = URL.createObjectURL(file);
+            setCustomModelUrl(ext ? `${objectUrl}#${ext}` : objectUrl);
+            setViewMode('3D');
+          }
+        }}
       />
 
       {/* 画面全体のローディング表示（デノイズ中） */}
@@ -3215,6 +3259,28 @@ const App: React.FC = () => {
                                     const priceVal = Number.isFinite((activeItem as any).customPrice)
                                         ? (activeItem as any).customPrice
                                         : 0;
+                                    // 床（または天井）からの高さ（オフセット）。position[1] を真値とし、
+                                    // 床置きは「床からの高さ」、天井オブジェクトは「天井からの下がり」を mm で表示・編集する。
+                                    const ceilingYm = roomHeight / 1000;
+                                    // 0 未満は表示しない（天井高を後から下げた既存の天井オブジェクトで負値が出るのを防ぐ）。
+                                    const offsetMm = activeItem.ceilingMount
+                                        ? Math.max(0, Math.round((ceilingYm - activeItem.position[1]) * 1000))
+                                        : Math.max(0, Math.round(activeItem.position[1] * 1000));
+                                    const setOffsetMm = (mm: number) => {
+                                        const clamped = Math.max(0, Math.round(Number.isFinite(mm) ? mm : 0));
+                                        setFurnitureItems((prev) =>
+                                            prev.map((f) => {
+                                                if (f.id !== activeFurnitureId) return f;
+                                                const y = f.ceilingMount
+                                                    ? Math.max(0, ceilingYm - clamped / 1000)
+                                                    : clamped / 1000;
+                                                return {
+                                                    ...f,
+                                                    position: [f.position[0], y, f.position[2]] as [number, number, number],
+                                                };
+                                            })
+                                        );
+                                    };
                                     return (
                                         <div className={`${propertyCardBaseClass} px-4 py-2.5 flex flex-col gap-2`}>
                                             <div className="flex items-start justify-between gap-2 w-full">
@@ -3283,6 +3349,19 @@ const App: React.FC = () => {
                                             >
                                                 {activeItem.ceilingMount ? '✓ 天井に配置中（解除）' : '天井に配置'}
                                             </button>
+
+                                            <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-neutral-300">
+                                                {activeItem.ceilingMount ? '天井からの高さ' : '床からの高さ'}
+                                                <span className="flex items-center gap-1 text-neutral-400">
+                                                    <NumericField
+                                                        value={offsetMm}
+                                                        onChange={setOffsetMm}
+                                                        dragSensitivity={2}
+                                                        className="w-16"
+                                                    />
+                                                    mm
+                                                </span>
+                                            </label>
 
                                             <div className="flex items-start gap-3 w-full pt-2 border-t border-white/10">
                                                 <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/10 shrink-0 bg-neutral-800">

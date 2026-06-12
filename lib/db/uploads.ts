@@ -27,7 +27,7 @@ export interface UserUpload {
 
 /** 種別ごとの受け入れ拡張子（バリデーションと file input accept に使用）。 */
 export const ACCEPTED_EXT: Record<UploadKind, string[]> = {
-  model: ['.glb', '.gltf'],
+  model: ['.glb', '.gltf', '.fbx', '.obj'],
   texture: ['.png', '.jpg', '.jpeg', '.webp'],
 };
 

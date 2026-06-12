@@ -5,6 +5,8 @@ import { useTexture, OrbitControls, PerspectiveCamera, useGLTF, Center, Environm
 import * as THREE from 'three';
 import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-mesh-bvh';
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
+import { ModelRoot } from './ModelRoot.js';
+import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
 import { EffectComposer as ThreeEffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
@@ -862,28 +864,36 @@ const FurnitureFallback = ({ modelUrl }: { modelUrl?: string }) => {
     );
 };
 
-// 実際のGLTFモデルを読み込み、クレイ（白粘土）マテリアルを適用するコア部分
-const GLTFCore = ({
-    modelUrl,
+// 読み込んだモデルのルートにクローン＆座標補正＆クレイ（白粘土）マテリアルを適用して描画する共通部分。
+// 形式（glTF/FBX/OBJ）に依存せず Object3D を受け取る。
+const ClayModel = ({
+    object,
+    format,
     maskMode,
     isSelected,
-    snapshotMode,
     captureStep,
     alignTop
 }: {
-    modelUrl: string;
+    object: THREE.Object3D;
+    /** 読み込み形式。FBX/OBJ は単位が一定でないため描画前にサイズ正規化する。 */
+    format?: ModelFormat | null;
     maskMode?: boolean;
     isSelected?: boolean;
-    snapshotMode?: boolean;
     captureStep?: 'idle' | 'pt-base' | 'mask';
     /** true のとき、モデルの「最上端」をグループ原点に合わせる（天井から吊り下げる天井オブジェクト用）。 */
     alignTop?: boolean;
 }) => {
-    const { scene } = useGLTF(modelUrl);
-
     // クローンと座標補正は「最初の1回」だけ行う（ここで計算を確定させる）
     const clonedScene = useMemo(() => {
-        const clone = scene.clone();
+        const clone = object.clone();
+        // FBX/OBJ は単位がまちまち（FBX は cm 慣習で約100倍になりがち）。常識的な家具サイズへ正規化する。
+        // glTF はカタログが 1単位=1m 前提で作られているため正規化しない（既存挙動を維持）。
+        if (format === 'fbx' || format === 'obj') {
+            const preBox = new THREE.Box3().setFromObject(clone);
+            const sz = preBox.getSize(new THREE.Vector3());
+            const s = exoticNormalizeScale(Math.max(sz.x, sz.y, sz.z));
+            if (s !== 1) clone.scale.multiplyScalar(s);
+        }
         const box = new THREE.Box3().setFromObject(clone);
         const center = box.getCenter(new THREE.Vector3());
         clone.position.x = -center.x;
@@ -891,7 +901,7 @@ const GLTFCore = ({
         clone.position.y = alignTop ? -box.max.y : -box.min.y;
         clone.position.z = -center.z;
         return clone;
-    }, [scene, alignTop]);
+    }, [object, alignTop, format]);
 
     // maskMode が変わった時は「マテリアル（色）」だけを変える（座標は絶対にいじらない）
     useEffect(() => {
@@ -899,14 +909,14 @@ const GLTFCore = ({
             if (child.isMesh) {
                 child.castShadow = !maskMode && captureStep !== 'mask';
                 child.receiveShadow = !maskMode && captureStep !== 'mask';
-                
+
                 if (captureStep === 'mask') {
                     // 自動マスク生成モード：選択中の家具は白、それ以外は黒
-                    child.material = new THREE.MeshBasicMaterial({ 
-                        color: isSelected ? 0xffffff : 0x000000 
+                    child.material = new THREE.MeshBasicMaterial({
+                        color: isSelected ? 0xffffff : 0x000000
                     });
                 } else {
-                    child.material = maskMode 
+                    child.material = maskMode
                         ? new THREE.MeshBasicMaterial({ color: 0xffffff })
                         : new THREE.MeshStandardMaterial({
                             color: 0xe0e0e0, // 暗いグレー(0x888888)から明るい白に変更し、光を拾わせる
@@ -921,6 +931,40 @@ const GLTFCore = ({
     }, [clonedScene, maskMode, captureStep, isSelected]);
 
     return <primitive object={clonedScene} />;
+};
+
+// 実際の3Dモデル（glTF/FBX/OBJ）を読み込み、クレイ（白粘土）マテリアルを適用するコア部分。
+// 読み込みは ModelRoot が形式ごとに分岐（glTF=useGLTF / FBX・OBJ=useLoader）。
+const GLTFCore = ({
+    modelUrl,
+    maskMode,
+    isSelected,
+    snapshotMode: _snapshotMode,
+    captureStep,
+    alignTop
+}: {
+    modelUrl: string;
+    maskMode?: boolean;
+    isSelected?: boolean;
+    snapshotMode?: boolean;
+    captureStep?: 'idle' | 'pt-base' | 'mask';
+    /** true のとき、モデルの「最上端」をグループ原点に合わせる（天井から吊り下げる天井オブジェクト用）。 */
+    alignTop?: boolean;
+}) => {
+    return (
+        <ModelRoot url={modelUrl}>
+            {(object, format) => (
+                <ClayModel
+                    object={object}
+                    format={format}
+                    maskMode={maskMode}
+                    isSelected={isSelected}
+                    captureStep={captureStep}
+                    alignTop={alignTop}
+                />
+            )}
+        </ModelRoot>
+    );
 };
 
 /** 足跡に合わせた半径（m）。弧＋不可視ヒット用チューブ */
@@ -1583,8 +1627,14 @@ const GLTFFurniture: React.FC<{
 };
 
 
-const CustomBIMModel = ({
-  url,
+// 取り込んだカスタムモデル（BIM/部屋）を読み込み、メッシュ選択・素材適用を行う。
+// 読み込みは ModelRoot が形式（glTF/FBX/OBJ）ごとに分岐する。
+const CustomBIMModel = ({ url, ...rest }: any) => {
+  return <ModelRoot url={url}>{(scene) => <CustomBIMScene scene={scene} {...rest} />}</ModelRoot>;
+};
+
+const CustomBIMScene = ({
+  scene,
   selections,
   onMeshClick,
   materialSettings,
@@ -1592,9 +1642,6 @@ const CustomBIMModel = ({
   captureStep,
   onHoverNameChange
 }: any) => {
-  const gltf = useGLTF(url) as any;
-  const scene = gltf.scene;
-
   useEffect(() => {
     scene.traverse((child: THREE.Object3D) => {
       if ((child as THREE.Mesh).isMesh) {

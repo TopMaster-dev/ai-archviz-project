@@ -43,12 +43,14 @@ describe('validateUpload', () => {
   it('accepts allowed extensions within size', () => {
     expect(validateUpload(fakeFile('chair.glb', 1000), 'model')).toBeNull();
     expect(validateUpload(fakeFile('SCENE.GLTF', 1000), 'model')).toBeNull();
+    expect(validateUpload(fakeFile('chair.fbx', 1000), 'model')).toBeNull();
+    expect(validateUpload(fakeFile('CHAIR.OBJ', 1000), 'model')).toBeNull();
     expect(validateUpload(fakeFile('wood.png', 1000), 'texture')).toBeNull();
     expect(validateUpload(fakeFile('wood.JPG', 1000), 'texture')).toBeNull();
   });
 
   it('rejects wrong extension for the kind', () => {
-    expect(validateUpload(fakeFile('chair.obj', 1000), 'model')).toMatch(/対応していない/);
+    expect(validateUpload(fakeFile('chair.stl', 1000), 'model')).toMatch(/対応していない/);
     expect(validateUpload(fakeFile('wood.glb', 1000), 'texture')).toMatch(/対応していない/);
     expect(validateUpload(fakeFile('noext', 1000), 'model')).toMatch(/対応していない/);
   });
