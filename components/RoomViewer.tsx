@@ -35,7 +35,8 @@ import {
   MM_PER_METER,
   clampFurnitureItemToRoom,
   computeWallToWallSpan,
-  getWallBeamBandCornersMm
+  getWallBeamBandCornersMm,
+  freeBeamWallMiterCornersMm
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
@@ -46,6 +47,39 @@ if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
   (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
   (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
   (THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
+}
+
+/**
+ * 梁バンドの四隅(mm)＋上端/下端Y(m)＋部屋中心(mm)から、押し出し角柱の BufferGeometry を生成。
+ * 壁梁(getWallBeamBandCornersMm)・自由梁(freeBeamWallMiterCornersMm)のどちらの四隅でも共有する。
+ * 面の表裏（巻き方向）はバンドの向きで変わるため、呼び出し側は DoubleSide で描く前提。
+ */
+function buildBeamBandPrism(
+  corners: { c1: Point; c2: Point; c3: Point; c4: Point },
+  centerMm: Point,
+  topY: number,
+  botY: number,
+): THREE.BufferGeometry | null {
+  const toXZ = (p: Point): [number, number] => [(p.x - centerMm.x) / MM_PER_METER, (p.y - centerMm.y) / MM_PER_METER];
+  const [x1, z1] = toXZ(corners.c1);
+  const [x2, z2] = toXZ(corners.c2);
+  const [x3, z3] = toXZ(corners.c3);
+  const [x4, z4] = toXZ(corners.c4);
+  if (![x1, z1, x2, z2, x3, z3, x4, z4, topY, botY].every(Number.isFinite)) return null;
+  const T1 = [x1, topY, z1], T2 = [x2, topY, z2], T3 = [x3, topY, z3], T4 = [x4, topY, z4];
+  const B1 = [x1, botY, z1], B2 = [x2, botY, z2], B3 = [x3, botY, z3], B4 = [x4, botY, z4];
+  const pos: number[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]) => { pos.push(...a, ...b, ...c, ...a, ...c, ...d); };
+  quad(T1, T2, T3, T4); // 天面
+  quad(B4, B3, B2, B1); // 底面（室内から見上げる主要面）
+  quad(B1, B2, T2, T1); // 側面 c1-c2
+  quad(B2, B3, T3, T2); // 端面 c2-c3
+  quad(B3, B4, T4, T3); // 側面 c3-c4
+  quad(B4, B1, T1, T4); // 端面 c4-c1
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  return geo;
 }
 
 /**
@@ -75,6 +109,8 @@ const Beam3DMesh: React.FC<{
 }> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep, onHoverNameChange, widthByWallIndex }) => {
   const boxRef = useRef<THREE.Mesh>(null);
   const handleRef = useRef<THREE.Mesh>(null);
+  // 角柱描画中か（=ライブ位置更新を抑止すべきか）を pointer ハンドラから参照するためのミラー。
+  const usePrismRef = useRef(false);
   const { camera, gl } = useThree();
   const raycaster = useMemo(() => new THREE.Raycaster(), []);
   const plane = useMemo(() => new THREE.Plane(), []);
@@ -173,7 +209,8 @@ const Beam3DMesh: React.FC<{
       const lrad = (live.angleDeg * Math.PI) / 180;
       const liveLengthM = (Number.isFinite(live.lengthMm) ? live.lengthMm : beam.lengthMm) / MM_PER_METER;
       const liveHandleD = liveLengthM / 2 + 0.4;
-      if (boxRef.current) {
+      // 角柱（絶対座標）描画フレームでは位置を動かさない（箱へ切替わるまでの1フレームの飛びを防ぐ）。
+      if (boxRef.current && !usePrismRef.current) {
         boxRef.current.position.x = lbx;
         boxRef.current.position.z = lbz;
         boxRef.current.rotation.y = -lrad;
@@ -192,6 +229,7 @@ const Beam3DMesh: React.FC<{
       liveRef.current = null;
       // ライブスケールを正規化（コミット後の実ジオメトリと二重適用しないように）。
       if (boxRef.current) boxRef.current.scale.x = 1;
+      setIsDragging(false); // コミット後は角柱（壁線に沿って切った端）へ戻す
       if (live) onPatchRef.current({ cx: live.cx, cy: live.cy, angleDeg: live.angleDeg, lengthMm: live.lengthMm });
       onDragEndRef.current?.();
     };
@@ -214,6 +252,7 @@ const Beam3DMesh: React.FC<{
     if (!p) return;
     dragRef.current = { mode: 'move', startCx: beam.cx, startCy: beam.cy, startWx: p.x, startWz: p.z, planeY: by, cbx: bx, cbz: bz };
     liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
+    setIsDragging(true); // ドラッグ中は箱＋スケールでライブ表現（角柱から切替）
     onDragStart?.();
   };
   const startRotate = (e: ThreeEvent<PointerEvent>) => {
@@ -221,45 +260,38 @@ const Beam3DMesh: React.FC<{
     e.stopPropagation();
     dragRef.current = { mode: 'rotate', startCx: beam.cx, startCy: beam.cy, startWx: 0, startWz: 0, planeY: by, cbx: bx, cbz: bz };
     liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
+    setIsDragging(true); // 回転中も角度がライブで変わるため箱で表現
     onDragStart?.();
   };
 
+  const [isDragging, setIsDragging] = useState(false);
+
   // 壁梁のコーナー接合（2b の 3D 版）。2D と同じ getWallBeamBandCornersMm でマイターした
   // 室内側バンドの四隅を、天井(by+h/2)から下端(by-h/2)まで押し出した角柱として描く。
-  // これにより梁端が隣の壁／壁梁に沿って切られ、入隅の隙間・出角の重なり・斜め角での突き出しが解消する。
-  // 自由梁(wallIndex 未設定)は従来どおり箱（下の boxGeometry）で描画する。
+  // 梁端が隣の壁／壁梁に沿って切られ、入隅の隙間・出角の重なり・斜め角での突き出しが解消する。
   const wallBeamPrism = useMemo(() => {
     if (!isWallBeam || beam.wallIndex === undefined || !polygonMm || polygonMm.length < 3) return null;
     const corners = getWallBeamBandCornersMm(polygonMm, widthByWallIndex ?? new Map(), beam.wallIndex);
     if (!corners) return null;
-    const topY = by + heightM / 2;
-    const botY = by - heightM / 2;
-    const toXZ = (p: Point): [number, number] => [(p.x - centerMm.x) / MM_PER_METER, (p.y - centerMm.y) / MM_PER_METER];
-    const [x1, z1] = toXZ(corners.c1);
-    const [x2, z2] = toXZ(corners.c2);
-    const [x3, z3] = toXZ(corners.c3);
-    const [x4, z4] = toXZ(corners.c4);
-    if (![x1, z1, x2, z2, x3, z3, x4, z4, topY, botY].every(Number.isFinite)) return null;
-    // c1=壁p1(外側) c2=壁p2(外側) c3=p2内側(マイター) c4=p1内側(マイター)
-    const T1 = [x1, topY, z1], T2 = [x2, topY, z2], T3 = [x3, topY, z3], T4 = [x4, topY, z4];
-    const B1 = [x1, botY, z1], B2 = [x2, botY, z2], B3 = [x3, botY, z3], B4 = [x4, botY, z4];
-    const pos: number[] = [];
-    const quad = (a: number[], b: number[], c: number[], d: number[]) => { pos.push(...a, ...b, ...c, ...a, ...c, ...d); };
-    quad(T1, T2, T3, T4); // 天面
-    quad(B4, B3, B2, B1); // 底面（室内から見上げる主要面）
-    quad(B1, B2, T2, T1); // 外側面（壁沿い）
-    quad(B2, B3, T3, T2); // 端面(p2側)
-    quad(B3, B4, T4, T3); // 内側面（室内向き）
-    quad(B4, B1, T1, T4); // 端面(p1側)
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-    geo.computeVertexNormals();
-    return geo;
+    return buildBeamBandPrism(corners, centerMm, by + heightM / 2, by - heightM / 2);
   }, [isWallBeam, beam.wallIndex, polygonMm, widthByWallIndex, by, heightM, centerMm]);
-  // 角柱ジオメトリは手動生成のため、差し替え／アンマウント時に明示的に破棄してリークを防ぐ。
   useEffect(() => () => { wallBeamPrism?.dispose(); }, [wallBeamPrism]);
 
-  const usePrism = isWallBeam && !!wallBeamPrism;
+  // 自由梁の端を壁線に沿って切った角柱（2D と同じ freeBeamWallMiterCornersMm）。両端が壁面と
+  // 面一になり、斜めの壁での突き出し/隙間が解消する。ドラッグ中はライブのスケール表現（箱）に
+  // 切り替えるため、idle 時のみ角柱で描画する。
+  const freeBeamPrism = useMemo(() => {
+    if (isWallBeam || !polygonMm || polygonMm.length < 3) return null;
+    const corners = freeBeamWallMiterCornersMm(polygonMm, true, beam.cx, beam.cy, beam.angleDeg, beam.widthMm);
+    if (!corners) return null;
+    return buildBeamBandPrism(corners, centerMm, by + heightM / 2, by - heightM / 2);
+  }, [isWallBeam, polygonMm, beam.cx, beam.cy, beam.angleDeg, beam.widthMm, by, heightM, centerMm]);
+  useEffect(() => () => { freeBeamPrism?.dispose(); }, [freeBeamPrism]);
+
+  // 壁梁: 常に角柱。自由梁: idle 時のみ角柱（ドラッグ中は箱＋Xスケールでライブ表現）。
+  const activePrism = isWallBeam ? wallBeamPrism : isDragging ? null : freeBeamPrism;
+  const usePrism = !!activePrism;
+  usePrismRef.current = usePrism;
 
   return (
     <group>
@@ -268,7 +300,7 @@ const Beam3DMesh: React.FC<{
         name={`Beam_${beam.id}`}
         position={usePrism ? [0, 0, 0] : [bx, by, bz]}
         rotation={usePrism ? [0, 0, 0] : [0, -angleRad, 0]}
-        geometry={usePrism ? wallBeamPrism : undefined}
+        geometry={usePrism ? activePrism : undefined}
         castShadow
         receiveShadow
         onPointerDown={startMove}

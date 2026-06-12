@@ -8,6 +8,7 @@ import {
   getRoomTransform,
   getWallSegment,
   getWallBeamBandCornersMm,
+  freeBeamWallMiterCornersMm,
   polygonCentroidMm,
   computeWallToWallSpan,
   lerpPoint,
@@ -2205,11 +2206,23 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               c4 = { x: ax + px * beam.widthMm, y: ay + py * beam.widthMm };
             }
           } else {
-            const wh = beam.widthMm / 2;
-            c1 = { x: ax + px * wh, y: ay + py * wh };
-            c2 = { x: bx2 + px * wh, y: by2 + py * wh };
-            c3 = { x: bx2 - px * wh, y: by2 - py * wh };
-            c4 = { x: ax - px * wh, y: ay - py * wh };
+            // 自由梁: 両端を壁線に沿って切る（壁⇔壁を張る梁の端面を壁と面一にし、斜め壁での突き出し/隙間を解消）。
+            const mitered = isClosedRef.current
+              ? freeBeamWallMiterCornersMm(pointsMm, true, cx, cy, angleDeg, beam.widthMm)
+              : null;
+            if (mitered) {
+              c1 = mitered.c1;
+              c2 = mitered.c2;
+              c3 = mitered.c3;
+              c4 = mitered.c4;
+            } else {
+              // 壁に張らない/開いた図形ではフォールバックで従来の矩形（直角キャップ）。
+              const wh = beam.widthMm / 2;
+              c1 = { x: ax + px * wh, y: ay + py * wh };
+              c2 = { x: bx2 + px * wh, y: by2 + py * wh };
+              c3 = { x: bx2 - px * wh, y: by2 - py * wh };
+              c4 = { x: ax - px * wh, y: ay - py * wh };
+            }
           }
           const s1 = worldToScreen(c1);
           const s2 = worldToScreen(c2);

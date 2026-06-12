@@ -21,6 +21,7 @@ import {
   polygonCentroidMm,
   resolveDoorSwing3D,
   computeWallToWallSpan,
+  freeBeamWallMiterCornersMm,
 } from './sketchTransform.js';
 import type { Point } from '../types.js';
 
@@ -284,6 +285,75 @@ describe('computeWallToWallSpan (260612 free-beam wall-to-wall, shared 2D/3D)', 
   it('returns null when a ray does not hit walls on both sides (open polyline)', () => {
     const line: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }];
     expect(computeWallToWallSpan(line, false, 500, 500, 0)).toBeNull();
+  });
+
+  it('reports the hit edges for each ray direction', () => {
+    const s = computeWallToWallSpan(square, true, 500, 500, 0); // horizontal beam
+    // +X → right wall (1000,0)-(1000,1000); -X → left wall (0,1000)-(0,0)
+    expect(s!.posEdge).not.toBeNull();
+    expect(s!.negEdge).not.toBeNull();
+    expect(s!.posEdge!.ax).toBeCloseTo(1000);
+    expect(s!.posEdge!.bx).toBeCloseTo(1000);
+    expect(s!.negEdge!.ax).toBeCloseTo(0);
+    expect(s!.negEdge!.bx).toBeCloseTo(0);
+  });
+});
+
+describe('freeBeamWallMiterCornersMm (free-beam ends cut flush to walls)', () => {
+  it('cuts both ends flush to the VERTICAL side walls (beam at 30°)', () => {
+    const room: Point[] = [
+      { x: 0, y: 0 },
+      { x: 4000, y: 0 },
+      { x: 4000, y: 3000 },
+      { x: 0, y: 3000 },
+    ];
+    // 中心(2000,1500)、30°、幅200。+方向→右壁(x=4000)、−方向→左壁(x=0)。
+    const c = freeBeamWallMiterCornersMm(room, true, 2000, 1500, 30, 200);
+    expect(c).not.toBeNull();
+    // +端の2隅は右壁(x=4000)上＝端面が壁と面一（直角キャップの突き出しが無い）。
+    expect(c!.c1.x).toBeCloseTo(4000);
+    expect(c!.c2.x).toBeCloseTo(4000);
+    // −端の2隅は左壁(x=0)上。
+    expect(c!.c3.x).toBeCloseTo(0);
+    expect(c!.c4.x).toBeCloseTo(0);
+  });
+
+  it('cuts both ends flush to the HORIZONTAL top/bottom walls (steep beam at 60°)', () => {
+    const room: Point[] = [
+      { x: 0, y: 0 },
+      { x: 4000, y: 0 },
+      { x: 4000, y: 4000 },
+      { x: 0, y: 4000 },
+    ];
+    const c = freeBeamWallMiterCornersMm(room, true, 2000, 2000, 60, 200);
+    expect(c).not.toBeNull();
+    // +端は上壁(y=4000)、−端は下壁(y=0)に面一。
+    expect(c!.c1.y).toBeCloseTo(4000);
+    expect(c!.c2.y).toBeCloseTo(4000);
+    expect(c!.c3.y).toBeCloseTo(0);
+    expect(c!.c4.y).toBeCloseTo(0);
+    // 端が壁に沿って切られても梁幅は保たれる（中心線方向で測る投影幅 ≒ 200）。
+    const dirx = Math.cos((60 * Math.PI) / 180), diry = Math.sin((60 * Math.PI) / 180);
+    const perpProj = Math.abs((c!.c1.x - c!.c2.x) * -diry + (c!.c1.y - c!.c2.y) * dirx);
+    expect(perpProj).toBeCloseTo(200);
+  });
+
+  it('falls back to null for an open polyline (no wall-to-wall span)', () => {
+    const line: Point[] = [{ x: 0, y: 0 }, { x: 1000, y: 0 }];
+    expect(freeBeamWallMiterCornersMm(line, false, 500, 500, 30, 200)).toBeNull();
+  });
+
+  it('falls back to null (no spike) when the beam grazes the wall it ends at (~3°)', () => {
+    // 細長い部屋。ほぼ水平(3°)の梁が水平な上下壁に極浅角で当たる → マイターが暴れるため矩形へ。
+    const longRoom: Point[] = [
+      { x: 0, y: 0 },
+      { x: 10000, y: 0 },
+      { x: 10000, y: 500 },
+      { x: 0, y: 500 },
+    ];
+    expect(freeBeamWallMiterCornersMm(longRoom, true, 4800, 250, 3, 300)).toBeNull();
+    // 同じ部屋でも素直な角度(45°)なら通常どおりマイターする（ガードが過剰でないこと）。
+    expect(freeBeamWallMiterCornersMm(longRoom, true, 4800, 250, 45, 300)).not.toBeNull();
   });
 });
 

@@ -230,13 +230,21 @@ export const resolveDoorSwing3D = (
  * 閉じていない/どちらかの方向で壁に当たらない場合は null（呼び出し側で自由移動にフォールバック）。
  * すべて mm 空間（points も cx/cy も mm）。2Dスケッチと3Dビューで共有する（260612）。
  */
+/** レイが当たった壁エッジ（線分の両端 mm）。梁端のマイター接合に使う。 */
+export interface SpanHitEdge {
+  ax: number;
+  ay: number;
+  bx: number;
+  by: number;
+}
+
 export const computeWallToWallSpan = (
   points: Point[],
   closed: boolean,
   cx: number,
   cy: number,
   angleDeg: number,
-): { cx: number; cy: number; lengthMm: number } | null => {
+): { cx: number; cy: number; lengthMm: number; posEdge: SpanHitEdge | null; negEdge: SpanHitEdge | null } | null => {
   if (points.length < 2) return null;
   const rad = (angleDeg * Math.PI) / 180;
   const ux = Math.cos(rad);
@@ -244,6 +252,8 @@ export const computeWallToWallSpan = (
   const edgeCount = closed ? points.length : points.length - 1;
   let tPos = Infinity;
   let tNeg = Infinity;
+  let posEdge: SpanHitEdge | null = null;
+  let negEdge: SpanHitEdge | null = null;
   for (let i = 0; i < edgeCount; i++) {
     const a = points[i];
     const b = points[(i + 1) % points.length];
@@ -256,14 +266,65 @@ export const computeWallToWallSpan = (
     const t = (rx * ey - ry * ex) / denom; // レイ上の符号付き距離
     const s = (rx * uy - ry * ux) / denom; // エッジ上の媒介変数（0..1で線分内）
     if (s < -1e-6 || s > 1 + 1e-6) continue;
-    if (t > 1e-6) tPos = Math.min(tPos, t);
-    else if (t < -1e-6) tNeg = Math.min(tNeg, -t);
+    // 各方向で最も近い壁エッジを採用（マイター接合のため当たった辺も記録）。
+    if (t > 1e-6) {
+      if (t < tPos) { tPos = t; posEdge = { ax: a.x, ay: a.y, bx: b.x, by: b.y }; }
+    } else if (t < -1e-6) {
+      if (-t < tNeg) { tNeg = -t; negEdge = { ax: a.x, ay: a.y, bx: b.x, by: b.y }; }
+    }
   }
   if (!Number.isFinite(tPos) || !Number.isFinite(tNeg)) return null;
   const lengthMm = tPos + tNeg;
   if (lengthMm < 1) return null;
   const midOffset = (tPos - tNeg) / 2;
-  return { cx: cx + ux * midOffset, cy: cy + uy * midOffset, lengthMm };
+  return { cx: cx + ux * midOffset, cy: cy + uy * midOffset, lengthMm, posEdge, negEdge };
+};
+
+/**
+ * 自由梁の四隅(mm)を、両端が当たった壁線に沿って切った（マイターした）形で返す。
+ * 梁の2本の側辺（中心線±幅/2）を、±方向のレイが当たった壁エッジの直線と交差させる。
+ * これにより梁端が壁面と面一になり、斜めの壁での突き出し/隙間（square cap の overshoot）を解消する。
+ * 壁⇔壁に張らない（どちらかでヒット無し）場合は null（呼び出し側は従来の矩形にフォールバック）。
+ * すべて mm 空間。2Dスケッチと3Dビューで共有。
+ */
+export const freeBeamWallMiterCornersMm = (
+  points: Point[],
+  closed: boolean,
+  cx: number,
+  cy: number,
+  angleDeg: number,
+  widthMm: number,
+): BeamBandCorners | null => {
+  const span = computeWallToWallSpan(points, closed, cx, cy, angleDeg);
+  if (!span || !span.posEdge || !span.negEdge) return null;
+  const rad = (angleDeg * Math.PI) / 180;
+  const dir = { x: Math.cos(rad), y: Math.sin(rad) };
+  const perp = { x: -dir.y, y: dir.x };
+  const hw = widthMm / 2;
+  // 梁が当たり壁とほぼ平行（grazing）だと、側辺と壁線の交点が中心線交点から遠く離れ「スパイク」状の
+  // 端になる。|sin(梁と壁のなす角)| が小さい端があれば矩形へフォールバック（端は最大 ~hw/0.15≈6.7hw に抑制）。
+  const grazes = (e: SpanHitEdge): boolean => {
+    const ex = e.bx - e.ax, ey = e.by - e.ay;
+    const elen = Math.hypot(ex, ey) || 1;
+    return Math.abs(dir.x * (ey / elen) - dir.y * (ex / elen)) < 0.15;
+  };
+  if (grazes(span.posEdge) || grazes(span.negEdge)) return null;
+  // 元の中心線（cx,cy）から幅方向に±hw ずらした2本の側辺の通過点。中心は寄せ直さない
+  // （描画と保存 cx/cy の食い違いを避けるため。長さは壁線との交点で自然に壁⇔壁になる）。
+  const s1p = { x: cx + perp.x * hw, y: cy + perp.y * hw };
+  const s2p = { x: cx - perp.x * hw, y: cy - perp.y * hw };
+  const posA = { x: span.posEdge.ax, y: span.posEdge.ay };
+  const posDir = { x: span.posEdge.bx - span.posEdge.ax, y: span.posEdge.by - span.posEdge.ay };
+  const negA = { x: span.negEdge.ax, y: span.negEdge.ay };
+  const negDir = { x: span.negEdge.bx - span.negEdge.ax, y: span.negEdge.by - span.negEdge.ay };
+  // +端（posEdge 上）と −端（negEdge 上）で、各側辺と壁線の交点を求める。
+  const cp1 = intersectLines2D(s1p, dir, posA, posDir);
+  const cp2 = intersectLines2D(s2p, dir, posA, posDir);
+  const cn2 = intersectLines2D(s2p, dir, negA, negDir);
+  const cn1 = intersectLines2D(s1p, dir, negA, negDir);
+  if (!cp1 || !cp2 || !cn2 || !cn1) return null;
+  // 周回順: c1(+端/側1)→c2(+端/側2)→c3(−端/側2)→c4(−端/側1)
+  return { c1: cp1, c2: cp2, c3: cn2, c4: cn1 };
 };
 
 export const getRoomTransform = (scaledPoints: Point[]): RoomTransformResult => {
