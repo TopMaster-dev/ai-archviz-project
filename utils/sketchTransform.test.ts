@@ -18,6 +18,7 @@ import {
   yawToSketchRotation,
   intersectLines2D,
   getWallBeamBandCornersMm,
+  polygonCentroidMm,
   resolveDoorSwing3D,
   computeWallToWallSpan,
 } from './sketchTransform.js';
@@ -151,7 +152,7 @@ describe('wall-beam corner miter (260611 #2b)', () => {
   });
 
   it('miters the inner corners against neighbouring wall-beams (square room)', () => {
-    // 1000mm 角の閉ポリゴン、4辺すべてに幅100mmの壁梁。重心(500,500)。
+    // 1000mm 角の閉ポリゴン、4辺すべてに幅100mmの壁梁。
     const square: Point[] = [
       { x: 0, y: 0 },
       { x: 1000, y: 0 },
@@ -164,7 +165,7 @@ describe('wall-beam corner miter (260611 #2b)', () => {
       [2, 100],
       [3, 100],
     ]);
-    const corners = getWallBeamBandCornersMm(square, widths, 0, { x: 500, y: 500 });
+    const corners = getWallBeamBandCornersMm(square, widths, 0);
     expect(corners).not.toBeNull();
     // 外側は壁芯の頂点
     expect(corners!.c1).toEqual({ x: 0, y: 0 });
@@ -176,18 +177,77 @@ describe('wall-beam corner miter (260611 #2b)', () => {
     expect(corners!.c3.y).toBeCloseTo(100);
   });
 
-  it('falls back to a square cap when a neighbour has no beam', () => {
+  it('at right-angle corners the wall-miter equals the straight inner offset (no neighbour beam)', () => {
     const square: Point[] = [
       { x: 0, y: 0 },
       { x: 1000, y: 0 },
       { x: 1000, y: 1000 },
       { x: 0, y: 1000 },
     ];
-    // only edge 0 has a beam → both ends square-capped at the straight inner offset (y=100)
+    // only edge 0 has a beam → ends meet the perpendicular neighbour walls at the straight inner offset (y=100)
     const widths = new Map([[0, 100]]);
-    const corners = getWallBeamBandCornersMm(square, widths, 0, { x: 500, y: 500 });
+    const corners = getWallBeamBandCornersMm(square, widths, 0);
     expect(corners!.c4).toEqual({ x: 0, y: 100 });
     expect(corners!.c3).toEqual({ x: 1000, y: 100 });
+  });
+
+  it('miters the end against a SLANTED neighbour wall even with no neighbour beam (3D corner fix)', () => {
+    // 直角三角形。edge0(底辺,+X)に幅100の壁梁。edge1(斜辺,45°)・edge2(左辺,垂直)は梁なし。
+    const tri: Point[] = [
+      { x: 0, y: 0 },
+      { x: 1000, y: 0 },
+      { x: 0, y: 1000 },
+    ];
+    const widths = new Map([[0, 100]]);
+    const corners = getWallBeamBandCornersMm(tri, widths, 0);
+    expect(corners).not.toBeNull();
+    // 外側は壁芯の頂点
+    expect(corners!.c1).toEqual({ x: 0, y: 0 });
+    expect(corners!.c2).toEqual({ x: 1000, y: 0 });
+    // p1側の隣(左辺)は垂直 → 直角キャップと同じ
+    expect(corners!.c4.x).toBeCloseTo(0);
+    expect(corners!.c4.y).toBeCloseTo(100);
+    // p2側の隣(斜辺45°)に沿って端が切られる → 内側角は (900,100)（突き出し解消）
+    expect(corners!.c3.x).toBeCloseTo(900);
+    expect(corners!.c3.y).toBeCloseTo(100);
+  });
+
+  it('keeps the band on the INTERIOR side for a concave room (area centroid lies outside)', () => {
+    // 細いL字。面積重心(≈932,932)はポリゴン外（欠き込み内）。重心ベースの内外判定だとバンドが
+    // 外側へ反転するが、各辺ローカル判定なら正しく室内側へ出る。
+    const L: Point[] = [
+      { x: 0, y: 0 },
+      { x: 3000, y: 0 },
+      { x: 3000, y: 500 },
+      { x: 500, y: 500 },
+      { x: 500, y: 3000 },
+      { x: 0, y: 3000 },
+    ];
+    // 念のため重心が外であることを確認（このテストの前提）。
+    const c = polygonCentroidMm(L)!;
+    expect(pointInPolygon(c, L)).toBe(false);
+    // edge2 = (3000,500)->(500,500): 室内は y<500 側。幅100の壁梁。
+    const widths = new Map([[2, 100]]);
+    const corners = getWallBeamBandCornersMm(L, widths, 2);
+    expect(corners).not.toBeNull();
+    // 内側バンドは下(y=400)。旧・重心判定では上(y=600)へ誤って出る。
+    expect(corners!.c4.y).toBeCloseTo(400);
+    expect(corners!.c3.y).toBeCloseTo(400);
+  });
+});
+
+describe('polygonCentroidMm', () => {
+  it('returns the area centroid of a square and null for degenerate input', () => {
+    const square: Point[] = [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+      { x: 100, y: 100 },
+      { x: 0, y: 100 },
+    ];
+    const c = polygonCentroidMm(square);
+    expect(c!.x).toBeCloseTo(50);
+    expect(c!.y).toBeCloseTo(50);
+    expect(polygonCentroidMm([{ x: 0, y: 0 }, { x: 1, y: 1 }])).toBeNull();
   });
 });
 

@@ -8,6 +8,7 @@ import {
   getRoomTransform,
   getWallSegment,
   getWallBeamBandCornersMm,
+  polygonCentroidMm,
   computeWallToWallSpan,
   lerpPoint,
   getWallAngle2D,
@@ -117,22 +118,6 @@ function truncateFurnitureLabel(text: string, maxChars = MAX_FURNITURE_LABEL_CHA
   if (!src) return '';
   if (src.length <= maxChars) return src;
   return `${src.slice(0, Math.max(1, maxChars - 1))}…`;
-}
-
-function polygonCentroidMm(points: Point[]): Point | null {
-  if (points.length < 3) return null;
-  let twiceA = 0;
-  let cx = 0;
-  let cy = 0;
-  for (let i = 0; i < points.length; i++) {
-    const j = (i + 1) % points.length;
-    const cross = points[i].x * points[j].y - points[j].x * points[i].y;
-    twiceA += cross;
-    cx += (points[i].x + points[j].x) * cross;
-    cy += (points[i].y + points[j].y) * cross;
-  }
-  if (Math.abs(twiceA) < 1e-9) return null;
-  return { x: cx / (3 * twiceA), y: cy / (3 * twiceA) };
 }
 
 /** 家具回転 UI：二重弧＋矢印。左側弧・矢印のみ Y 軸で反転。描画半径は ringR。 */
@@ -2200,8 +2185,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           let c1, c2, c3, c4;
           if (isWallBeam) {
             // 室内側（重心方向）へ widthMm のバンド。隣接壁梁とマイター接合し入隅の隙間/出角の重なりを解消（2b）。
-            const mitered = beamCentroid
-              ? getWallBeamBandCornersMm(pointsMm, wallBeamWidths, beam.wallIndex as number, beamCentroid)
+            const mitered = pointsMm.length >= 3
+              ? getWallBeamBandCornersMm(pointsMm, wallBeamWidths, beam.wallIndex as number)
               : null;
             if (mitered) {
               c1 = mitered.c1;

@@ -51,8 +51,13 @@ export const intersectLines2D = (a0: Point, aDir: Point, b0: Point, bDir: Point)
   return p;
 };
 
-/** エッジ p1->p2 の、重心側（室内側）を向く単位法線。 */
-const inwardUnitNormal = (p1: Point, p2: Point, centroid: Point): Point => {
+/**
+ * エッジ p1->p2 の、室内側（ポリゴン内部側）を向く単位法線。
+ * 「辺の中点から法線方向へ微小に進めた点がポリゴン内部か」を pointInPolygon で各辺ローカルに判定する。
+ * 面積重心との内積で判定する方式は、凹多角形（L字・階段欠き込み等）で重心がポリゴン外に出ると
+ * 一部の辺で内外が反転するため採用しない（重心非依存・凹形状でも各辺で正しく内側を向く）。
+ */
+const inwardUnitNormal = (p1: Point, p2: Point, polygon: Point[]): Point => {
   const dx = p2.x - p1.x;
   const dy = p2.y - p1.y;
   const len = Math.hypot(dx, dy) || 1;
@@ -60,11 +65,30 @@ const inwardUnitNormal = (p1: Point, p2: Point, centroid: Point): Point => {
   let ny = dx / len;
   const mx = (p1.x + p2.x) / 2;
   const my = (p1.y + p2.y) / 2;
-  if (nx * (centroid.x - mx) + ny * (centroid.y - my) < 0) {
+  // 辺中点から法線方向へごく僅か（辺長の0.1%、最小0.01mm）進めた点が内部なら内側。なければ反転。
+  const eps = Math.max(len * 0.001, 0.01);
+  if (!pointInPolygon({ x: mx + nx * eps, y: my + ny * eps }, polygon)) {
     nx = -nx;
     ny = -ny;
   }
   return { x: nx, y: ny };
+};
+
+/** 閉ポリゴン（mm）の面積重心。3頂点未満／縮退時は null。2D/3D の壁梁マイターで共有。 */
+export const polygonCentroidMm = (points: Point[]): Point | null => {
+  if (points.length < 3) return null;
+  let twiceA = 0;
+  let cx = 0;
+  let cy = 0;
+  for (let i = 0; i < points.length; i++) {
+    const j = (i + 1) % points.length;
+    const cross = points[i].x * points[j].y - points[j].x * points[i].y;
+    twiceA += cross;
+    cx += (points[i].x + points[j].x) * cross;
+    cy += (points[i].y + points[j].y) * cross;
+  }
+  if (Math.abs(twiceA) < 1e-9) return null;
+  return { x: cx / (3 * twiceA), y: cy / (3 * twiceA) };
 };
 
 export interface BeamBandCorners {
@@ -80,23 +104,23 @@ export interface BeamBandCorners {
  * 入隅では隙間、出角では重なりが生じる「直角キャップ」を、隣接エッジの内側オフセット線との
  * 交点で接合して解消する。隣接エッジに壁梁が無い／交点が求まらない場合は直角キャップにフォールバック。
  *
+ * 内側方向は points から各辺ローカルに判定するため、凹多角形でも正しく室内側にバンドを置く。
+ *
  * @param points     スケッチ頂点（mm, 閉ポリゴン）
  * @param widthByWallIndex 壁梁が乗っているエッジ index → そのバンド幅(mm)
  * @param wallIndex  対象の壁梁のエッジ index
- * @param centroid   ポリゴン重心(mm)。内側方向の判定に使う。
  */
 export const getWallBeamBandCornersMm = (
   points: Point[],
   widthByWallIndex: Map<number, number>,
   wallIndex: number,
-  centroid: Point,
 ): BeamBandCorners | null => {
   const n = points.length;
   if (n < 2) return null;
   const seg = getWallSegment(points, wallIndex);
   if (!seg) return null;
   const width = widthByWallIndex.get(wallIndex) ?? 0;
-  const nThis = inwardUnitNormal(seg.p1, seg.p2, centroid);
+  const nThis = inwardUnitNormal(seg.p1, seg.p2, points);
   const dirThis = { x: seg.dx, y: seg.dy };
   // このエッジの内側オフセット線上の通過点（p1側・p2側）
   const inA: Point = { x: seg.p1.x + nThis.x * width, y: seg.p1.y + nThis.y * width };
@@ -105,24 +129,26 @@ export const getWallBeamBandCornersMm = (
   let c4: Point = inA; // p1内側（既定=直角キャップ）
   let c3: Point = inB; // p2内側（既定=直角キャップ）
 
-  // 開始頂点 point[wallIndex] を共有する前エッジ (wallIndex-1) とマイター
+  // 開始頂点 point[wallIndex] を共有する前エッジ (wallIndex-1) とマイター。
+  // 隣に壁梁があればその内側オフセット線、無ければ壁芯線(オフセット0)と接合する。
+  // → 隣に梁が無い角でも、梁端が隣の壁面に沿って切られ、突き出し/隙間が出ない（2D/3D共通）。
   const prevIdx = (wallIndex - 1 + n) % n;
-  if (prevIdx !== wallIndex && widthByWallIndex.has(prevIdx)) {
+  if (prevIdx !== wallIndex) {
     const prev = getWallSegment(points, prevIdx);
     if (prev) {
-      const nPrev = inwardUnitNormal(prev.p1, prev.p2, centroid);
+      const nPrev = inwardUnitNormal(prev.p1, prev.p2, points);
       const wPrev = widthByWallIndex.get(prevIdx) ?? 0;
       const prevInner: Point = { x: prev.p1.x + nPrev.x * wPrev, y: prev.p1.y + nPrev.y * wPrev };
       const m = intersectLines2D(inA, dirThis, prevInner, { x: prev.dx, y: prev.dy });
       if (m) c4 = m;
     }
   }
-  // 終了頂点 point[(wallIndex+1)%n] を共有する次エッジ (wallIndex+1) とマイター
+  // 終了頂点 point[(wallIndex+1)%n] を共有する次エッジ (wallIndex+1) とマイター（前エッジと同様）。
   const nextIdx = (wallIndex + 1) % n;
-  if (nextIdx !== wallIndex && widthByWallIndex.has(nextIdx)) {
+  if (nextIdx !== wallIndex) {
     const next = getWallSegment(points, nextIdx);
     if (next) {
-      const nNext = inwardUnitNormal(next.p1, next.p2, centroid);
+      const nNext = inwardUnitNormal(next.p1, next.p2, points);
       const wNext = widthByWallIndex.get(nextIdx) ?? 0;
       const nextInner: Point = { x: next.p1.x + nNext.x * wNext, y: next.p1.y + nNext.y * wNext };
       const m = intersectLines2D(inB, dirThis, nextInner, { x: next.dx, y: next.dy });

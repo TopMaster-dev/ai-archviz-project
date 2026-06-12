@@ -34,7 +34,8 @@ import {
   getEffectiveOpeningWidthMm,
   MM_PER_METER,
   clampFurnitureItemToRoom,
-  computeWallToWallSpan
+  computeWallToWallSpan,
+  getWallBeamBandCornersMm
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
@@ -69,7 +70,9 @@ const Beam3DMesh: React.FC<{
   materialSettings?: any;
   captureStep?: any;
   onHoverNameChange?: (name: string | null) => void;
-}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep, onHoverNameChange }) => {
+  /** 壁梁が乗っているエッジ index → バンド幅(mm)。コーナーのマイター接合に使う（2D と共有）。 */
+  widthByWallIndex?: Map<number, number>;
+}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep, onHoverNameChange, widthByWallIndex }) => {
   const boxRef = useRef<THREE.Mesh>(null);
   const handleRef = useRef<THREE.Mesh>(null);
   const { camera, gl } = useThree();
@@ -221,13 +224,51 @@ const Beam3DMesh: React.FC<{
     onDragStart?.();
   };
 
+  // 壁梁のコーナー接合（2b の 3D 版）。2D と同じ getWallBeamBandCornersMm でマイターした
+  // 室内側バンドの四隅を、天井(by+h/2)から下端(by-h/2)まで押し出した角柱として描く。
+  // これにより梁端が隣の壁／壁梁に沿って切られ、入隅の隙間・出角の重なり・斜め角での突き出しが解消する。
+  // 自由梁(wallIndex 未設定)は従来どおり箱（下の boxGeometry）で描画する。
+  const wallBeamPrism = useMemo(() => {
+    if (!isWallBeam || beam.wallIndex === undefined || !polygonMm || polygonMm.length < 3) return null;
+    const corners = getWallBeamBandCornersMm(polygonMm, widthByWallIndex ?? new Map(), beam.wallIndex);
+    if (!corners) return null;
+    const topY = by + heightM / 2;
+    const botY = by - heightM / 2;
+    const toXZ = (p: Point): [number, number] => [(p.x - centerMm.x) / MM_PER_METER, (p.y - centerMm.y) / MM_PER_METER];
+    const [x1, z1] = toXZ(corners.c1);
+    const [x2, z2] = toXZ(corners.c2);
+    const [x3, z3] = toXZ(corners.c3);
+    const [x4, z4] = toXZ(corners.c4);
+    if (![x1, z1, x2, z2, x3, z3, x4, z4, topY, botY].every(Number.isFinite)) return null;
+    // c1=壁p1(外側) c2=壁p2(外側) c3=p2内側(マイター) c4=p1内側(マイター)
+    const T1 = [x1, topY, z1], T2 = [x2, topY, z2], T3 = [x3, topY, z3], T4 = [x4, topY, z4];
+    const B1 = [x1, botY, z1], B2 = [x2, botY, z2], B3 = [x3, botY, z3], B4 = [x4, botY, z4];
+    const pos: number[] = [];
+    const quad = (a: number[], b: number[], c: number[], d: number[]) => { pos.push(...a, ...b, ...c, ...a, ...c, ...d); };
+    quad(T1, T2, T3, T4); // 天面
+    quad(B4, B3, B2, B1); // 底面（室内から見上げる主要面）
+    quad(B1, B2, T2, T1); // 外側面（壁沿い）
+    quad(B2, B3, T3, T2); // 端面(p2側)
+    quad(B3, B4, T4, T3); // 内側面（室内向き）
+    quad(B4, B1, T1, T4); // 端面(p1側)
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.computeVertexNormals();
+    return geo;
+  }, [isWallBeam, beam.wallIndex, polygonMm, widthByWallIndex, by, heightM, centerMm]);
+  // 角柱ジオメトリは手動生成のため、差し替え／アンマウント時に明示的に破棄してリークを防ぐ。
+  useEffect(() => () => { wallBeamPrism?.dispose(); }, [wallBeamPrism]);
+
+  const usePrism = isWallBeam && !!wallBeamPrism;
+
   return (
     <group>
       <mesh
         ref={boxRef}
         name={`Beam_${beam.id}`}
-        position={[bx, by, bz]}
-        rotation={[0, -angleRad, 0]}
+        position={usePrism ? [0, 0, 0] : [bx, by, bz]}
+        rotation={usePrism ? [0, 0, 0] : [0, -angleRad, 0]}
+        geometry={usePrism ? wallBeamPrism : undefined}
         castShadow
         receiveShadow
         onPointerDown={startMove}
@@ -235,14 +276,14 @@ const Beam3DMesh: React.FC<{
         onPointerOver={(e) => { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); }}
         onPointerOut={() => onHoverNameChange?.(null)}
       >
-        <boxGeometry args={[lengthM, heightM, widthM]} />
+        {!usePrism && <boxGeometry args={[lengthM, heightM, widthM]} />}
         {selections && selections[`Beam_${beam.id}`] ? (
-          <Suspense fallback={<meshStandardMaterial color={DEFAULT_SURFACE_COLOR} />}>
-            <DynamicMaterial product={selections[`Beam_${beam.id}`]} captureStep={captureStep} meshRef={boxRef} materialSettings={materialSettings} surfaceWidthM={lengthM} surfaceHeightM={heightM} />
+          <Suspense fallback={<meshStandardMaterial color={DEFAULT_SURFACE_COLOR} side={usePrism ? THREE.DoubleSide : THREE.FrontSide} />}>
+            <DynamicMaterial product={selections[`Beam_${beam.id}`]} captureStep={captureStep} meshRef={boxRef} materialSettings={materialSettings} surfaceWidthM={lengthM} surfaceHeightM={heightM} doubleSided={usePrism} />
           </Suspense>
         ) : (
           // 2c: 未割当の梁は壁・天井と同じ既定色。選択/ホバーは OutlinePass で表示（2d）するため色は変えない。
-          <meshStandardMaterial color={DEFAULT_SURFACE_COLOR} roughness={0.8} metalness={0.05} />
+          <meshStandardMaterial color={DEFAULT_SURFACE_COLOR} roughness={0.8} metalness={0.05} side={usePrism ? THREE.DoubleSide : THREE.FrontSide} />
         )}
       </mesh>
       {isSelected && !isWallBeam && editable && (
@@ -294,6 +335,16 @@ function Beams3D({
   captureStep?: any;
   onHoverNameChange?: (name: string | null) => void;
 }) {
+  // 2b(3D): 壁梁のコーナー接合用に「壁梁が乗っているエッジ index → バンド幅(mm)」を集計（2D と同形）。
+  // beams が変わった時だけ Map を作り直す。毎レンダーで新 Map 参照を子へ渡すと、子側の角柱
+  // useMemo（依存に widthByWallIndex）が毎回作り直され BufferGeometry を生成/破棄し続けるため。
+  const widthByWallIndex = useMemo(() => {
+    const m = new Map<number, number>();
+    for (const b of beams) {
+      if (b.wallIndex !== undefined) m.set(b.wallIndex, b.widthMm);
+    }
+    return m;
+  }, [beams]);
   if (!centerMm || beams.length === 0) return null;
   return (
     <group>
@@ -315,6 +366,7 @@ function Beams3D({
           materialSettings={materialSettings}
           captureStep={captureStep}
           onHoverNameChange={onHoverNameChange}
+          widthByWallIndex={widthByWallIndex}
         />
       ))}
     </group>
