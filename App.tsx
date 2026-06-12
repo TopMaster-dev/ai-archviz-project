@@ -3143,8 +3143,10 @@ const App: React.FC = () => {
                                             <DoorSwingControls
                                               swingFlipX={op.swingFlipX}
                                               swingFlipY={op.swingFlipY}
+                                              open={op.swingOpen}
                                               onToggleX={() => updateOpening({ swingFlipX: !op.swingFlipX })}
                                               onToggleY={() => updateOpening({ swingFlipY: !op.swingFlipY })}
+                                              onToggleOpen={() => updateOpening({ swingOpen: !op.swingOpen })}
                                             />
                                           </div>
                                         )}
@@ -3474,8 +3476,10 @@ const App: React.FC = () => {
                 <DoorSwingControls
                   swingFlipX={selDoor.swingFlipX}
                   swingFlipY={selDoor.swingFlipY}
+                  open={selDoor.swingOpen}
                   onToggleX={() => setOpenings((prev) => prev.map((o) => (o.id === selDoor.id ? { ...o, swingFlipX: !o.swingFlipX } : o)))}
                   onToggleY={() => setOpenings((prev) => prev.map((o) => (o.id === selDoor.id ? { ...o, swingFlipY: !o.swingFlipY } : o)))}
+                  onToggleOpen={() => setOpenings((prev) => prev.map((o) => (o.id === selDoor.id ? { ...o, swingOpen: !o.swingOpen } : o)))}
                 />
               </div>
             );

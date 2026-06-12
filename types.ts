@@ -99,6 +99,8 @@ export interface Opening {
   swingFlipX?: boolean;
   /** ドアの開く向き（内外）反転。未設定=室内側へ開く（描画方向に依存しない）。 */
   swingFlipY?: boolean;
+  /** ドアの開閉状態（3Dビューの見た目）。未設定/false=閉じた状態（既定）、true=開いた状態。 */
+  swingOpen?: boolean;
 }
 
 export interface RenderState {

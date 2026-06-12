@@ -6,13 +6,18 @@
 export function DoorSwingControls({
   swingFlipX,
   swingFlipY,
+  open,
   onToggleX,
   onToggleY,
+  onToggleOpen,
 }: {
   swingFlipX?: boolean;
   swingFlipY?: boolean;
+  /** 3Dでのドアの開閉状態（false/未設定=閉）。 */
+  open?: boolean;
   onToggleX: () => void;
   onToggleY: () => void;
+  onToggleOpen: () => void;
 }) {
   const btnClass = (active?: boolean) =>
     `flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${
@@ -22,14 +27,27 @@ export function DoorSwingControls({
     }`;
 
   return (
-    <div className="flex items-center gap-2 w-full min-w-0">
-      <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">向き</span>
-      <button type="button" onClick={onToggleX} className={btnClass(swingFlipX)} title="吊り元（左右）を反転">
-        左右反転
-      </button>
-      <button type="button" onClick={onToggleY} className={btnClass(swingFlipY)} title="開く向き（内外）を反転">
-        内外反転
-      </button>
+    <div className="flex flex-col gap-1.5 w-full min-w-0">
+      <div className="flex items-center gap-2 w-full min-w-0">
+        <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">向き</span>
+        <button type="button" onClick={onToggleX} className={btnClass(swingFlipX)} title="吊り元（左右）を反転">
+          左右反転
+        </button>
+        <button type="button" onClick={onToggleY} className={btnClass(swingFlipY)} title="開く向き（内外）を反転">
+          内外反転
+        </button>
+      </div>
+      <div className="flex items-center gap-2 w-full min-w-0">
+        <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">開閉</span>
+        <button
+          type="button"
+          onClick={onToggleOpen}
+          className={btnClass(open)}
+          title="3Dビューでのドアの開閉（既定は閉）"
+        >
+          {open ? '開いた状態' : '閉じた状態'}
+        </button>
+      </div>
     </div>
   );
 }

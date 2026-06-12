@@ -43,12 +43,22 @@ import {
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
 import { effectiveTextureShortEdgeMeters } from '../lib/materialPhysical.js';
+import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
   (THREE.BufferGeometry.prototype as any).computeBoundsTree = computeBoundsTree;
   (THREE.BufferGeometry.prototype as any).disposeBoundsTree = disposeBoundsTree;
-  (THREE.Mesh.prototype as any).raycast = acceleratedRaycast;
+  // BVH レイキャスト。ただし「非表示 group 配下」のメッシュはスキップする（R3F のイベント用直接
+  // レイキャストは親の visible を見ないため、カットアウェイ中の手前の壁がクリックを吸う問題を防ぐ）。
+  (THREE.Mesh.prototype as any).raycast = function (
+    this: THREE.Mesh,
+    raycaster: THREE.Raycaster,
+    intersects: THREE.Intersection[],
+  ) {
+    if (hasInvisibleAncestor(this)) return;
+    (acceleratedRaycast as any).call(this, raycaster, intersects);
+  };
 }
 
 /**
@@ -1804,6 +1814,7 @@ const DraggableOpening = ({
                 frameColor={doorFrameColor}
                 swingFlipX={op.swingFlipX}
                 swingFlipY={op.swingFlipY}
+                open={op.swingOpen}
                 isLocalPlusZIndoor={isLocalPlusZIndoor}
                 isAxisFlipped={isAxisFlipped}
               />

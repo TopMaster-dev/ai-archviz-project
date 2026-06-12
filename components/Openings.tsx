@@ -135,6 +135,8 @@ interface DoorProps extends OpeningProps {
   swingFlipX?: boolean;
   /** 開く内外（2D平面図の swingFlipY と連動） */
   swingFlipY?: boolean;
+  /** 開閉状態。false/未設定=閉（葉は枠面内）、true=開（OPEN_ANGLE 回転）。既定は閉。 */
+  open?: boolean;
   /** 壁ローカル +Z が室内側か（3D側で算出して渡す） */
   isLocalPlusZIndoor?: boolean;
   /** 壁ローカルXの反転（isCCW） */
@@ -151,6 +153,7 @@ export const ParametricDoor: React.FC<DoorProps> = ({
   handleColor = '#ffd700',
   swingFlipX,
   swingFlipY,
+  open = false,
   isLocalPlusZIndoor = true,
   isAxisFlipped = false,
 }) => {
@@ -207,7 +210,8 @@ export const ParametricDoor: React.FC<DoorProps> = ({
         // 開き戸: 吊り元と開き方向を2D平面図と連動させる（260611 Sec1）。
         const { hingeXSign, openZSign } = resolveDoorSwing3D(swingFlipX, swingFlipY, isLocalPlusZIndoor, isAxisFlipped);
         const OPEN_ANGLE = Math.PI / 2.6; // 約69°: 開き方向が分かる程度に開く
-        const beta = openZSign * hingeXSign * OPEN_ANGLE;
+        // 既定は閉（葉は枠面内）。open=true のときだけ OPEN_ANGLE まで開く。吊り元/開き向きは閉でも維持。
+        const beta = (open ? 1 : 0) * openZSign * hingeXSign * OPEN_ANGLE;
         const hingeX = hingeXSign * (w / 2);
         const handleX = -hingeXSign * (w - 0.1); // 自由端側
         return (
