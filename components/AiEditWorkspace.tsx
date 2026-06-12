@@ -121,6 +121,8 @@ type Props = {
   photoOnly?: boolean;
   /** 写真専用モードでホームへ戻る（オーバーレイが画面右上の「ホームに戻る」を覆うため自前で出す）。 */
   onExitToHome?: () => void;
+  /** ホームへ戻る処理（離脱時オートセーブ）の実行中。ボタンを無効化＆「保存中…」表示にする。 */
+  exitToHomeBusy?: boolean;
   /** 写真専用の空状態で、アップロードした写真をベース画像(v0)として登録する。 */
   onUploadBaseImage?: (dataUrl: string) => void;
 };
@@ -156,6 +158,7 @@ export function AiEditWorkspace({
   onEditSuccess,
   photoOnly = false,
   onExitToHome,
+  exitToHomeBusy = false,
   onUploadBaseImage,
 }: Props) {
   const [highResExportOpen, setHighResExportOpen] = useState(false);
@@ -277,10 +280,18 @@ export function AiEditWorkspace({
       <button
         type="button"
         onClick={onExitToHome}
+        disabled={exitToHomeBusy}
         title="ホームに戻る（プロジェクト一覧）"
-        className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-white/10 bg-black/40 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-white/80 shadow-xl backdrop-blur-md transition hover:text-white"
+        className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-white/10 bg-black/40 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-white/80 shadow-xl backdrop-blur-md transition hover:text-white disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:text-white/80"
       >
-        ← ホームに戻る
+        {exitToHomeBusy ? (
+          <>
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            保存中…
+          </>
+        ) : (
+          '← ホームに戻る'
+        )}
       </button>
     ) : (
       <ModeToggleBar

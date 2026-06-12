@@ -3747,6 +3747,7 @@ const App: React.FC = () => {
                         estimatePanel={activeKind === 'photo' ? null : renderEstimatePanel(true)}
                         photoOnly={activeKind === 'photo'}
                         onExitToHome={shellNav?.goHome}
+                        exitToHomeBusy={shellNav?.homeBusy}
                         onUploadBaseImage={(url) => aiEditSession.addVersionFromRender(url)}
                         onEditSuccess={(p) => {
                             aiEditSession.appendVersionAfterEdit({

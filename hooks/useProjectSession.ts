@@ -19,6 +19,9 @@ import type { ProjectSummary, PlanType } from '../lib/db/types.js';
 
 const DEFAULT_PROJECT_NAME = 'マイプロジェクト';
 
+// 離脱時オートセーブ（flushSave）のタイムアウト。応答しない接続で「保存中…」のまま固まるのを防ぐ。
+const FLUSH_SAVE_TIMEOUT_MS = 15000;
+
 export type ProjectSessionStatus = 'idle' | 'loading' | 'ready' | 'saving' | 'error';
 
 export interface ProjectSession {
@@ -46,6 +49,11 @@ export interface ProjectSession {
   setProjectThumbnail(dataUrl: string): Promise<void>;
   /** 写真AI編集（2a）の現在ストア内容をデバウンス保存する。aiEdit は temporal 対象外で autosave されないため別途呼ぶ。 */
   persistAiEdit(): void;
+  /**
+   * 現在のストア内容を即時保存して完了を待つ（デバウンス待ちなし）。ホームへ戻る等の離脱時に、
+   * 編集内容を確実に DB へ反映してから安全に遷移するために使う。未ログイン/未読込時は何もしない。
+   */
+  flushSave(): Promise<void>;
 }
 
 function messageOf(e: unknown): string {
@@ -140,9 +148,10 @@ export function useProjectSession(): ProjectSession {
   }, [configured, userId]);
 
   // 現在のストア内容を指定プロジェクトへ即時保存（切替・複製・削除前のフラッシュ）。
-  const flush = useCallback(async (id: string | null) => {
+  // signal を渡すとタイムアウト等で中断でき、中断後に遅延書き込みが残らない。
+  const flush = useCallback(async (id: string | null, signal?: AbortSignal) => {
     if (!id) return;
-    await saveProject(id, { data: useProjectStore.getState().toProjectState() });
+    await saveProject(id, { data: useProjectStore.getState().toProjectState() }, signal ? { signal } : undefined);
   }, []);
 
   // ProjectState をエディタへ反映し、Undo 履歴を起点化する。
@@ -318,11 +327,43 @@ export function useProjectSession(): ProjectSession {
     }, 800);
   }, [configured, userId, projectId]);
 
+  // 離脱時オートセーブで、保留中の通常 autosave デバウンスを取り消すためのハンドル（下の useAutosave が設定）。
+  const autosaveCancelRef = useRef<() => void>(() => {});
+
+  // 離脱時オートセーブ: 現在のストア内容を即時保存し、完了を待つ（デバウンスのフラッシュ）。
+  // ホームへ戻る前に呼び、確実に DB へ反映してから遷移する。失敗時は呼び出し側が握りつぶして遷移できるよう投げる。
+  // ネットワークが応答しないと保存が永遠に解決せず「保存中…」で固まるため、タイムアウトで必ず決着させる。
+  const flushSave = useCallback(async () => {
+    if (!configured || !userId || !projectId) return;
+    // 保留中のデバウンス保存（通常 autosave / aiEdit）を取り消す。今ここで最新状態を確定保存するため、
+    // 遷移後に重複・遅延した書き込みやステータス上書き（誤った「保存エラー」表示）が走らないようにする。
+    autosaveCancelRef.current();
+    if (aiEditSaveTimer.current) {
+      clearTimeout(aiEditSaveTimer.current);
+      aiEditSaveTimer.current = null;
+    }
+    setStatus('saving');
+    // タイムアウトでリクエストを中断する。UI を必ず解放し、かつ中断後に stale な保存が
+    // 後から DB へ書き込まれて新しい保存を上書きする事故を防ぐ（abort で送信を止める）。
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FLUSH_SAVE_TIMEOUT_MS);
+    try {
+      await flush(projectId, controller.signal);
+      setStatus('ready');
+    } catch (e) {
+      console.error('[project session] flushSave failed', e);
+      setStatus('error');
+      throw e;
+    } finally {
+      clearTimeout(timer);
+    }
+  }, [configured, userId, projectId, flush]);
+
   // ドキュメント変更シグナル = temporal 履歴長（sketch/scene/materials の変更で増える）。
   const version = useStore(useProjectStore.temporal, (t) => t.pastStates.length);
   const enabled = configured && !!userId && !!projectId && status !== 'loading' && !busy;
 
-  useAutosave(
+  const { cancel: cancelAutosave } = useAutosave(
     version,
     async () => {
       if (!enabled || !projectId) return;
@@ -337,6 +378,10 @@ export function useProjectSession(): ProjectSession {
     },
     { delayMs: 2000, enabled },
   );
+  // flushSave から保留中のデバウンス保存を取り消せるよう、最新の cancel を ref に保持する。
+  useEffect(() => {
+    autosaveCancelRef.current = cancelAutosave;
+  }, [cancelAutosave]);
 
   return {
     status,
@@ -356,5 +401,6 @@ export function useProjectSession(): ProjectSession {
     deleteCurrentProject,
     setProjectThumbnail,
     persistAiEdit,
+    flushSave,
   };
 }

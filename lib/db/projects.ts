@@ -73,9 +73,13 @@ export async function createProject(name: string, data: ProjectState): Promise<s
 export async function saveProject(
   id: string,
   patch: { name?: string; data?: ProjectState; thumbnail_url?: string | null },
+  options?: { signal?: AbortSignal },
 ): Promise<void> {
   const sb = requireClient();
-  const { error } = await sb.from('projects').update(patch).eq('id', id);
+  // signal を渡すと（離脱時オートセーブのタイムアウトなど）リクエストを中断できる。
+  // 中断すると stale なスナップショットが後から DB に書き込まれて新しい保存を上書きするのを防げる。
+  const query = sb.from('projects').update(patch).eq('id', id);
+  const { error } = await (options?.signal ? query.abortSignal(options.signal) : query);
   if (error) throw error;
 }
 
