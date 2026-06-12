@@ -158,6 +158,36 @@ export const getWallBeamBandCornersMm = (
   return { c1: seg.p1, c2: seg.p2, c3, c4 };
 };
 
+/** 壁梁の3D寸法（マイター接合の可否判定に使う）。 */
+export interface WallBeamDims {
+  widthMm: number;
+  heightMm: number;
+  dropMm: number;
+}
+
+/**
+ * 3D 壁梁のコーナー接合用の幅マップ（エッジ index → バンド幅）を作る。
+ * 隣接エッジに乗る壁梁は「高さ(せい)も天井下がりも一致」するものだけマイター接合対象に含める
+ * （自分のエッジは常に含む）。高さ/下がりが異なる隣接梁を接合すると角に段差・隙間ができるため除外し、
+ * 結果として getWallBeamBandCornersMm では梁端が隣の壁線（オフセット0）に接合して壁へ密着する。
+ * 同高さの隣接梁どうしは従来どおり接合する。許容差は 1mm。
+ */
+export const wallBeamMiterWidths = (
+  dimsByWallIndex: Map<number, WallBeamDims>,
+  wallIndex: number,
+  self: WallBeamDims,
+): Map<number, number> => {
+  const m = new Map<number, number>();
+  m.set(wallIndex, self.widthMm);
+  for (const [idx, d] of dimsByWallIndex) {
+    if (idx === wallIndex) continue;
+    if (Math.abs(d.heightMm - self.heightMm) < 1 && Math.abs(d.dropMm - self.dropMm) < 1) {
+      m.set(idx, d.widthMm);
+    }
+  }
+  return m;
+};
+
 export const getWallAngle2D = (p1: Point, p2: Point) => Math.atan2(p2.y - p1.y, p2.x - p1.x);
 
 export const getWallRotationY = (p1: { x: number; z: number }, p2: { x: number; z: number }, isCCW: boolean) => {

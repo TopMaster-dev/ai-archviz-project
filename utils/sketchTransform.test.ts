@@ -18,6 +18,7 @@ import {
   yawToSketchRotation,
   intersectLines2D,
   getWallBeamBandCornersMm,
+  wallBeamMiterWidths,
   polygonCentroidMm,
   resolveDoorSwing3D,
   computeWallToWallSpan,
@@ -234,6 +235,29 @@ describe('wall-beam corner miter (260611 #2b)', () => {
     // 内側バンドは下(y=400)。旧・重心判定では上(y=600)へ誤って出る。
     expect(corners!.c4.y).toBeCloseTo(400);
     expect(corners!.c3.y).toBeCloseTo(400);
+  });
+});
+
+describe('wallBeamMiterWidths (3D corner: join only same-height adjacent beams)', () => {
+  it('includes self + same height/drop neighbours, excludes different-height ones', () => {
+    const dims = new Map([
+      [0, { widthMm: 100, heightMm: 300, dropMm: 0 }],
+      [1, { widthMm: 120, heightMm: 300, dropMm: 0 }], // same せい/下がり → 接合
+      [3, { widthMm: 150, heightMm: 500, dropMm: 0 }], // 高さ違い → 除外（端は壁へ密着）
+    ]);
+    const m = wallBeamMiterWidths(dims, 0, { widthMm: 100, heightMm: 300, dropMm: 0 });
+    expect(m.get(0)).toBe(100); // 自分のエッジは常に含む
+    expect(m.get(1)).toBe(120); // 同高さ → 含む
+    expect(m.has(3)).toBe(false); // 高さ違い → 除外
+  });
+
+  it('excludes a same-height but different-drop neighbour', () => {
+    const dims = new Map([
+      [0, { widthMm: 100, heightMm: 300, dropMm: 0 }],
+      [1, { widthMm: 100, heightMm: 300, dropMm: 200 }], // 下がり違い → 除外
+    ]);
+    const m = wallBeamMiterWidths(dims, 0, { widthMm: 100, heightMm: 300, dropMm: 0 });
+    expect(m.has(1)).toBe(false);
   });
 });
 

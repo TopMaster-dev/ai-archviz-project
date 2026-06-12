@@ -36,7 +36,9 @@ import {
   clampFurnitureItemToRoom,
   computeWallToWallSpan,
   getWallBeamBandCornersMm,
-  freeBeamWallMiterCornersMm
+  freeBeamWallMiterCornersMm,
+  wallBeamMiterWidths,
+  type WallBeamDims
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
@@ -104,9 +106,9 @@ const Beam3DMesh: React.FC<{
   materialSettings?: any;
   captureStep?: any;
   onHoverNameChange?: (name: string | null) => void;
-  /** 壁梁が乗っているエッジ index → バンド幅(mm)。コーナーのマイター接合に使う（2D と共有）。 */
-  widthByWallIndex?: Map<number, number>;
-}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep, onHoverNameChange, widthByWallIndex }) => {
+  /** 壁梁が乗っているエッジ index → 寸法(幅/高さ/下がり)。コーナー接合の可否判定に使う。 */
+  beamDimsByWallIndex?: Map<number, WallBeamDims>;
+}> = ({ beam, centerMm, polygonMm, roomHeight, isSelected, editable, onSelect, onPatch, onDragStart, onDragEnd, wallHiddenRef, selections, materialSettings, captureStep, onHoverNameChange, beamDimsByWallIndex }) => {
   const boxRef = useRef<THREE.Mesh>(null);
   const handleRef = useRef<THREE.Mesh>(null);
   // 角柱描画中か（=ライブ位置更新を抑止すべきか）を pointer ハンドラから参照するためのミラー。
@@ -271,10 +273,17 @@ const Beam3DMesh: React.FC<{
   // 梁端が隣の壁／壁梁に沿って切られ、入隅の隙間・出角の重なり・斜め角での突き出しが解消する。
   const wallBeamPrism = useMemo(() => {
     if (!isWallBeam || beam.wallIndex === undefined || !polygonMm || polygonMm.length < 3) return null;
-    const corners = getWallBeamBandCornersMm(polygonMm, widthByWallIndex ?? new Map(), beam.wallIndex);
+    // 隣接梁は「高さ・下がりが一致」する場合のみ接合（マイター）対象に含める。高さが異なる隣接梁は
+    // 除外され、端は隣の壁線に接合して壁へ密着する（角の段差/隙間を防ぐ）。
+    const widthForMiter = wallBeamMiterWidths(beamDimsByWallIndex ?? new Map(), beam.wallIndex, {
+      widthMm: beam.widthMm,
+      heightMm: beam.heightMm,
+      dropMm: beam.dropMm,
+    });
+    const corners = getWallBeamBandCornersMm(polygonMm, widthForMiter, beam.wallIndex);
     if (!corners) return null;
     return buildBeamBandPrism(corners, centerMm, by + heightM / 2, by - heightM / 2);
-  }, [isWallBeam, beam.wallIndex, polygonMm, widthByWallIndex, by, heightM, centerMm]);
+  }, [isWallBeam, beam.wallIndex, beam.widthMm, beam.heightMm, beam.dropMm, polygonMm, beamDimsByWallIndex, by, heightM, centerMm]);
   useEffect(() => () => { wallBeamPrism?.dispose(); }, [wallBeamPrism]);
 
   // 自由梁の端を壁線に沿って切った角柱（2D と同じ freeBeamWallMiterCornersMm）。両端が壁面と
@@ -367,13 +376,13 @@ function Beams3D({
   captureStep?: any;
   onHoverNameChange?: (name: string | null) => void;
 }) {
-  // 2b(3D): 壁梁のコーナー接合用に「壁梁が乗っているエッジ index → バンド幅(mm)」を集計（2D と同形）。
+  // 2b(3D): 壁梁のコーナー接合用に「エッジ index → 寸法(幅/高さ/下がり)」を集計。
   // beams が変わった時だけ Map を作り直す。毎レンダーで新 Map 参照を子へ渡すと、子側の角柱
-  // useMemo（依存に widthByWallIndex）が毎回作り直され BufferGeometry を生成/破棄し続けるため。
-  const widthByWallIndex = useMemo(() => {
-    const m = new Map<number, number>();
+  // useMemo（依存に含む）が毎回作り直され BufferGeometry を生成/破棄し続けるため。
+  const beamDimsByWallIndex = useMemo(() => {
+    const m = new Map<number, WallBeamDims>();
     for (const b of beams) {
-      if (b.wallIndex !== undefined) m.set(b.wallIndex, b.widthMm);
+      if (b.wallIndex !== undefined) m.set(b.wallIndex, { widthMm: b.widthMm, heightMm: b.heightMm, dropMm: b.dropMm });
     }
     return m;
   }, [beams]);
@@ -398,7 +407,7 @@ function Beams3D({
           materialSettings={materialSettings}
           captureStep={captureStep}
           onHoverNameChange={onHoverNameChange}
-          widthByWallIndex={widthByWallIndex}
+          beamDimsByWallIndex={beamDimsByWallIndex}
         />
       ))}
     </group>
