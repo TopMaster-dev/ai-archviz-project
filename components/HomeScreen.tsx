@@ -3,13 +3,13 @@ import { Settings, Image as ImageIcon } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 import { createShareLink } from '../lib/db/projects.js';
-import { ByokKeyPanel } from './ByokKeyPanel.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
 
 /**
  * ログインと2Dスケッチ（エディタ）の間に表示する独立した「ホーム画面」。
- * プロジェクトの一覧/選択/作成/複製/改名/削除、Gemini APIキー設定、ログアウトを集約する。
+ * プロジェクトの一覧/選択/作成/複製/改名/削除、アップロード、ログアウトを集約する。
+ * （Gemini APIキー設定は右上の設定モーダルへ集約。ホーム本体には表示しない。）
  * 「開く」でエディタへ遷移する（onEnter）。
  */
 /** プロジェクトカードのサムネイル（2c-i）。親の aspect 比に追従して全面表示。未生成/失敗時はプレースホルダー。 */
@@ -288,9 +288,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
         </section>
 
         <section>
-          <h2 className="mb-3 text-lg font-semibold">設定 / アップロード</h2>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-            <ByokKeyPanel />
+          <h2 className="mb-3 text-lg font-semibold">アップロード</h2>
+          <div className="grid grid-cols-1 gap-3">
             <UploadPanel />
           </div>
         </section>
