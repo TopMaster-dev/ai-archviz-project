@@ -28,6 +28,7 @@ import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { useProjectStore } from './lib/store/projectStore.js';
+import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
 import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
 import { useShellNav } from './lib/shell/shellNavContext.js';
 import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
@@ -1072,6 +1073,14 @@ const App: React.FC = () => {
         .catch(() => {});
     },
   });
+
+  // AI レンダリング/画像処理のオーバーレイ表示中フラグを共有ストアへ反映。
+  // App の外側（シェル）に固定配置された UndoRedoBar が、ローディング画面では自身を隠せるようにする。
+  useEffect(() => {
+    useRenderOverlayStore.getState().setActive(isDenoising || renderState.isRendering);
+  }, [isDenoising, renderState.isRendering]);
+  // エディタ離脱（アンマウント）時にフラグを必ず倒す（レンダ中にホームへ戻った等で true が残らないように）。
+  useEffect(() => () => { useRenderOverlayStore.getState().setActive(false); }, []);
 
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {

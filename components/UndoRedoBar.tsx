@@ -1,13 +1,19 @@
 import { useStore } from 'zustand';
 import { Undo2, Redo2 } from 'lucide-react';
 import { useProjectStore } from '../lib/store/projectStore.js';
+import { useRenderOverlayStore } from '../lib/store/renderOverlayStore.js';
 
 // 元に戻す / やり直す のクリック操作（キーボードの Ctrl+Z / Ctrl+Y と同じ temporal を駆動）。
 // 履歴の有無でボタンの活性/非活性を切り替える。
+// AI レンダリング/画像処理のオーバーレイ表示中は非表示にする（ローディング画面に被らないように）。
+// ※ Ctrl+Z / Ctrl+Y のショートカットは引き続き有効（ボタンを隠すだけ）。
 
 export function UndoRedoBar() {
   const canUndo = useStore(useProjectStore.temporal, (t) => t.pastStates.length > 0);
   const canRedo = useStore(useProjectStore.temporal, (t) => t.futureStates.length > 0);
+  const overlayActive = useRenderOverlayStore((s) => s.active);
+
+  if (overlayActive) return null;
 
   const btn =
     'flex h-8 w-8 items-center justify-center rounded-lg text-neutral-200 transition hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent';
