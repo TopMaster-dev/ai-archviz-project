@@ -12,6 +12,13 @@ function newVersionId() {
 
 const STORAGE_KEY = 'archviz-ai-edit-session-v2';
 
+// 履歴の最大保持件数（メモリ／DB／localStorage の肥大化防止）。各履歴は生成画像のデータURLを持つため、
+// 無制限に貯めると重くなる。古い順に間引いて「最新の N 件」を保持する（見返せる十分な深さ）。
+export const MAX_AI_EDIT_VERSIONS = 30;
+function capVersions(vers: AiEditVersion[]): AiEditVersion[] {
+  return vers.length > MAX_AI_EDIT_VERSIONS ? vers.slice(vers.length - MAX_AI_EDIT_VERSIONS) : vers;
+}
+
 function loadStored(): { versions: AiEditVersion[]; activeVersionId: string | null } | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -40,7 +47,7 @@ function loadStored(): { versions: AiEditVersion[]; activeVersionId: string | nu
 export function useAiEditSession(options?: { persistLocal?: boolean }) {
   const persistLocal = options?.persistLocal ?? true;
   const [versions, setVersions] = useState<AiEditVersion[]>(() =>
-    persistLocal ? loadStored()?.versions ?? [] : []
+    persistLocal ? capVersions(loadStored()?.versions ?? []) : []
   );
   const [activeVersionId, setActiveVersionId] = useState<string | null>(() =>
     persistLocal ? loadStored()?.activeVersionId ?? null : null
@@ -73,7 +80,10 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
     setPlacementEditIndex(null);
   }, []);
 
-  /** 初回 AI レンダリング成功時: 履歴 v0 を作成 */
+  /**
+   * AI レンダリング成功時: 新しいルート履歴を「追加」する（過去の履歴は保持＝見返せる）。
+   * 各レンダーは独立したルート（parentId=null）。以降の編集は appendVersionAfterEdit で子として連なる。
+   */
   const addVersionFromRender = useCallback(
     (outputDataUrl: string) => {
       const id = newVersionId();
@@ -87,9 +97,11 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         styleMemo: '',
         objects: [],
       };
-      setVersions([ver]);
+      skipHydrateOnce.current = true;
+      setVersions((prev) => capVersions([...prev, ver]));
       setActiveVersionId(id);
       resetDraft();
+      lastHydratedActiveId.current = id;
     },
     [resetDraft]
   );
@@ -228,7 +240,7 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         })),
       };
       skipHydrateOnce.current = true;
-      setVersions((prev) => [...prev, ver]);
+      setVersions((prev) => capVersions([...prev, ver]));
       setActiveVersionId(id);
       resetDraft();
       lastHydratedActiveId.current = id;
@@ -258,8 +270,9 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
     (vers: AiEditVersion[], activeId: string | null) => {
       lastHydratedActiveId.current = null;
       skipHydrateOnce.current = false;
-      setVersions(vers);
-      setActiveVersionId(activeId ?? (vers.length ? vers[vers.length - 1].id : null));
+      const capped = capVersions(vers);
+      setVersions(capped);
+      setActiveVersionId(activeId ?? (capped.length ? capped[capped.length - 1].id : null));
       resetDraft();
     },
     [resetDraft],
@@ -289,14 +302,21 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   useEffect(() => {
     // 写真AI編集（persistLocal=false）は localStorage を使わない（プロジェクト間の混入防止）。
     if (!persistLocal) return;
-    try {
-      if (versions.length === 0) {
-        localStorage.removeItem(STORAGE_KEY);
+    if (versions.length === 0) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ignore */ }
+      return;
+    }
+    // 各履歴は生成画像(データURL=大)を持つため、容量超過しやすい。超過時は古い順に間引いて
+    // 「最新の履歴」を優先して保存する（最新を失わないように）。in-memory の versions は全件保持。
+    let slice = versions;
+    for (;;) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ versions: slice, activeVersionId }));
         return;
+      } catch {
+        if (slice.length <= 1) return; // これ以上は減らせない
+        slice = slice.slice(Math.max(1, Math.floor(slice.length / 4))); // 最古側を間引いて再挑戦
       }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ versions, activeVersionId }));
-    } catch {
-      /* quota */
     }
   }, [versions, activeVersionId, persistLocal]);
 

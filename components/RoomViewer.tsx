@@ -2372,8 +2372,10 @@ const SketchRoom = ({
         // 共有ref へも反映（梁の壁連動非表示用）。
         if (wallHiddenRef) wallHiddenRef.current[i] = isHidden;
         const hideOpeningsForCamera = isHidden && cameraTick >= 0;
-        // 外側から見たときの近接壁カットアウェイ（スナップショット/マスク描画時は維持）。
-        const cutAwayWall = isHidden && !snapshotMode && !maskMode && captureStep !== 'mask';
+        // 外側から見たときの近接壁カットアウェイ。AIレンダリングのスナップショットにも適用し、
+        // 壁の外側から実行しても手前の外壁が写り込まず室内が生成されるようにする（インタラクティブ表示と一致）。
+        // マスク描画（captureStep==='mask' / maskMode）時のみ、形状を欠かさないよう維持する。
+        const cutAwayWall = isHidden && !maskMode && captureStep !== 'mask';
 
         const divs = wallDivisions[i] || 1;
         const bottomProd = selections[`${wallName}_0`];

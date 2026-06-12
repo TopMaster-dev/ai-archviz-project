@@ -1063,7 +1063,7 @@ const App: React.FC = () => {
     handleInstantRender,
   } = useAiRenderer({
     onCanvasRenderSuccess: (url) => {
-      aiEditSession.clearSession();
+      // 過去の生成履歴は消さず、新しいレンダーを履歴に「追加」する（見返せるように）。
       aiEditSession.addVersionFromRender(url);
       // レンダ完了後（ローディング解除後）に AI 編集へ遷移
       setAiEditOpen(true);
