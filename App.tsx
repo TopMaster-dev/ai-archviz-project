@@ -35,7 +35,7 @@ import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
 import { listUserUploads } from './lib/db/uploads.js';
-import { uploadToFurnitureItem, uploadToProduct, isUserUploadProduct } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -2174,8 +2174,12 @@ const App: React.FC = () => {
 
   const filteredProducts = useMemo(() => {
     let items = products;
-    // ユーザーアップロードのテクスチャは面の種別を問わず適用できるよう、どのカテゴリでも表示する（#6b）。
-    if (activeCategory) items = items.filter(p => p.category === activeCategory || isUserUploadProduct(p));
+    // カテゴリ絞り込み。crossCategory=true（ユーザーアップロードの「共通」テクスチャ）は面のテクスチャ
+    // カテゴリ（壁/床/天井）でのみ横断表示する。家具/建具タブには出さない。割当済み/通常素材は自カテゴリのみ。
+    if (activeCategory) {
+      const allowCross = TEXTURE_CATEGORIES.includes(activeCategory);
+      items = items.filter(p => p.category === activeCategory || (p.crossCategory && allowCross));
+    }
     if (selectedBrand) items = items.filter(p => p.brand === selectedBrand);
 
     if (sortOrder === 'price-asc') items = [...items].sort((a, b) => a.pricePerUnit - b.pricePerUnit);

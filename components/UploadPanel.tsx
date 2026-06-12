@@ -4,10 +4,17 @@ import {
   ACCEPTED_EXT,
   deleteUserUpload,
   listUserUploads,
+  updateUserUploadMetadata,
   uploadUserFile,
   type UploadKind,
   type UserUpload,
 } from '../lib/db/uploads.js';
+import type { MaterialCategory } from '../types.js';
+import {
+  TEXTURE_CATEGORY_OPTIONS,
+  normalizeTextureCategory,
+  textureCategoryLabel,
+} from '../lib/uploadsCatalog.js';
 
 /**
  * 「マイアップロード」管理パネル（ホーム画面）。
@@ -47,7 +54,10 @@ export function UploadPanel() {
   const [loading, setLoading] = useState(false);
   const [busyKind, setBusyKind] = useState<UploadKind | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // テクスチャ追加時に割り当てるカテゴリ（null=共通=全カテゴリに表示）。
+  const [texCategory, setTexCategory] = useState<MaterialCategory | null>(null);
 
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const textureInputRef = useRef<HTMLInputElement | null>(null);
@@ -79,15 +89,35 @@ export function UploadPanel() {
     setBusyKind(kind);
     setMsg(null);
     try {
-      const row = await uploadUserFile(file, kind);
+      // テクスチャは選択中のカテゴリを metadata.category に保存（共通=未設定）。
+      const metadata = kind === 'texture' && texCategory ? { category: texCategory } : undefined;
+      const row = await uploadUserFile(file, kind, { metadata });
       setUploads((prev) => [row, ...prev]);
-      setMsg(`「${row.originalName ?? file.name}」をアップロードしました。`);
+      const catNote = kind === 'texture' ? `（${textureCategoryLabel(texCategory)}）` : '';
+      setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'アップロードに失敗しました。');
     } finally {
       setBusyKind(null);
       if (modelInputRef.current) modelInputRef.current.value = '';
       if (textureInputRef.current) textureInputRef.current.value = '';
+    }
+  };
+
+  // テクスチャのカテゴリ割当を変更（既存 metadata にマージして保存）。
+  const handleChangeCategory = async (u: UserUpload, category: MaterialCategory | null) => {
+    setUpdatingId(u.id);
+    setMsg(null);
+    try {
+      const next: Record<string, unknown> = { ...u.metadata };
+      if (category) next.category = category;
+      else delete next.category; // 共通＝未設定
+      const row = await updateUserUploadMetadata(u.id, next);
+      setUploads((prev) => prev.map((x) => (x.id === u.id ? row : x)));
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : 'カテゴリの変更に失敗しました。');
+    } finally {
+      setUpdatingId(null);
     }
   };
 
@@ -123,6 +153,29 @@ export function UploadPanel() {
         {ACCEPTED_EXT.texture.join(' / ')}）を保存できます。
       </p>
 
+      {/* テクスチャに割り当てるカテゴリ。「＋テクスチャ」で追加する素材の表示カテゴリを決める
+          （壁/床/天井のいずれか、または共通＝全カテゴリに表示）。一覧から後で変更も可能。 */}
+      <div className="mb-2">
+        <p className="mb-1 text-[11px] text-neutral-400">テクスチャのカテゴリ（追加先）</p>
+        <div className="flex gap-1">
+          {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
+            <button
+              key={opt.label}
+              type="button"
+              disabled={busy}
+              onClick={() => setTexCategory(opt.value)}
+              className={`flex-1 rounded py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
+                texCategory === opt.value
+                  ? 'bg-sky-600 text-white'
+                  : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+              }`}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       <div className="mb-3 flex gap-1.5">
         <button
           type="button"
@@ -138,7 +191,7 @@ export function UploadPanel() {
           onClick={() => handlePick('texture')}
           className="flex-1 rounded bg-neutral-700 py-1.5 font-semibold text-white transition hover:bg-neutral-600 disabled:opacity-50"
         >
-          {busyKind === 'texture' ? 'アップロード中…' : '＋ テクスチャ'}
+          {busyKind === 'texture' ? 'アップロード中…' : `＋ テクスチャ（${textureCategoryLabel(texCategory)}）`}
         </button>
       </div>
 
@@ -189,6 +242,24 @@ export function UploadPanel() {
                   {fmtDate(u.createdAt)}
                 </span>
               </div>
+              {u.kind === 'texture' && (
+                <select
+                  value={normalizeTextureCategory(u.metadata.category) ?? ''}
+                  disabled={updatingId === u.id}
+                  onChange={(e) =>
+                    void handleChangeCategory(u, (e.target.value || null) as MaterialCategory | null)
+                  }
+                  title="表示カテゴリ"
+                  aria-label="表示カテゴリ"
+                  className="shrink-0 rounded border border-white/10 bg-neutral-800 px-1.5 py-1 text-[11px] text-neutral-200 disabled:opacity-50"
+                >
+                  {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
+                    <option key={opt.label} value={opt.value ?? ''}>
+                      {opt.label}
+                    </option>
+                  ))}
+                </select>
+              )}
               <button
                 type="button"
                 disabled={deletingId === u.id}

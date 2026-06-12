@@ -175,6 +175,26 @@ export async function listUserUploads(kind?: UploadKind): Promise<UserUpload[]> 
   return ((data ?? []) as UploadRow[]).map(mapRow);
 }
 
+/**
+ * 台帳のメタデータを置き換える（カテゴリ割当の変更などに使用）。
+ * metadata 全体を渡す（呼び出し側で既存 metadata とマージして渡すこと）。更新後の行を返す。
+ */
+export async function updateUserUploadMetadata(
+  id: string,
+  metadata: Record<string, unknown>,
+): Promise<UserUpload> {
+  const sb = getSupabase();
+  if (!sb) throw new Error('Supabase が未構成のため、更新できません。');
+  const { data, error } = await sb
+    .from('user_uploads')
+    .update({ metadata })
+    .eq('id', id)
+    .select(SELECT_COLS)
+    .single();
+  if (error) throw error;
+  return mapRow(data as UploadRow);
+}
+
 /** アップロードを削除（Storage 実体 → 台帳の順。実体削除失敗は無視して台帳は必ず消す）。 */
 export async function deleteUserUpload(upload: Pick<UserUpload, 'id' | 'publicId'>): Promise<void> {
   const sb = getSupabase();

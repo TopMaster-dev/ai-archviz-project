@@ -4,6 +4,9 @@ import {
   uploadToFurnitureItem,
   uploadToProduct,
   isUserUploadProduct,
+  normalizeTextureCategory,
+  textureCategoryLabel,
+  TEXTURE_CATEGORY_OPTIONS,
   USER_UPLOAD_BRAND,
   UPLOAD_FURNITURE_TYPE,
 } from './uploadsCatalog.js';
@@ -62,19 +65,46 @@ describe('uploadToFurnitureItem', () => {
 });
 
 describe('uploadToProduct', () => {
-  it('maps a texture upload as a user-brand material defaulting to Wall', () => {
+  it('unassigned texture → 共通 (crossCategory) so it shows in every category', () => {
     const p = uploadToProduct(baseUpload({ kind: 'texture', originalName: 'oak.png' }));
     expect(p.id).toBe('upload-tex-u1');
     expect(p.name).toBe('oak');
     expect(p.brand).toBe(USER_UPLOAD_BRAND);
-    expect(p.category).toBe('Wall');
+    expect(p.crossCategory).toBe(true); // 共通: 全カテゴリに表示
     expect(p.textureUrl).toContain('1-chair.glb'); // storageUrl passthrough
     expect(isUserUploadProduct(p)).toBe(true);
   });
 
-  it('uses a valid category from metadata and rejects an invalid one', () => {
-    expect(uploadToProduct(baseUpload({ metadata: { category: 'Floor' } })).category).toBe('Floor');
-    expect(uploadToProduct(baseUpload({ metadata: { category: 'Bogus' } })).category).toBe('Wall');
+  it('assigned Wall/Floor/Ceiling → that category only (crossCategory false)', () => {
+    const floor = uploadToProduct(baseUpload({ kind: 'texture', metadata: { category: 'Floor' } }));
+    expect(floor.category).toBe('Floor');
+    expect(floor.crossCategory).toBe(false);
+    const ceil = uploadToProduct(baseUpload({ kind: 'texture', metadata: { category: 'Ceiling' } }));
+    expect(ceil.category).toBe('Ceiling');
+    expect(ceil.crossCategory).toBe(false);
+  });
+
+  it('invalid / non-texture category → 共通 (crossCategory true)', () => {
+    // Furniture/Window はテクスチャ割当対象外 → 共通扱い
+    expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: { category: 'Furniture' } })).crossCategory).toBe(true);
+    expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: { category: 'Bogus' } })).crossCategory).toBe(true);
+  });
+});
+
+describe('texture category helpers', () => {
+  it('normalizeTextureCategory accepts only Wall/Floor/Ceiling, else null', () => {
+    expect(normalizeTextureCategory('Wall')).toBe('Wall');
+    expect(normalizeTextureCategory('Floor')).toBe('Floor');
+    expect(normalizeTextureCategory('Ceiling')).toBe('Ceiling');
+    expect(normalizeTextureCategory('Furniture')).toBeNull();
+    expect(normalizeTextureCategory(undefined)).toBeNull();
+  });
+  it('labels and options cover 共通 + the three categories', () => {
+    expect(textureCategoryLabel(null)).toBe('共通');
+    expect(textureCategoryLabel('Wall')).toBe('壁');
+    expect(textureCategoryLabel('Floor')).toBe('床');
+    expect(textureCategoryLabel('Ceiling')).toBe('天井');
+    expect(TEXTURE_CATEGORY_OPTIONS.map((o) => o.value)).toEqual([null, 'Wall', 'Floor', 'Ceiling']);
   });
 });
 

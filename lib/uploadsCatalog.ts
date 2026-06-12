@@ -12,7 +12,26 @@ export const USER_UPLOAD_BRAND = 'マイアップロード';
 /** 家具ストリップでアップロード家具がまとまるカテゴリ（type）。 */
 export const UPLOAD_FURNITURE_TYPE = 'アップロード';
 
-const MATERIAL_CATEGORIES: MaterialCategory[] = ['Floor', 'Wall', 'Ceiling', 'Furniture', 'Window'];
+/** テクスチャに割り当て可能なカテゴリ（面の種別）。家具/建具はテクスチャ対象外。 */
+export const TEXTURE_CATEGORIES: MaterialCategory[] = ['Wall', 'Floor', 'Ceiling'];
+
+/** アップロードパネルのカテゴリ選択肢。value=null は「共通（全カテゴリに表示）」。 */
+export const TEXTURE_CATEGORY_OPTIONS: { value: MaterialCategory | null; label: string }[] = [
+  { value: null, label: '共通' },
+  { value: 'Wall', label: '壁' },
+  { value: 'Floor', label: '床' },
+  { value: 'Ceiling', label: '天井' },
+];
+
+/** metadata.category を割当済みカテゴリ（Wall/Floor/Ceiling）として正規化。未割当/対象外は null（=共通）。 */
+export function normalizeTextureCategory(raw: unknown): MaterialCategory | null {
+  return TEXTURE_CATEGORIES.includes(raw as MaterialCategory) ? (raw as MaterialCategory) : null;
+}
+
+/** カテゴリ値（null=共通）の表示ラベル。 */
+export function textureCategoryLabel(category: MaterialCategory | null): string {
+  return TEXTURE_CATEGORY_OPTIONS.find((o) => o.value === category)?.label ?? '共通';
+}
 
 /** ファイル名から拡張子を除いた表示名。空なら fallback。 */
 export function deriveUploadName(originalName: string | null, fallback = 'アップロード'): string {
@@ -23,10 +42,6 @@ export function deriveUploadName(originalName: string | null, fallback = 'アッ
 
 function finite(v: unknown): number | undefined {
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined;
-}
-
-function asCategory(v: unknown): MaterialCategory {
-  return MATERIAL_CATEGORIES.includes(v as MaterialCategory) ? (v as MaterialCategory) : 'Wall';
 }
 
 /** 3Dモデルのアップロードを家具カタログ項目へ。寸法は metadata があれば優先、無ければ 1m 角の暫定値。 */
@@ -48,14 +63,20 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
   };
 }
 
-/** テクスチャのアップロードを素材（Product）へ。カテゴリ横断で適用できるよう既定は 'Wall'。 */
+/**
+ * テクスチャのアップロードを素材（Product）へ。
+ * metadata.category が壁/床/天井なら自カテゴリのみ表示。未割当（共通）なら crossCategory=true で
+ * 全カテゴリのパレットに表示する（後方互換: 旧アップロードは category 未設定＝共通として従来どおり）。
+ */
 export function uploadToProduct(upload: UserUpload): Product {
   const meta = (upload.metadata ?? {}) as Record<string, unknown>;
+  const assigned = normalizeTextureCategory(meta.category);
   return {
     id: `upload-tex-${upload.id}`,
     name: deriveUploadName(upload.originalName, 'テクスチャ'),
     brand: USER_UPLOAD_BRAND,
-    category: asCategory(meta.category),
+    category: assigned ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
+    crossCategory: assigned === null,
     pricePerUnit: 0,
     unit: '㎡',
     lossFactor: 0,

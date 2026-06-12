@@ -68,6 +68,12 @@ export interface Product {
    * リピート幅を自動計算する。未取得時は undefined（従来の短辺指定にフォールバック）。
    */
   physical?: MaterialPhysical;
+  /**
+   * カテゴリ横断表示フラグ。true のときカテゴリ絞り込みを無視して全カテゴリのパレットに表示する。
+   * ユーザーアップロードのテクスチャで「共通（壁/床/天井いずれにも未割当）」の場合に使う。
+   * 通常の素材（Cloudinary カタログ）やカテゴリ割当済みアップロードでは undefined（=自カテゴリのみ）。
+   */
+  crossCategory?: boolean;
 }
 
 export interface SelectionState {
