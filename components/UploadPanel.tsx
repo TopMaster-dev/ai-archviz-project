@@ -15,6 +15,35 @@ import {
   normalizeTextureCategory,
   textureCategoryLabel,
 } from '../lib/uploadsCatalog.js';
+import { useProjectStore } from '../lib/store/projectStore.js';
+
+/**
+ * 削除したテクスチャを壁/床/天井などに割り当て済みなら、その割当を既定（null）へ戻す。
+ * 割当（selections）には Product がスナップショットで埋め込まれており textureUrl=storageUrl が
+ * 404 化するため、現在ストアに読み込まれているプロジェクトから当該割当を取り除く。
+ * （描画側にもフォールバックがあるため、ここでの失敗は致命ではない。）
+ */
+function scrubDeletedTextureFromProject(upload: UserUpload): void {
+  try {
+    if (upload.kind !== 'texture') return;
+    const deletedProductId = `upload-tex-${upload.id}`;
+    const store = useProjectStore.getState();
+    const selections = store.materials.selections;
+    let changed = false;
+    const next: typeof selections = {};
+    for (const [meshName, product] of Object.entries(selections)) {
+      if (product && (product.id === deletedProductId || product.textureUrl === upload.storageUrl)) {
+        next[meshName] = null;
+        changed = true;
+      } else {
+        next[meshName] = product;
+      }
+    }
+    if (changed) store.setSelections(next);
+  } catch {
+    /* スクラブ失敗は致命ではない（描画側の既定マテリアルで表示される） */
+  }
+}
 
 /**
  * 「マイアップロード」管理パネル（ホーム画面）。
@@ -127,6 +156,8 @@ export function UploadPanel() {
     setMsg(null);
     try {
       await deleteUserUpload(u);
+      // 削除したテクスチャが現在のプロジェクトの壁/床等に割り当て済みなら既定へ戻す。
+      scrubDeletedTextureFromProject(u);
       setUploads((prev) => prev.filter((x) => x.id !== u.id));
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '削除に失敗しました。');

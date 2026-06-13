@@ -655,6 +655,28 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
   );
 };
 
+// テクスチャ読み込み失敗（削除済みアップロードの 404 等）でも 3D 全体を巻き込まず、
+// その面だけ既定マテリアルへフォールバックするための小さなエラーバウンダリ。
+// useTexture は 404 で throw するが <Suspense> は throw を捕捉しないため、これが無いと
+// 1枚の dead URL でルーム共有の CanvasErrorBoundary が発火し、ルーム全体が消えてしまう。
+class MaterialErrorBoundary extends React.Component<
+  { fallback: React.ReactNode; children: React.ReactNode },
+  { hasError: boolean }
+> {
+  state = { hasError: false };
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+  componentDidCatch(error: unknown) {
+    // テクスチャ取得失敗（削除済みアップロードの 404 等）は既定マテリアルで描画を継続する。
+    // 致命ではないが、404 以外の本当の不具合を握りつぶさないよう警告だけは残す（CanvasErrorBoundary と同様）。
+    console.warn('[material] テクスチャ読み込みに失敗したため既定マテリアルで描画します', error);
+  }
+  render() {
+    return this.state.hasError ? this.props.fallback : this.props.children;
+  }
+}
+
 const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any; doubleSided?: boolean }> = ({
   product,
   captureStep,
@@ -674,18 +696,26 @@ const DynamicMaterial: React.FC<DynamicMaterialProps & { materialSettings: any; 
     return <meshStandardMaterial color={isFloor ? 0x8b5a2b : DEFAULT_SURFACE_COLOR} roughness={0.8} side={side} />;
   }
 
+  // 既定マテリアル（読み込み中の Suspense フォールバック＝失敗時のフォールバックを共通化）。
+  const fallbackMaterial = (
+    <meshStandardMaterial color={isFloor ? 0x8b5a2b : DEFAULT_SURFACE_COLOR} roughness={0.8} side={side} />
+  );
+
   return (
-    <Suspense fallback={<meshStandardMaterial color={isFloor ? 0x8b5a2b : DEFAULT_SURFACE_COLOR} roughness={0.8} side={side} />}>
-      <TexturedMaterial
-        textureUrl={product.textureUrl}
-        meshRef={meshRef}
-        product={product}
-        materialSettings={materialSettings}
-        surfaceWidthM={surfaceWidthM}
-        surfaceHeightM={surfaceHeightM}
-        doubleSided={doubleSided}
-      />
-    </Suspense>
+    // key=textureUrl: 新しい有効なテクスチャに差し替えたら hasError をリセットして再試行する。
+    <MaterialErrorBoundary key={product.textureUrl} fallback={fallbackMaterial}>
+      <Suspense fallback={fallbackMaterial}>
+        <TexturedMaterial
+          textureUrl={product.textureUrl}
+          meshRef={meshRef}
+          product={product}
+          materialSettings={materialSettings}
+          surfaceWidthM={surfaceWidthM}
+          surfaceHeightM={surfaceHeightM}
+          doubleSided={doubleSided}
+        />
+      </Suspense>
+    </MaterialErrorBoundary>
   );
 };
 
