@@ -20,7 +20,8 @@ import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
-import { beamExposedAreaM2 } from './utils/beamArea.js';
+import { beamExposedAreaM2, wallBeamWallCoverAreaM2 } from './utils/beamArea.js';
+import { buildBaseboardRows, baseboardTotalCost, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl } from './utils/furnitureThumbnailUrl.js';
 import * as THREE from 'three';
 
@@ -447,6 +448,8 @@ type EstimatePanelDetailScrollProps = {
   forAiEdit: boolean;
   aggregatedMaterials: any[];
   materialsTotal: number;
+  baseboardRows: BaseboardEstimateRow[];
+  baseboardTotal: number;
   activeMeshes: string[];
   materialUnitPriceOverrides: Record<string, number>;
   setMaterialUnitPriceOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>;
@@ -469,6 +472,8 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
   forAiEdit,
   aggregatedMaterials,
   materialsTotal,
+  baseboardRows,
+  baseboardTotal,
   activeMeshes,
   materialUnitPriceOverrides,
   setMaterialUnitPriceOverrides,
@@ -487,7 +492,10 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
   aiEstimateSectionRef,
 }: EstimatePanelDetailScrollProps) {
   const hasAnyRows =
-    aggregatedMaterials.length > 0 || furnitureItems.length > 0 || aiEstimateItems.length > 0;
+    aggregatedMaterials.length > 0 ||
+    baseboardRows.length > 0 ||
+    furnitureItems.length > 0 ||
+    aiEstimateItems.length > 0;
 
   if (!hasAnyRows) {
     return (
@@ -567,6 +575,35 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                 </div>
               );
             })}
+          </div>
+        </div>
+      )}
+
+      {baseboardRows.length > 0 && (
+        <div>
+          <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-2.5 px-1">
+            <span className="text-[10px] font-black tracking-widest text-neutral-400">巾木</span>
+            <span className="text-[11px] font-mono font-bold text-white">¥{Math.round(baseboardTotal).toLocaleString()}</span>
+          </div>
+          <div className={`grid gap-2 md:gap-3 ${forAiEdit ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1 2xl:grid-cols-2'}`}>
+            {baseboardRows.map((r) => (
+              <div
+                key={`bb-${r.productId}`}
+                className="p-2.5 rounded-xl border bg-white/5 border-white/5 hover:border-white/10 flex flex-col justify-between"
+              >
+                <div className="text-[8px] font-black uppercase truncate text-neutral-500">{r.brand}</div>
+                <div className="text-[9px] text-white font-bold leading-tight truncate">{r.productName} の巾木</div>
+                <div className="flex justify-between items-end border-t border-white/5 pt-1.5 mt-1.5">
+                  <div className="text-[9px] font-mono text-neutral-500">
+                    {r.lengthM.toFixed(2)}m × ¥{Math.round(r.unitPrice).toLocaleString()}/m
+                  </div>
+                  <div className="text-xs font-mono font-bold text-white">¥{Math.round(r.cost).toLocaleString()}</div>
+                </div>
+                {r.unitPrice <= 0 && (
+                  <div className="mt-1 text-[8px] font-bold text-amber-300/90">m単価未入力（素材設定の「単価」で入力）</div>
+                )}
+              </div>
+            ))}
           </div>
         </div>
       )}
@@ -976,20 +1013,36 @@ const App: React.FC = () => {
     return { id, type, name, url, defaultScale, defaultY, footprint2d, forwardYawDeg };
   }, []);
 
-  // Keyboard listener for deletion
+  // 選択中オブジェクトの Delete / Backspace 削除（建具・家具・3D梁）。
+  // 入力欄（INPUT/TEXTAREA/contentEditable）にフォーカス中は無効化し、価格・メモ等の編集中の誤削除を防ぐ。
+  // 2D固有の選択（頂点・辺・梁の2D選択）は SketchCanvas 側で処理する（建具・家具は当ハンドラが2D/3D両方で処理）。
   useEffect(() => {
+    const isTypingTarget = () => {
+      const el = document.activeElement as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedOpeningId) {
-        // Don't delete if typing in an input
-        if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
-        
-        setOpenings(prev => prev.filter(o => o.id !== selectedOpeningId));
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (isTypingTarget()) return;
+      if (selectedOpeningId) {
+        e.preventDefault();
+        setOpenings((prev) => prev.filter((o) => o.id !== selectedOpeningId));
         setSelectedOpeningId(null);
+      } else if (activeFurnitureId) {
+        e.preventDefault();
+        setFurnitureItems((prev) => prev.filter((item) => item.id !== activeFurnitureId));
+        setActiveFurnitureId(null);
+      } else if (selectedBeam3DId) {
+        e.preventDefault();
+        useProjectStore
+          .getState()
+          .setBeams(useProjectStore.getState().scene.beams.filter((b) => b.id !== selectedBeam3DId));
+        handleBeam3DSelect(null);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedOpeningId]);
+  }, [selectedOpeningId, activeFurnitureId, selectedBeam3DId]);
 
   useEffect(() => {
     if (!catalogSortMenuOpen) return;
@@ -1648,19 +1701,7 @@ const App: React.FC = () => {
     });
   }, [viewMode, sketchPoints.length]);
 
-  // Handle Delete Key for Furniture
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-        if (e.key === 'Delete' || e.key === 'Backspace') {
-            if (activeFurnitureId) {
-                setFurnitureItems(prev => prev.filter(item => item.id !== activeFurnitureId));
-                setActiveFurnitureId(null);
-            }
-        }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activeFurnitureId]);
+  // 家具の Delete/Backspace 削除は上部の統合ハンドラ（建具・家具・3D梁）に集約済み。
 
   // スケッチ外形変更時、家具を部屋内に収める
   useEffect(() => {
@@ -2045,12 +2086,31 @@ const App: React.FC = () => {
           segTopMm = roomHeight;
         }
       }
+      // 巾木（baseboard）が有効な最下段では、クロス（壁仕上げ）は巾木の上端から始まる。
+      // 3D描画（actualWallH = segHeight - 巾木高）と一致させ、巾木分の高さをクロス面積から除外する
+      // （260613: 巾木の有無でクロス壁面の面積が変わらない不具合の修正）。開口の差し引き範囲も巾木上端に合わせる。
+      if (segBottomMm === 0) {
+        const wallProd = selections[meshName];
+        const wallSettings = wallProd ? materialSettings[wallProd.id] : undefined;
+        if (wallSettings?.baseboardEnabled) {
+          const bbHeight = Math.min(wallSettings.baseboardHeight ?? 60, segTopMm);
+          segBottomMm = bbHeight;
+          grossArea = (distMm * (segTopMm - bbHeight)) / 1000000;
+        }
+      }
       let holeSum = 0;
       for (const op of openings) {
         if (op.wallIndex !== baseIdx) continue;
         holeSum += openingHoleAreaM2OnWallSegment(op, segBottomMm, segTopMm);
       }
-      return Math.max(0, grossArea - holeSum);
+      // 壁梁が覆う帯は梁の仕上げとして別計上されるため、その裏のクロス面積を差し引く
+      // （260613: 「梁がある部分も壁面に含まれている」不具合の修正。壁梁のみ対象）。
+      let beamCover = 0;
+      for (const bm of beams) {
+        if (bm.wallIndex !== baseIdx) continue;
+        beamCover += wallBeamWallCoverAreaM2(bm, segBottomMm, segTopMm, roomHeight);
+      }
+      return Math.max(0, grossArea - holeSum - beamCover);
     }
     if (meshName === 'Sketch_UpperBand') {
       if (skeletonCeiling && sketchPoints.length >= 3) {
@@ -2126,6 +2186,32 @@ const App: React.FC = () => {
     () => costBreakdown.reduce((sum, item) => sum + item.cost, 0),
     [costBreakdown]
   );
+  // 巾木ライン: 巾木が有効な壁の延長(m)を製品ごとに集計し、m単価を掛ける（260613: 壁延長距離からの巾木計算）。
+  const baseboardBreakdown = useMemo<BaseboardEstimateRow[]>(() => {
+    if (sketchPoints.length < 2) return [];
+    const segs: { lengthM: number; productId: string; productName: string; brand: string; unitPricePerM: number }[] = [];
+    for (let i = 0; i < sketchPoints.length; i++) {
+      const a = sketchPoints[i];
+      const b = sketchPoints[(i + 1) % sketchPoints.length];
+      if (!a || !b) continue;
+      const divs = wallDivisions[i] || 1;
+      const bottomMesh = divs === 1 ? `Sketch_Wall_${i}` : `Sketch_Wall_${i}_0`;
+      const prod = selections[bottomMesh];
+      if (!prod) continue;
+      const settings = materialSettings[prod.id];
+      if (!settings?.baseboardEnabled) continue;
+      const lengthM = Math.hypot(a.x - b.x, a.y - b.y) / 0.05 / 1000;
+      segs.push({
+        lengthM,
+        productId: prod.id,
+        productName: prod.name,
+        brand: prod.brand ?? '',
+        unitPricePerM: settings.baseboardUnitPrice ?? 0,
+      });
+    }
+    return buildBaseboardRows(segs);
+  }, [sketchPoints, wallDivisions, selections, materialSettings]);
+  const baseboardTotal = useMemo(() => baseboardTotalCost(baseboardBreakdown), [baseboardBreakdown]);
   const furnitureTotal = useMemo(
     () => furnitureItems.reduce((sum, item) => sum + (item.customPrice ?? 0), 0),
     [furnitureItems]
@@ -2135,8 +2221,8 @@ const App: React.FC = () => {
     [aiEstimateItems]
   );
   const grandTotal = useMemo(
-    () => materialsTotal + furnitureTotal + aiEstimateTotal,
-    [materialsTotal, furnitureTotal, aiEstimateTotal]
+    () => materialsTotal + baseboardTotal + furnitureTotal + aiEstimateTotal,
+    [materialsTotal, baseboardTotal, furnitureTotal, aiEstimateTotal]
   );
   const furnitureMissingCount = useMemo(
     () => furnitureItems.filter((item) => !(item.customPrice && item.customPrice > 0)).length,
@@ -2156,8 +2242,9 @@ const App: React.FC = () => {
       buildEstimateExportPayload(costBreakdown as CostBreakdownEntry[], furnitureItems, aiEstimateItems, {
         wallDivisions,
         materialMemoByProductId: materialMemoOverrides,
+        baseboardRows: baseboardBreakdown,
       }),
-    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides]
+    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown]
   );
   const canExportEstimate =
     estimatePayload.materialSections.some((s) => s.rows.length > 0) ||
@@ -2361,6 +2448,8 @@ const App: React.FC = () => {
                 forAiEdit={forAiEdit}
                 aggregatedMaterials={aggregatedMaterials}
                 materialsTotal={materialsTotal}
+                baseboardRows={baseboardBreakdown}
+                baseboardTotal={baseboardTotal}
                 activeMeshes={activeMeshes}
                 materialUnitPriceOverrides={materialUnitPriceOverrides}
                 setMaterialUnitPriceOverrides={setMaterialUnitPriceOverrides}
@@ -2388,6 +2477,8 @@ const App: React.FC = () => {
       activeMeshes,
       aiEstimateItems,
       aiEstimateTotal,
+      baseboardBreakdown,
+      baseboardTotal,
       canExportEstimate,
       costBreakdown,
       estimateExportBusy,
@@ -2772,7 +2863,7 @@ const App: React.FC = () => {
                                             </span>
                                         </label>
                                         <label className="flex items-center justify-between gap-2 text-[10px] text-neutral-300">
-                                            高さ（せい）
+                                            高さ
                                             <span className="flex items-center gap-1">
                                                 <NumericField value={Math.round(selectedBeam.heightMm)} onChange={(n) => patchSelectedBeam({ heightMm: Math.max(10, n) })} dragSensitivity={2} className="w-16" />
                                                 mm
@@ -2793,6 +2884,7 @@ const App: React.FC = () => {
                                     const bbEnabled = settings.baseboardEnabled ?? false;
                                     const bbHeight = settings.baseboardHeight ?? 60;
                                     const bbColor = settings.baseboardColor ?? '#ffffff';
+                                    const bbUnitPrice = settings.baseboardUnitPrice ?? 0;
 
                                     return (
                                         <div key={`${prodId}-${index}`} className={`${propertyCardBaseClass} px-4 py-3 flex flex-col gap-3 animate-in fade-in slide-in-from-top-4`}>
@@ -2990,6 +3082,22 @@ const App: React.FC = () => {
                                                                                 inputClassName="text-xs text-right text-white"
                                                                             />
                                                                             <span className="text-[8px] text-neutral-500">mm</span>
+                                                                        </div>
+                                                                        <div className="flex items-center gap-1.5 bg-black/30 border border-white/10 rounded-lg px-2 py-1" title="巾木の m単価（見積の巾木ラインに使用）">
+                                                                            <span className="text-[8px] text-neutral-400 font-bold uppercase">単価</span>
+                                                                            <NumericField
+                                                                                value={bbUnitPrice}
+                                                                                onChange={(v) =>
+                                                                                    setMaterialSettings((prev) => ({
+                                                                                        ...prev,
+                                                                                        [prodId]: { ...prev[prodId], baseboardUnitPrice: Math.max(0, v) },
+                                                                                    }))
+                                                                                }
+                                                                                dragSensitivity={5}
+                                                                                className="w-16 !border-0 !bg-transparent"
+                                                                                inputClassName="text-xs text-right text-white"
+                                                                            />
+                                                                            <span className="text-[8px] text-neutral-500">円/m</span>
                                                                         </div>
                                                                         <div className="relative group/color border border-white/10 rounded-lg overflow-hidden w-6 h-6 shrink-0 cursor-pointer">
                                                                             <input type="color" value={bbColor} onChange={(e) => e.target && setMaterialSettings(prev => ({ ...prev, [prodId]: { ...prev[prodId], baseboardColor: e.target.value } }))} className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer" />

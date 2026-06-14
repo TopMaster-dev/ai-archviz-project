@@ -1,4 +1,5 @@
 import type { AiEstimateItem, FurnitureItem } from '../types.js';
+import type { BaseboardEstimateRow } from './baseboardEstimate.js';
 
 /** App の costBreakdown 行と同一形状 */
 export interface CostBreakdownEntry {
@@ -23,7 +24,7 @@ export interface MaterialExportRow {
   amount: number;
   remark: string;
   sectionType: '3D確定';
-  inputStatus: '完了';
+  inputStatus: '完了' | '未入力';
 }
 
 export interface FurnitureExportRow {
@@ -50,7 +51,7 @@ export interface AiEstimateExportRow {
   inputStatus: '完了' | '未入力';
 }
 
-export type SurfaceKey = 'floor' | 'ceiling' | 'wall' | 'beam';
+export type SurfaceKey = 'floor' | 'ceiling' | 'wall' | 'beam' | 'baseboard';
 
 export interface MaterialSectionPayload {
   key: SurfaceKey;
@@ -85,6 +86,8 @@ export interface BuildEstimateOptions {
   wallDivisions: Record<number, number>;
   /** 建材ラインのメモ（productId キー）。CSV/PDF の備考へ反映（4c）。 */
   materialMemoByProductId?: Record<string, string>;
+  /** 巾木ライン（壁延長 × m単価）。CSV/PDF の【巾木】セクションへ反映（260613）。 */
+  baseboardRows?: BaseboardEstimateRow[];
 }
 
 function roundYen(n: number): number {
@@ -227,6 +230,7 @@ export function buildEstimateExportPayload(
   });
 
   const beamRows = buildSectionRows(beamMap, globalNo);
+  globalNo = beamRows.nextNo;
   materialSections.push({
     key: 'beam',
     title: '梁',
@@ -234,11 +238,36 @@ export function buildEstimateExportPayload(
     subtotal: roundYen([...beamMap.values()].reduce((s, r) => s + r.cost, 0)),
   });
 
+  // 巾木ライン（壁延長 × m単価）。面積ベースと単位（m）が異なるため別セクション（260613）。
+  const baseboardSrc = options.baseboardRows ?? [];
+  const baseboardExportRows: MaterialExportRow[] = baseboardSrc.map((r) => ({
+    no: globalNo++,
+    detailName: `${r.brand} ${r.productName}`.trim() || '巾木',
+    spec: '壁延長・m単価',
+    quantity: Math.round(r.lengthM * 1000) / 1000,
+    unit: 'm',
+    unitPrice: roundYen(r.unitPrice),
+    amount: roundYen(r.cost),
+    remark: '',
+    sectionType: '3D確定',
+    inputStatus: r.unitPrice > 0 ? '完了' : '未入力',
+  }));
+  const baseboardTotal = baseboardSrc.reduce((s, r) => s + r.cost, 0);
+  if (baseboardExportRows.length > 0) {
+    materialSections.push({
+      key: 'baseboard',
+      title: '巾木',
+      rows: baseboardExportRows,
+      subtotal: roundYen(baseboardTotal),
+    });
+  }
+
   const materialsFlat: MaterialExportRow[] = [
     ...floorRows.rows,
     ...ceilRows.rows,
     ...wallRows.rows,
     ...beamRows.rows,
+    ...baseboardExportRows,
   ];
 
   const boardMap = new Map<string, MaterialBoardItem>();
@@ -299,12 +328,14 @@ export function buildEstimateExportPayload(
     });
   }
 
+  // 巾木は建材費の一部として materialsTotal に含める（grandTotal も同様）。
+  const materialsTotalWithBaseboard = materialsTotal + baseboardTotal;
   return {
     generatedAtIso: new Date().toISOString(),
-    materialsTotal: roundYen(materialsTotal),
+    materialsTotal: roundYen(materialsTotalWithBaseboard),
     furnitureTotal: roundYen(furnitureTotal),
     aiItemsTotal: roundYen(aiItemsTotal),
-    grandTotal: roundYen(materialsTotal + furnitureTotal + aiItemsTotal),
+    grandTotal: roundYen(materialsTotalWithBaseboard + furnitureTotal + aiItemsTotal),
     materials: materialsFlat,
     materialSections,
     materialBoard,
@@ -340,6 +371,7 @@ export function buildEstimateCsv(payload: EstimateExportPayload): string {
     ceiling: '【天井】',
     wall: '【壁】',
     beam: '【梁】',
+    baseboard: '【巾木】',
   };
 
   for (const sec of payload.materialSections) {

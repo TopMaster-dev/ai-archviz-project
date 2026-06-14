@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { beamExposedAreaM2 } from './beamArea.js';
+import { beamExposedAreaM2, wallBeamWallCoverAreaM2 } from './beamArea.js';
 
 describe('beamExposedAreaM2 (260611 #2a: count only faces not touching wall/ceiling/floor)', () => {
   it('free beam flush to ceiling: 2 sides + 2 ends + bottom (top touches ceiling)', () => {
@@ -30,5 +30,42 @@ describe('beamExposedAreaM2 (260611 #2a: count only faces not touching wall/ceil
     expect(beamExposedAreaM2({ lengthMm: 0, widthMm: 150, heightMm: 300 })).toBe(0);
     expect(beamExposedAreaM2({ lengthMm: NaN, widthMm: 150, heightMm: 300 })).toBe(0);
     expect(beamExposedAreaM2({ lengthMm: 3000, widthMm: 0, heightMm: 300 })).toBe(0);
+  });
+});
+
+describe('wallBeamWallCoverAreaM2 (260613: subtract wall-beam-covered strip from クロス)', () => {
+  const roomH = 2700;
+
+  it('flush wall beam fully inside the segment: length × height', () => {
+    // L=3m, H=300mm, drop=0 → band [2400,2700]; segment [0,2700] → overlap 300mm → 3*0.3 = 0.9
+    const a = wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 300, wallIndex: 1, dropMm: 0 }, 0, roomH, roomH);
+    expect(a).toBeCloseTo(0.9, 5);
+  });
+
+  it('dropped beam: band shifts down but still inside the segment', () => {
+    // drop=200, H=300 → band [2200,2500]; overlap with [0,2700] = 300mm → 0.9
+    const a = wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 300, wallIndex: 1, dropMm: 200 }, 0, roomH, roomH);
+    expect(a).toBeCloseTo(0.9, 5);
+  });
+
+  it('clips to the segment: beam band only partially overlaps the wainscot-upper segment', () => {
+    // band [2400,2700]; upper segment [900,2700] fully contains it → 0.9
+    const upper = wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 300, wallIndex: 1, dropMm: 0 }, 900, roomH, roomH);
+    expect(upper).toBeCloseTo(0.9, 5);
+    // lower (腰壁) segment [0,900] does not overlap the top band → 0
+    const lower = wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 300, wallIndex: 1, dropMm: 0 }, 0, 900, roomH);
+    expect(lower).toBe(0);
+  });
+
+  it('tall beam clipped at the segment top (does not exceed roomHeight band)', () => {
+    // H=500, drop=0 → band [2200,2700]; segment [0,2700] → overlap 500mm → 3*0.5 = 1.5
+    const a = wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 500, wallIndex: 1, dropMm: 0 }, 0, roomH, roomH);
+    expect(a).toBeCloseTo(1.5, 5);
+  });
+
+  it('free beams (no wallIndex) and degenerate inputs return 0', () => {
+    expect(wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 300, dropMm: 0 }, 0, roomH, roomH)).toBe(0);
+    expect(wallBeamWallCoverAreaM2({ lengthMm: 0, heightMm: 300, wallIndex: 1 }, 0, roomH, roomH)).toBe(0);
+    expect(wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 0, wallIndex: 1 }, 0, roomH, roomH)).toBe(0);
   });
 });

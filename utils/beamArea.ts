@@ -45,3 +45,30 @@ export function beamExposedAreaM2(
   area += endFaces * (W * H);
   return area;
 }
+
+/**
+ * 壁梁が壁面（クロス）を覆う帯の面積(m²)。壁梁の鉛直帯
+ * [roomHeight - drop - height, roomHeight - drop] と、指定した壁セグメント
+ * [segBottomMm, segTopMm] の重なり高さ × 梁の長さ。
+ *
+ * クライアント要望（260613）:「梁がある部分も壁面（クロス）の計算に含まれている」の修正。
+ * 壁梁の室内側側面は梁の仕上げとして別計上されるため、その裏のクロス面積は二重計上になる。
+ * 壁梁(wallIndex 定義)のみ対象。自由梁・非有限・非正・重なり無しは 0。
+ */
+export function wallBeamWallCoverAreaM2(
+  beam: Pick<Beam, 'lengthMm' | 'heightMm' | 'wallIndex'> & { dropMm?: number },
+  segBottomMm: number,
+  segTopMm: number,
+  roomHeightMm: number,
+): number {
+  if (beam.wallIndex === undefined) return 0;
+  const L = (Number.isFinite(beam.lengthMm) ? beam.lengthMm : 0) / 1000;
+  const H = Number.isFinite(beam.heightMm) ? beam.heightMm : 0;
+  if (L <= 0 || H <= 0 || !Number.isFinite(roomHeightMm)) return 0;
+  const drop = Number.isFinite(beam.dropMm) ? (beam.dropMm as number) : 0;
+  const beamTopMm = roomHeightMm - drop;
+  const beamBottomMm = beamTopMm - H;
+  const overlapMm = Math.min(segTopMm, beamTopMm) - Math.max(segBottomMm, beamBottomMm);
+  if (overlapMm <= 0) return 0;
+  return (overlapMm / 1000) * L;
+}

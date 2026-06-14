@@ -879,6 +879,43 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     }
   };
 
+  // 2D固有の選択（頂点・辺・梁）の Delete / Backspace 削除。
+  // 建具・家具は App 側の統合ハンドラが2D/3D両方で処理するため、ここでは扱わない（重複削除を避ける）。
+  // 入力欄フォーカス中は無効。SketchCanvas は2Dビュー時のみマウントされる。
+  useEffect(() => {
+    const isTypingTarget = () => {
+      const el = document.activeElement as HTMLElement | null;
+      return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
+      if (isTypingTarget()) return;
+      if (selectedPointIndex !== null) {
+        e.preventDefault();
+        setPointsMm((prev) => {
+          const next = prev.filter((_, i) => i !== selectedPointIndex);
+          if (next.length < 3) setIsClosed(false);
+          return next;
+        });
+        setSelectedPointIndex(null);
+      } else if (selectedEdgeIndex !== null) {
+        e.preventDefault();
+        setPointsMm((prev) => {
+          const next = prev.filter((_, i) => i !== selectedEdgeIndex);
+          if (next.length < 3) setIsClosed(false);
+          return next;
+        });
+        setSelectedEdgeIndex(null);
+      } else if (selectedBeamId) {
+        e.preventDefault();
+        onBeamsChange?.(beams.filter((b) => b.id !== selectedBeamId));
+        setSelectedBeamId(null);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPointIndex, selectedEdgeIndex, selectedBeamId, beams, onBeamsChange]);
+
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const pixels = getCanvasMousePos(e);
     if (pixels.x < rulerSize || pixels.y < rulerSize) return;

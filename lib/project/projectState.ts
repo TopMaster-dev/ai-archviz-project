@@ -36,6 +36,8 @@ export interface MaterialSettingsValue {
   baseboardEnabled?: boolean;
   baseboardHeight?: number;
   baseboardColor?: string;
+  /** 巾木の m 単価（円/m）。見積の巾木ラインで「壁延長 × 単価」に使用（260613）。未設定=0。 */
+  baseboardUnitPrice?: number;
   wainscotHeight?: number;
   doorColor?: string;
   doorFrameColor?: string;
