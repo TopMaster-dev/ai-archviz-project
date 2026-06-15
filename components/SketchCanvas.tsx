@@ -257,6 +257,25 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 }) => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // 2Dスケッチ操作ガイドの表示状態（管理表 row 121）。閉じた状態は localStorage に記憶。
+  const [guideOpen, setGuideOpen] = useState(() => {
+    try {
+      return localStorage.getItem('arise.sketchGuide.collapsed') !== '1';
+    } catch {
+      return true;
+    }
+  });
+  const toggleGuide = useCallback(() => {
+    setGuideOpen((v) => {
+      const next = !v;
+      try {
+        localStorage.setItem('arise.sketchGuide.collapsed', next ? '0' : '1');
+      } catch {
+        // localStorage 不可でも表示の切替自体は機能させる。
+      }
+      return next;
+    });
+  }, []);
   const canvasBoxRef = useRef<HTMLDivElement | null>(null);
   const pointerCaptureIdRef = useRef<number | null>(null);
   const requestRef = useRef<number | null>(null);
@@ -2820,6 +2839,45 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             </div>
           </div>
         )}
+
+        {/* 2Dスケッチ操作ガイド（管理表 row 121）。常時表示・折りたたみ可。 */}
+        <div className="absolute bottom-6 left-[368px] z-30 max-w-[256px] pointer-events-auto">
+          {guideOpen ? (
+            <div className="glass rounded-2xl border border-white/10 bg-black/55 backdrop-blur-md p-3 text-[11px] text-neutral-300 shadow-xl">
+              <div className="mb-1.5 flex items-center justify-between">
+                <span className="font-black tracking-widest text-neutral-200">操作ガイド</span>
+                <button
+                  type="button"
+                  onClick={toggleGuide}
+                  aria-label="操作ガイドを閉じる"
+                  className="rounded px-1.5 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+                >
+                  ×
+                </button>
+              </div>
+              <ul className="space-y-0.5 leading-relaxed">
+                <li>・壁を描く: キャンバスをクリックで角を打つ</li>
+                <li>・閉じる: 始点をクリックで部屋を確定</li>
+                <li>・建具/家具: 上部メニューから選んで配置</li>
+                <li>・選択/移動: クリックで選択、ドラッグで移動</li>
+                <li>・削除: Delete / Backspace（全消去ボタンも）</li>
+                <li>・元に戻す/やり直し: Ctrl+Z / Ctrl+Shift+Z</li>
+                <li>・グループ化: Ctrl+G</li>
+                <li>・画面移動: 右ドラッグ または Shift+ドラッグ</li>
+                <li>・ズーム: マウスホイール</li>
+                <li>・3D化: 「3Dモデルを生成」ボタン</li>
+              </ul>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={toggleGuide}
+              className="glass rounded-full border border-white/10 bg-black/55 px-3 py-1.5 text-[11px] font-black text-neutral-200 backdrop-blur-md shadow-xl transition hover:text-white"
+            >
+              ？ 操作ガイド
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
