@@ -404,7 +404,7 @@ export function AiEditWorkspace({
       return;
     }
     if (!hasAnyInput) {
-      setSubmitError('シチュエーションまたはエリア編集で、画像かテキストを1つ以上設定してください。');
+      setSubmitError('AIデザインまたはエリア編集で、画像かテキストを1つ以上設定してください。');
       return;
     }
     if (requiresAreaPlacement) {
@@ -495,7 +495,7 @@ export function AiEditWorkspace({
                 写真をアップロード
               </button>
               <p className="text-[11px] text-neutral-500">
-                JPEG / PNG。アップロード後、シチュエーション・エリア編集・書き出しがご利用いただけます。
+                JPEG / PNG。アップロード後、AIデザイン・エリア編集・書き出しがご利用いただけます。
               </p>
             </div>
           ) : (
@@ -680,7 +680,7 @@ export function AiEditWorkspace({
                   className="flex items-center gap-1 px-3 py-2 rounded-lg bg-zinc-800 border border-white/10 text-xs font-bold hover:bg-zinc-700"
                 >
                   <ImagePlus className="w-4 h-4" />
-                  シチュエーション
+                  AIデザイン
                 </button>
                 <input
                   ref={styleInputRef}
@@ -717,7 +717,7 @@ export function AiEditWorkspace({
                     </div>
                     <div className="flex-1 min-w-0 space-y-1">
                       <div className="flex items-center justify-between gap-1">
-                        <span className="text-[10px] font-bold text-neutral-300">シチュエーション</span>
+                        <span className="text-[10px] font-bold text-neutral-300">AIデザイン</span>
                         <button
                           type="button"
                           onClick={() => {

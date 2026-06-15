@@ -75,7 +75,7 @@ export default async function handler(req: any, res: any) {
     if (!hasSituationInput && !hasAreaEditInput) {
       return res.status(400).json({
         success: false,
-        error: 'シチュエーションまたはエリア編集で、画像かテキストを1つ以上設定してください。',
+        error: 'AIデザインまたはエリア編集で、画像かテキストを1つ以上設定してください。',
       });
     }
     if (hasAreaEditInput && areaPlacementCount === 0) {
