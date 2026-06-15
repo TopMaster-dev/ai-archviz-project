@@ -560,7 +560,11 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
     const shortEdgeMeters = effectiveTextureShortEdgeMeters(prod.physical, settings.textureScale);
     const surface = getSurfaceSizeFromMesh(mesh);
     applyRealSizeTextureRepeat(texture, shortEdgeMeters, surface?.widthM, surface?.heightM);
-    
+    // テクスチャの向き（度）。中心回転で任意角度に対応（260613・row 164）。
+    texture.center.set(0.5, 0.5);
+    texture.rotation = THREE.MathUtils.degToRad(settings.textureRotation ?? 0);
+    texture.needsUpdate = true;
+
     mesh.material = new THREE.MeshStandardMaterial({
         map: texture,
         roughness: settings.roughness ?? prod.pbr.roughness,
@@ -632,7 +636,11 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
       w,
       h
     );
-  }, [mapTexture, meshRef, product, settings.textureScale, surfaceWidthM, surfaceHeightM]);
+    // テクスチャの向き（度）。中心回転にして任意角度で貼り付け（260613・row 164）。
+    mapTexture.center.set(0.5, 0.5);
+    mapTexture.rotation = THREE.MathUtils.degToRad(settings.textureRotation ?? 0);
+    mapTexture.needsUpdate = true;
+  }, [mapTexture, meshRef, product, settings.textureScale, settings.textureRotation, surfaceWidthM, surfaceHeightM]);
 
   useLayoutEffect(() => {
     applyTextureRepeat();

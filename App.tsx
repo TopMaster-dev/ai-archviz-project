@@ -2996,6 +2996,43 @@ const App: React.FC = () => {
                                                                     ? `画像 ${imageSize.width}x${imageSize.height}px / 実寸 ${widthMm}x${heightMm}mm`
                                                                     : `元画像寸法を読み込み中... / 実寸 ${widthMm}x${heightMm}mm`}
                                                             </div>
+                                                            {/* テクスチャの向き（度）。任意角度＋90°回転ボタン（260613・row 164）。 */}
+                                                            <div className="mt-1.5 flex items-center justify-between gap-2">
+                                                                <span className="text-[9px] text-neutral-300 font-bold">向き</span>
+                                                                <div className="flex items-center gap-1.5">
+                                                                    <NumericField
+                                                                        value={Math.round(((settings.textureRotation ?? 0) % 360 + 360) % 360)}
+                                                                        onChange={(deg) => {
+                                                                            if (!Number.isFinite(deg)) return;
+                                                                            const normalized = ((Math.round(deg) % 360) + 360) % 360;
+                                                                            setMaterialSettings((prev) => ({
+                                                                                ...prev,
+                                                                                [prodId]: { ...prev[prodId], textureRotation: normalized },
+                                                                            }));
+                                                                        }}
+                                                                        dragSensitivity={1}
+                                                                        className="w-16"
+                                                                        inputClassName="text-[10px] text-right text-white"
+                                                                    />
+                                                                    <span className="text-[9px] text-neutral-500">°</span>
+                                                                    <button
+                                                                        type="button"
+                                                                        title="90°回転"
+                                                                        onClick={() =>
+                                                                            setMaterialSettings((prev) => ({
+                                                                                ...prev,
+                                                                                [prodId]: {
+                                                                                    ...prev[prodId],
+                                                                                    textureRotation: (((settings.textureRotation ?? 0) + 90) % 360 + 360) % 360,
+                                                                                },
+                                                                            }))
+                                                                        }
+                                                                        className="rounded bg-white/10 px-2 py-1 text-[9px] font-bold text-neutral-200 hover:bg-white/20"
+                                                                    >
+                                                                        ＋90°
+                                                                    </button>
+                                                                </div>
+                                                            </div>
                                                         </div>
                                                     </div>
                                                 );

@@ -33,7 +33,6 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "three": "^0.182.0",
-    "three-gpu-pathtracer": "^0.0.24",
     "three-mesh-bvh": "^0.9.8",
     "zundo": "^2.3.0",
     "zustand": "^5.0.14"

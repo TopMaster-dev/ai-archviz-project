@@ -5,6 +5,7 @@ import { useProjectSessionContext } from '../lib/project/projectSessionContext.j
 import { createShareLink } from '../lib/db/projects.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
+import { OnboardingGuide } from './OnboardingGuide.js';
 
 /**
  * ログインと2Dスケッチ（エディタ）の間に表示する独立した「ホーム画面」。
@@ -63,6 +64,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   // 共有（2b）: 閲覧用URLの発行・クリップボードコピーの結果通知。
   const [sharingId, setSharingId] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
+  // プロジェクト名での絞り込み検索（管理表 row 69）。
+  const [query, setQuery] = useState('');
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
@@ -88,6 +91,10 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   };
 
   const usage = plan === 'free' ? `${projectCount} / ${projectLimit}` : `${projectCount}`;
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredProjects = normalizedQuery
+    ? projects.filter((p) => p.name.toLowerCase().includes(normalizedQuery))
+    : projects;
 
   const openProject = async (id: string) => {
     if (id !== projectId) await switchProject(id);
@@ -171,15 +178,28 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           )}
           {error && <p className="mb-2 text-xs text-red-300">{error}</p>}
 
+          {projects.length > 0 && (
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="プロジェクトを検索…"
+              aria-label="プロジェクトを検索"
+              className="mb-3 w-full max-w-xs rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
+            />
+          )}
+
           {status === 'loading' && projects.length === 0 ? (
             <p className="text-sm text-neutral-500">読み込み中…</p>
           ) : projects.length === 0 ? (
             <p className="text-sm text-neutral-500">
               プロジェクトがありません。「＋ 新規作成」から始めてください。
             </p>
+          ) : filteredProjects.length === 0 ? (
+            <p className="text-sm text-neutral-500">「{query.trim()}」に一致するプロジェクトはありません。</p>
           ) : (
             <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {projects.map((p) => {
+              {filteredProjects.map((p) => {
                 const active = p.id === projectId;
                 return (
                   <li
@@ -392,6 +412,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
       )}
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+
+      <OnboardingGuide />
     </div>
   );
 }

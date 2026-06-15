@@ -8,10 +8,11 @@ const GRACE_DAYS = 14;
 
 /**
  * フリープランのプロジェクト保存上限。
- * DB 側の free_plan_project_limit()（migration 0001）と一致させること。
+ * DB 側の free_plan_project_limit() と一致させること（schema.sql 参照）。
  * 実際の拒否は INSERT トリガが担うため、これは UI 表示・事前判定用のミラー値。
+ * 260613: テストマーケティング期は 5 → 10 に引き上げ（管理表 row 72）。
  */
-export const FREE_PLAN_PROJECT_LIMIT = 5;
+export const FREE_PLAN_PROJECT_LIMIT = 10;
 
 /** createProject / duplicateProject 等がフリープラン上限トリガで拒否されたかを判定する。 */
 export function isFreePlanLimitError(e: unknown): boolean {

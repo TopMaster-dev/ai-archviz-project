@@ -33,6 +33,8 @@ export interface MaterialSettingsValue {
   roughness: number;
   metalness: number;
   textureScale?: number;
+  /** テクスチャの向き（度）。3Dの貼り付け回転に使用（260613・管理表 row 164「テクスチャ向き変更」）。未設定=0。 */
+  textureRotation?: number;
   baseboardEnabled?: boolean;
   baseboardHeight?: number;
   baseboardColor?: string;

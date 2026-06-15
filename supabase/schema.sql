@@ -166,8 +166,10 @@ create policy "projects: owner update" on public.projects
 create policy "projects: owner delete" on public.projects
   for delete using (auth.uid() = owner_id);
 
+-- フリープランのプロジェクト保存上限。260613: テストマーケティング期は 5 → 10（管理表 row 72）。
+-- クライアント側ミラー（lib/db/projects.ts FREE_PLAN_PROJECT_LIMIT）と一致させること。
 create or replace function free_plan_project_limit()
-returns int language sql immutable as $$ select 5; $$;
+returns int language sql immutable as $$ select 10; $$;
 
 create or replace function enforce_free_plan_limit()
 returns trigger language plpgsql security definer set search_path = public as $$

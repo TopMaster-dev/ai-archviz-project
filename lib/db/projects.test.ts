@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { FREE_PLAN_PROJECT_LIMIT, isFreePlanLimitError } from './projects.js';
 
 describe('free plan limit helpers', () => {
-  it('mirrors the DB free_plan_project_limit() value (5)', () => {
-    expect(FREE_PLAN_PROJECT_LIMIT).toBe(5);
+  it('mirrors the DB free_plan_project_limit() value (10 for test marketing)', () => {
+    expect(FREE_PLAN_PROJECT_LIMIT).toBe(10);
   });
 
   it('detects the Postgres trigger rejection (PostgrestError-like object)', () => {
