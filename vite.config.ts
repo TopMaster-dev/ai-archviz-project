@@ -6,7 +6,7 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, type AgentChatMessage } from './lib/gemini.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { normalizeObjectReference } from './lib/aiEditNormalize.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
@@ -259,6 +259,50 @@ export default defineConfig(({ mode }) => {
                         return res.end(JSON.stringify({ success: true, url: dataUrl }));
                     } catch (e: any) {
                         console.error('ai-edit local error:', e);
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            // --- Local AI Agent Endpoint (text chat advice) ---
+            if (req.url === '/api/agent' && req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    try {
+                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
+                        const apiKey = extractGeminiApiKey(rawApiKey);
+                        if (!apiKey) {
+                            res.statusCode = 400;
+                            res.setHeader('Content-Type', 'application/json');
+                            return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキーが見つかりません。' }));
+                        }
+                        const parsed = JSON.parse(body) as { messages?: AgentChatMessage[]; imageDataUrl?: string | null };
+                        const messages: AgentChatMessage[] = Array.isArray(parsed.messages)
+                            ? parsed.messages
+                                  .filter(
+                                      (m): m is AgentChatMessage =>
+                                          !!m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string' && m.content.trim().length > 0
+                                  )
+                                  .slice(-12)
+                            : [];
+                        if (messages.length === 0) {
+                            res.statusCode = 400;
+                            res.setHeader('Content-Type', 'application/json');
+                            return res.end(JSON.stringify({ success: false, error: 'メッセージが必要です。' }));
+                        }
+                        const reply = await generateAgentReply(apiKey, {
+                            messages,
+                            imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : null,
+                        });
+                        res.statusCode = 200;
+                        res.setHeader('Content-Type', 'application/json');
+                        return res.end(JSON.stringify({ success: true, reply }));
+                    } catch (e: any) {
+                        console.error('agent local error:', e);
                         res.statusCode = 500;
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(JSON.stringify({ success: false, error: e.message }));

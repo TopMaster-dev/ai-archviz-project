@@ -101,6 +101,57 @@ function parsePlacementNarrativesJson(raw: string): Record<string, string> {
   return out;
 }
 
+export interface AgentChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+/**
+ * AIエージェント相談（建築・内装デザインのアドバイス）。Flash モデルでテキスト応答（管理表 row 208/214）。
+ * 直近の会話履歴を contents に変換し、最新のユーザー発話にだけ現在の画像を参考添付する。
+ */
+export async function generateAgentReply(
+  apiKey: string,
+  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null }
+): Promise<string> {
+  const system = `あなたは建築・内装に精通したプロのAIデザインアドバイザーです。Arise（2D作図→3D→AIパース→概算見積もりの空間デザインツール）のユーザーを支援します。
+- 配色・素材・家具・照明・レイアウト・コーディネート、見積もりや進め方の相談に、日本語で具体的かつ実務的に助言する。
+- 不要な前置きは避け、要点は短い段落や箇条書きで簡潔に。
+- 画像が添付されている場合は、その空間を踏まえて助言する。`;
+
+  const lastIdx = params.messages.length - 1;
+  const contents = params.messages.map((m, i) => {
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
+      { text: m.content },
+    ];
+    if (m.role === 'user' && i === lastIdx && params.imageDataUrl) {
+      const img = parseImageDataUrl(params.imageDataUrl);
+      parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+    }
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts };
+  });
+
+  const payload = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents,
+    generationConfig: { temperature: 0.6, responseModalities: ['TEXT'] },
+  };
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${resolvePlacementCaptionModel()}:generateContent`;
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: JSON.stringify(payload),
+  });
+  if (!response.ok) {
+    const t = await response.text().catch(() => '');
+    throw new Error(`エージェント応答の取得に失敗しました (${response.status}) ${t.slice(0, 200)}`);
+  }
+  const result = await response.json();
+  const text = result.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text)?.text;
+  if (!text || typeof text !== 'string') throw new Error('エージェントの応答が空でした。');
+  return text.trim();
+}
+
 /** マルチ参照対応のインテリア編集（ベース + スタイル0〜1 + オブジェクト複数） */
 export async function generateGeminiImageEdit(
   apiKey: string,

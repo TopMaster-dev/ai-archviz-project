@@ -19,6 +19,7 @@ import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { resizeDataUrlToSize } from '../utils/resizeDataUrl.js';
+import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
 
@@ -1121,6 +1122,9 @@ export function AiEditWorkspace({
           }).catch((e) => console.warn('[ai feedback] 暗黙的good評価の記録に失敗', e));
         }}
       />
+
+      {/* AIエージェント相談パネル（管理表 row 208/214・プランA）。折り畳み式・現在画像を文脈に。 */}
+      <AgentChatPanel imageDataUrl={activeVersion?.outputImageDataUrl ?? null} />
     </div>
   );
 }
