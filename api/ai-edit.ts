@@ -45,11 +45,15 @@ export default async function handler(req: any, res: any) {
       objects?: unknown[];
       aspectRatio?: string;
       imageSize?: string;
+      coordinate?: boolean;
     };
 
     if (!body.baseImage) {
       return res.status(400).json({ success: false, error: 'baseImage が必要です。' });
     }
+
+    // コーディネート（完全お任せ）モード（row 207/213）: 個別の入力は不要なため入力必須チェックを省く。
+    const coordinate = body.coordinate === true;
 
     const objects: AiEditObjectReference[] = [];
     if (Array.isArray(body.objects)) {
@@ -72,7 +76,7 @@ export default async function handler(req: any, res: any) {
         o.placementMemos.some((m) => m.trim().length > 0)
     );
     const areaPlacementCount = objects.reduce((sum, o) => sum + o.placements.length, 0);
-    if (!hasSituationInput && !hasAreaEditInput) {
+    if (!coordinate && !hasSituationInput && !hasAreaEditInput) {
       return res.status(400).json({
         success: false,
         error: 'AIデザインまたはエリア編集で、画像かテキストを1つ以上設定してください。',
@@ -111,6 +115,7 @@ export default async function handler(req: any, res: any) {
       aspectRatio,
       imageSize,
       placementNarratives,
+      coordinate,
     });
 
     return res.status(200).json({ success: true, url: dataUrl });

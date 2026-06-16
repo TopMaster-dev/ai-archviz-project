@@ -114,6 +114,8 @@ export async function generateGeminiImageEdit(
     /** 例: 1K, 2K, 4K */
     imageSize?: string;
     placementNarratives?: Record<string, string>;
+    /** コーディネート（完全お任せ）モード。個別指定なしで空間全体を再コーディネート（row 207/213）。 */
+    coordinate?: boolean;
   }
 ): Promise<string> {
   const instruction = buildAiEditReferenceGuide({
@@ -121,6 +123,7 @@ export async function generateGeminiImageEdit(
     styleMemo: params.styleMemo?.trim() || undefined,
     objects: params.objects,
     placementNarratives: params.placementNarratives,
+    coordinate: params.coordinate,
   });
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [

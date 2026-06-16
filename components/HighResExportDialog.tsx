@@ -27,9 +27,11 @@ type Props = {
   open: boolean;
   onClose: () => void;
   sourceImageDataUrl: string | null;
+  /** ダウンロード（書き出し）成功時。暗黙的フィードバック（採用＝good）の記録に使う（管理表 row 210/216）。 */
+  onExported?: () => void;
 };
 
-export function HighResExportDialog({ open, onClose, sourceImageDataUrl }: Props) {
+export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExported }: Props) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(PREVIEW_INDEX);
@@ -92,6 +94,7 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl }: Props
         a.download =
           wh === 'image' ? 'archviz_preview.png' : `archviz_preview_${wh}.png`;
         a.click();
+        onExported?.();
         onClose();
       } catch (e) {
         setError(e instanceof Error ? e.message : 'エラー');
@@ -124,6 +127,7 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl }: Props
       a.href = url;
       a.download = `archviz_print_${p.dpi}dpi_${p.width}x${p.height}.png`;
       a.click();
+      onExported?.();
       onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');

@@ -74,13 +74,40 @@ ${MODE_INSTRUCTIONS[mode]}
 `.trim();
 }
 
+/**
+ * コーディネート（完全お任せ）モードのプロンプト（管理表 row 207/213）。
+ * ユーザーの個別指定なしに、空間全体を魅力的に再コーディネートする。
+ * 部屋の形・寸法・開口・カメラは維持し、家具/装飾/演出を一新する。
+ */
+export function buildCoordinatePrompt(): string {
+  return `
+あなたは経験豊富なインテリアコーディネーター兼建築ビジュアライゼーションのAIです。
+ベース画像の空間を、お任せで魅力的に「再コーディネート」してください。
+
+【絶対に変えない】
+- 空間の形・寸法・天井高・開口（窓/ドア）の位置・カメラの画角と透視
+- 部屋そのものが別の部屋にならないこと（同じ空間のスタイル変更に留める）
+- 出力に矩形・マスク・補助図形・凡例・UI風の色面を一切含めない。フォトリアルな完成写真のみを出力する。
+
+【お任せで提案してよい範囲】
+- 家具・ラグ・カーテン等のファブリック・照明器具・アート・観葉植物・小物の選定と配置
+- 配色・素材感・照明演出（時間帯/ムード）による空間全体のコーディネート
+- 全体として調和の取れた、実在感のある上質なインテリアにまとめる
+
+出力: 再コーディネート後の最終画像1枚のみを高品質・フォトリアルに生成する。
+`.trim();
+}
+
 export function buildAiEditReferenceGuide(params: {
   hasStyle: boolean;
   styleMemo?: string;
   objects: AiEditObjectReference[];
   /** objectId → AI が生成した位置説明（参考）。座標が優先。 */
   placementNarratives?: Record<string, string>;
+  /** コーディネート（完全お任せ）モード。true のとき個別指定を無視し全体を再コーディネートする。 */
+  coordinate?: boolean;
 }): string {
+  if (params.coordinate) return buildCoordinatePrompt();
   const hasObjects = params.objects.length > 0;
   const hasObjectRefs = params.objects.some((o) => !!o.imageDataUrl);
   const mode = resolvePromptMode(params.hasStyle, hasObjects);

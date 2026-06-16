@@ -207,6 +207,7 @@ export default defineConfig(({ mode }) => {
                             objects,
                             aspectRatio,
                             imageSize,
+                            coordinate,
                         } = parsed;
                         if (!baseImage) {
                             res.statusCode = 400;
@@ -250,6 +251,7 @@ export default defineConfig(({ mode }) => {
                             aspectRatio: ar,
                             imageSize: isz,
                             placementNarratives,
+                            coordinate: coordinate === true,
                         });
 
                         res.statusCode = 200;

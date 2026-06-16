@@ -466,6 +466,53 @@ export function AiEditWorkspace({
     void runEdit();
   };
 
+  // コーディネート（完全お任せ）モード（管理表 row 207/213）: 個別指定なしで空間全体を再コーディネートする。
+  const runCoordinate = useCallback(async () => {
+    if (!activeVersion || isSubmitting) return;
+    setSubmitError(null);
+    setIsSubmitting(true);
+    try {
+      const baseScaled = await downscaleDataUrlIfNeeded(activeVersion.outputImageDataUrl);
+      const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
+      const aspectRatio = pickClosestAspectRatio(baseW, baseH);
+      const res = await fetch('/api/ai-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+        body: JSON.stringify({ baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: '2K' }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
+      let outUrl = data.url as string;
+      outUrl = await resizeDataUrlToSize(outUrl, baseW, baseH);
+      setCompareA(activeVersion.outputImageDataUrl);
+      setCompareB(outUrl);
+      setCompareSlider(50);
+      // 暗黙的フィードバック（row 210/216）: 戻って再コーディネートした場合、直前の生成結果を暗黙 bad に。
+      const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
+      if (priorChildren.length > 0) {
+        const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+        void recordAiFeedback({
+          verdict: 'bad',
+          imageRef: abandoned.id,
+          feature: 'ai_design',
+          promptContext: { implicit: true, signal: 'regenerate' },
+        }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
+      }
+      onEditSuccess({
+        parentId: activeVersion.id,
+        baseImageDataUrl: activeVersion.outputImageDataUrl,
+        outputImageDataUrl: outUrl,
+        styleRefDataUrl: null,
+        styleMemo: '',
+        objects: [],
+      });
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : 'エラー');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [activeVersion, isSubmitting, versions, onEditSuccess]);
+
   const onMouseDownPlacement = (e: React.MouseEvent) => {
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
     const img = imgRef.current;
@@ -771,8 +818,10 @@ export function AiEditWorkspace({
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-900/70 border border-purple-500/30 text-xs font-black text-purple-200/60 cursor-not-allowed"
+                  disabled={isSubmitting || !activeVersion}
+                  onClick={() => void runCoordinate()}
+                  title="空間全体をAIにお任せで再コーディネート（家具・装飾・演出を一新）"
+                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-900/70 border border-purple-500/30 text-xs font-black text-purple-200 hover:bg-purple-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Sparkles className="w-3.5 h-3.5 shrink-0" />
                   AIデザイン提案
@@ -1061,6 +1110,16 @@ export function AiEditWorkspace({
         open={highResExportOpen}
         onClose={() => setHighResExportOpen(false)}
         sourceImageDataUrl={activeVersion?.outputImageDataUrl ?? null}
+        onExported={() => {
+          // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3「保存等」）: 書き出し＝採用とみなし good を記録。
+          if (!activeVersion) return;
+          void recordAiFeedback({
+            verdict: 'good',
+            imageRef: activeVersion.id,
+            feature: 'ai_design',
+            promptContext: { implicit: true, signal: 'export' },
+          }).catch((e) => console.warn('[ai feedback] 暗黙的good評価の記録に失敗', e));
+        }}
       />
     </div>
   );
