@@ -159,7 +159,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   };
 
   return (
-    <div className="min-h-screen w-screen overflow-y-auto bg-neutral-950 text-neutral-100">
+    <div className="h-screen w-screen overflow-y-auto bg-neutral-950 text-neutral-100">
       <header className="flex items-center justify-between border-b border-white/10 px-6 py-4">
         <div>
           <h1 className="text-xl font-bold">Arise</h1>
