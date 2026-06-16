@@ -2560,7 +2560,7 @@ const App: React.FC = () => {
             }`}
           >
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
-                <div className="absolute top-6 left-6 right-6 z-50 flex items-start justify-between gap-3 pointer-events-none">
+                <div className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-3 pointer-events-none">
                     {renderGlobalModeToggle(aiEditOpen ? 'ai' : viewMode)}
                     {viewMode === '3D' && (
                       <div className="flex items-start justify-end gap-2 flex-wrap">

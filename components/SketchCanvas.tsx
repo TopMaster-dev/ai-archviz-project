@@ -2626,8 +2626,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       </div>
 
       {/* Floating Toolbar (Top Right) - Unified Controls */}
-      <div className="absolute top-6 right-6 z-50 animate-in slide-in-from-top duration-700 pointer-events-auto">
-          <div className="relative glass p-3 rounded-[24px] border border-white/10 flex items-center gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
+      {/* レスポンシブ（管理表 row 13）: 左の画面切替バー（約20rem）と重ならないよう最大幅を制限し、
+          狭幅では gap/padding を縮小しつつ flex-wrap で折り返す（重なり防止）。 */}
+      <div className="absolute top-6 right-6 z-50 max-w-[calc(100vw_-_23rem)] animate-in slide-in-from-top duration-700 pointer-events-auto">
+          <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
               
               {/* Tool mode: 選択・壁・窓・ドア（横並び） */}
               <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">

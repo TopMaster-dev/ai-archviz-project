@@ -14,7 +14,7 @@ type Props = {
 };
 
 const shellClassName =
-  'glass rounded-2xl border border-white/10 flex items-center gap-1 shadow-xl bg-black/40 backdrop-blur-md pointer-events-auto p-1.5';
+  'glass rounded-2xl border border-white/10 flex flex-wrap items-center gap-1 shadow-xl bg-black/40 backdrop-blur-md pointer-events-auto p-1.5';
 const buttonBaseClassName =
   'inline-flex h-[34px] items-center justify-center px-4 rounded-xl text-[11px] font-black uppercase leading-none tracking-widest transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40';
 const activeClassName = 'bg-white text-black shadow-md';
