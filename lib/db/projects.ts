@@ -1,6 +1,6 @@
 import { getSupabase } from './supabaseClient.js';
 import type { ProjectState } from '../project/projectState.js';
-import type { ProjectRow, ProjectSummary, SharedProject } from './types.js';
+import type { ProjectRow, ProjectSummary, DeletedProjectSummary, SharedProject } from './types.js';
 
 // プロジェクトの永続化（CRUD + 複製 + 共有）。すべて RLS 前提（本人の行のみ）。
 
@@ -98,6 +98,33 @@ export async function softDeleteProject(id: string): Promise<void> {
   const { error } = await sb
     .from('projects')
     .update({ deleted_at: now.toISOString(), scheduled_purge_at: purgeAt.toISOString() })
+    .eq('id', id);
+  if (error) throw error;
+}
+
+/**
+ * 猶予期間内に論理削除されたプロジェクト一覧（完全削除予定が近い順）。復元メニュー用（管理表 row 109/110）。
+ * RLS の SELECT は所有者のみ（deleted_at 条件なし）のため、本人の削除済み行を取得できる（schema.sql 参照）。
+ * scheduled_purge_at が未来（猶予内）のものだけを対象にする。
+ */
+export async function getDeletedProjects(): Promise<DeletedProjectSummary[]> {
+  const sb = requireClient();
+  const { data, error } = await sb
+    .from('projects')
+    .select('id, name, thumbnail_url, updated_at, scheduled_purge_at')
+    .not('deleted_at', 'is', null)
+    .gte('scheduled_purge_at', new Date().toISOString())
+    .order('scheduled_purge_at', { ascending: true });
+  if (error) throw error;
+  return (data ?? []) as DeletedProjectSummary[];
+}
+
+/** 論理削除済みプロジェクトを復元（deleted_at / scheduled_purge_at をクリアして一覧へ戻す）。 */
+export async function restoreProject(id: string): Promise<void> {
+  const sb = requireClient();
+  const { error } = await sb
+    .from('projects')
+    .update({ deleted_at: null, scheduled_purge_at: null })
     .eq('id', id);
   if (error) throw error;
 }

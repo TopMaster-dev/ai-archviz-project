@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Settings, Image as ImageIcon } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
-import { createShareLink } from '../lib/db/projects.js';
+import { createShareLink, getDeletedProjects } from '../lib/db/projects.js';
+import type { DeletedProjectSummary } from '../lib/db/types.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
 import { OnboardingGuide } from './OnboardingGuide.js';
@@ -52,6 +53,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     duplicateCurrentProject,
     deleteCurrentProject,
     renameCurrentProject,
+    restoreDeletedProject,
   } = useProjectSessionContext();
 
   const [renaming, setRenaming] = useState(false);
@@ -66,9 +68,44 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const [shareNotice, setShareNotice] = useState<string | null>(null);
   // プロジェクト名での絞り込み検索（管理表 row 69）。
   const [query, setQuery] = useState('');
+  // 削除済み（猶予期間内）プロジェクトの復元メニュー（管理表 row 109/110）。
+  const [showDeleted, setShowDeleted] = useState(false);
+  const [deletedProjects, setDeletedProjects] = useState<DeletedProjectSummary[]>([]);
+  const [deletedQuery, setDeletedQuery] = useState('');
+  const [deletedLoading, setDeletedLoading] = useState(false);
+  const [deletedError, setDeletedError] = useState<string | null>(null);
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
+
+  const loadDeleted = useCallback(async () => {
+    setDeletedLoading(true);
+    setDeletedError(null);
+    try {
+      setDeletedProjects(await getDeletedProjects());
+    } catch {
+      setDeletedError('削除済みプロジェクトの取得に失敗しました。時間をおいて再度お試しください。');
+    } finally {
+      setDeletedLoading(false);
+    }
+  }, []);
+  const toggleDeleted = () => {
+    setShowDeleted((prev) => {
+      const next = !prev;
+      if (next) void loadDeleted();
+      return next;
+    });
+  };
+  const handleRestore = async (id: string) => {
+    await restoreDeletedProject(id);
+    // 復元したものは削除済み一覧から消え、アクティブ一覧へ戻る。
+    await loadDeleted();
+  };
+  const daysUntilPurge = (iso: string | null) => {
+    if (!iso) return null;
+    const ms = new Date(iso).getTime() - Date.now();
+    return Math.max(0, Math.ceil(ms / 86_400_000));
+  };
 
   const handleShare = async (id: string) => {
     setSharingId(id);
@@ -304,6 +341,89 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 );
               })}
             </ul>
+          )}
+        </section>
+
+        {/* 削除済みプロジェクトの復元（猶予期間内・管理表 row 109/110） */}
+        <section className="mb-8">
+          <button
+            type="button"
+            onClick={toggleDeleted}
+            className="text-sm font-semibold text-neutral-400 transition hover:text-neutral-200"
+          >
+            {showDeleted ? '▾ 削除済み（復元できます）' : '▸ 削除済み（復元できます）'}
+          </button>
+
+          {showDeleted && (
+            <div className="mt-3">
+              {deletedProjects.length > 0 && (
+                <input
+                  type="search"
+                  value={deletedQuery}
+                  onChange={(e) => setDeletedQuery(e.target.value)}
+                  placeholder="削除済みを名称で検索…"
+                  aria-label="削除済みプロジェクトを検索"
+                  className="mb-3 w-full max-w-xs rounded-lg border border-white/10 bg-neutral-900 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              )}
+
+              {deletedLoading ? (
+                <p className="text-sm text-neutral-500">読み込み中…</p>
+              ) : deletedError ? (
+                <p className="text-sm text-red-300">{deletedError}</p>
+              ) : deletedProjects.length === 0 ? (
+                <p className="text-sm text-neutral-500">猶予期間内に削除したプロジェクトはありません。</p>
+              ) : (
+                (() => {
+                  const dq = deletedQuery.trim().toLowerCase();
+                  const filtered = dq
+                    ? deletedProjects.filter((p) => p.name.toLowerCase().includes(dq))
+                    : deletedProjects;
+                  if (filtered.length === 0) {
+                    return (
+                      <p className="text-sm text-neutral-500">
+                        「{deletedQuery.trim()}」に一致する削除済みプロジェクトはありません。
+                      </p>
+                    );
+                  }
+                  return (
+                    <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                      {filtered.map((p) => {
+                        const left = daysUntilPurge(p.scheduled_purge_at);
+                        return (
+                          <li
+                            key={p.id}
+                            className="flex flex-col overflow-hidden rounded-xl border border-white/10 bg-neutral-900/40 opacity-90"
+                          >
+                            <div className="aspect-video w-full overflow-hidden bg-neutral-800 grayscale">
+                              <ProjectThumb url={p.thumbnail_url} name={p.name} />
+                            </div>
+                            <div className="flex flex-1 flex-col gap-2 p-3">
+                              <span className="block truncate text-sm font-semibold" title={p.name}>
+                                {p.name}
+                              </span>
+                              <span className="text-[11px] text-amber-300/90">
+                                {left === null ? '猶予期間内' : `あと ${left} 日で完全削除`}
+                              </span>
+                              <div className="mt-auto flex items-center justify-end pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => void handleRestore(p.id)}
+                                  disabled={busy}
+                                  className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                                >
+                                  復元
+                                </button>
+                              </div>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  );
+                })()
+              )}
+            </div>
           )}
         </section>
 

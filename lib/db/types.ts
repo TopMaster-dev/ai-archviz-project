@@ -35,6 +35,12 @@ export interface ProjectSummary {
   updated_at: string;
 }
 
+/** 論理削除済み（猶予期間内）プロジェクトのサマリ。復元メニュー用（管理表 row 109/110）。 */
+export interface DeletedProjectSummary extends ProjectSummary {
+  /** 完全削除予定日時。残りの猶予日数の表示に使う。 */
+  scheduled_purge_at: string | null;
+}
+
 /** 閲覧用URL（共有）から取得するプロジェクト。 */
 export interface SharedProject {
   id: string;

@@ -10,6 +10,7 @@ import {
   saveProject,
   duplicateProject,
   softDeleteProject,
+  restoreProject,
   isFreePlanLimitError,
   FREE_PLAN_PROJECT_LIMIT,
 } from '../lib/db/projects.js';
@@ -45,6 +46,8 @@ export interface ProjectSession {
   duplicateCurrentProject(): Promise<void>;
   renameCurrentProject(name: string): Promise<void>;
   deleteCurrentProject(): Promise<void>;
+  /** 猶予期間内に論理削除したプロジェクトを復元し、一覧へ戻す（管理表 row 109/110）。 */
+  restoreDeletedProject(id: string): Promise<void>;
   /** 現在のプロジェクトの一覧用サムネイル（data URL）を保存する。背景副作用（busy/status に影響しない）。 */
   setProjectThumbnail(dataUrl: string): Promise<void>;
   /** 写真AI編集（2a）の現在ストア内容をデバウンス保存する。aiEdit は temporal 対象外で autosave されないため別途呼ぶ。 */
@@ -297,6 +300,25 @@ export function useProjectSession(): ProjectSession {
     }
   }, [projectId, busy, loadInto]);
 
+  // 猶予期間内に論理削除したプロジェクトを復元（deleted_at をクリア）して一覧へ戻す（row 109/110）。
+  const restoreDeletedProject = useCallback(
+    async (id: string) => {
+      if (busy) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await restoreProject(id);
+        await refreshList();
+      } catch (e) {
+        console.error('[project session] restore failed', e);
+        setError(messageOf(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [busy, refreshList],
+  );
+
   // 現在プロジェクトの一覧用サムネイルを保存（2c-i）。AI レンダー結果から生成して呼ばれる。
   // 背景副作用として扱い、busy/status や autosave には干渉しない。失敗は握りつぶす。
   const setProjectThumbnail = useCallback(
@@ -399,6 +421,7 @@ export function useProjectSession(): ProjectSession {
     duplicateCurrentProject,
     renameCurrentProject,
     deleteCurrentProject,
+    restoreDeletedProject,
     setProjectThumbnail,
     persistAiEdit,
     flushSave,
