@@ -1,11 +1,20 @@
+import { useState } from 'react';
 import { LoginForm } from './LoginForm.js';
+import { LandingPage } from './LandingPage.js';
 
 /**
  * 認証画面。
+ * 未ログイン時はまずランディングページ（サービス説明・導線）を表示し、
+ * 「ログイン」で従来のログインフォームへ切り替える（管理表 row 37/42/62/67）。
  * Arise は招待制（管理者がアカウントを発行）のため、公開の新規登録フォームは提供しない（1c）。
- * ログインのみを表示し、登録は招待メール経由とする。
  */
 export function AuthScreen() {
+  const [view, setView] = useState<'landing' | 'login'>('landing');
+
+  if (view === 'landing') {
+    return <LandingPage onLogin={() => setView('login')} />;
+  }
+
   return (
     <div className="flex min-h-screen w-screen items-center justify-center bg-neutral-900 px-4">
       <div className="w-full max-w-md rounded-2xl bg-neutral-800/80 p-8 shadow-xl ring-1 ring-white/10">
@@ -19,6 +28,14 @@ export function AuthScreen() {
           <br />
           ご利用をご希望の方は、運営からの招待メールをご確認ください。
         </p>
+
+        <button
+          type="button"
+          onClick={() => setView('landing')}
+          className="mt-4 block w-full text-center text-[11px] text-neutral-500 transition hover:text-neutral-300"
+        >
+          ← トップへ戻る
+        </button>
       </div>
     </div>
   );
