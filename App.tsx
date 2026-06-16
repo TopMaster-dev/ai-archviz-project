@@ -1126,7 +1126,6 @@ const App: React.FC = () => {
   );
   const OPENINGS_MATERIAL_KEY = '__openings__';
 
-  const [isDenoising, setIsDenoising] = useState(false);
   const [maskMode, setMaskMode] = useState(false);
   const [aiEditOpen, setAiEditOpen] = useState(false);
 
@@ -1166,8 +1165,8 @@ const App: React.FC = () => {
   // AI レンダリング/画像処理のオーバーレイ表示中フラグを共有ストアへ反映。
   // App の外側（シェル）に固定配置された UndoRedoBar が、ローディング画面では自身を隠せるようにする。
   useEffect(() => {
-    useRenderOverlayStore.getState().setActive(isDenoising || renderState.isRendering);
-  }, [isDenoising, renderState.isRendering]);
+    useRenderOverlayStore.getState().setActive(renderState.isRendering);
+  }, [renderState.isRendering]);
   // エディタ離脱（アンマウント）時にフラグを必ず倒す（レンダ中にホームへ戻った等で true が残らないように）。
   useEffect(() => () => { useRenderOverlayStore.getState().setActive(false); }, []);
 
@@ -2548,12 +2547,6 @@ const App: React.FC = () => {
         }}
       />
 
-      {/* 画面全体のローディング表示（デノイズ中） */}
-      {isDenoising && (
-          <div className="absolute inset-0 z-50 flex items-center justify-center bg-black/80 text-white font-bold text-xl">
-              AIでノイズを除去して下絵をクリーンアップ中...
-          </div>
-      )}
 
 
 
@@ -3926,14 +3919,14 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* AI処理中（デノイズ or 生成 or レンダリング）のリッチなUI */}
-      {(isDenoising || renderState.isRendering) && (
+      {/* AI処理中（生成 or レンダリング）のリッチなUI */}
+      {renderState.isRendering && (
         <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-zinc-950/90 backdrop-blur-sm">
           <div className="p-8 bg-zinc-900/80 rounded-2xl border border-zinc-800 shadow-2xl flex flex-col items-center gap-6 text-center">
              <Wand2 className="w-16 h-16 text-purple-500 animate-pulse" />
              <div>
                <h3 className="font-bold text-2xl mb-3 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-                  {isDenoising ? 'AIで画像処理中...' : 'クラウドAIで超高画質レンダリング中...'}
+                  クラウドAIで超高画質レンダリング中...
                </h3>
                <p className="text-zinc-400 text-sm">最高峰の建築ビジュアライゼーションモデルが処理を実行しています</p>
              </div>
