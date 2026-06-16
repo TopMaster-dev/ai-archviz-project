@@ -409,6 +409,20 @@ export function AiEditWorkspace({
       setCompareB(outUrl);
       setCompareSlider(50);
 
+      // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3の例）: いま編集している版に既存の子があれば
+      // ＝「一つ前に戻って再生成した」とみなし、直前の生成結果（最新の既存子）を暗黙の bad として記録する。
+      // prompt_context で明示評価と区別する。ベストエフォート（失敗してもUIは妨げない）。
+      const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
+      if (priorChildren.length > 0) {
+        const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+        void recordAiFeedback({
+          verdict: 'bad',
+          imageRef: abandoned.id,
+          feature: 'ai_design',
+          promptContext: { implicit: true, signal: 'regenerate' },
+        }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
+      }
+
       onEditSuccess({
         parentId: activeVersion.id,
         baseImageDataUrl: activeVersion.outputImageDataUrl,
@@ -427,6 +441,7 @@ export function AiEditWorkspace({
     }
   }, [
     activeVersion,
+    versions,
     styleImageDataUrl,
     draftStyleMemo,
     isSituationCardVisible,
