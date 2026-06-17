@@ -381,6 +381,43 @@ export default defineConfig(({ mode }) => {
                 return;
             }
 
+            // 事前削除通知メール（row 106）。本番 api/cron/purge-warning.ts のローカル版。
+            // ローカル検証: curl -H "Authorization: Bearer <CRON_SECRET>" http://localhost:3000/api/cron/purge-warning
+            if (req.url === '/api/cron/purge-warning' && (req.method === 'GET' || req.method === 'POST')) {
+                void (async () => {
+                    res.setHeader('Content-Type', 'application/json');
+                    const secret = process.env.CRON_SECRET || env.CRON_SECRET || '';
+                    const auth = (req.headers['authorization'] as string) || '';
+                    if (!secret || auth !== `Bearer ${secret}`) {
+                        res.statusCode = 401;
+                        return res.end(JSON.stringify({ error: 'Unauthorized' }));
+                    }
+                    try {
+                        const { runPurgeWarning } = await import('./lib/server/purgeWarning.js');
+                        const result = await runPurgeWarning(
+                            {
+                                url: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || env.SUPABASE_URL || env.VITE_SUPABASE_URL || '',
+                                serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
+                                smtpHost: process.env.SMTP_HOST || env.SMTP_HOST || '',
+                                smtpPort: Number(process.env.SMTP_PORT || env.SMTP_PORT || 587),
+                                smtpSecure: String(process.env.SMTP_SECURE || env.SMTP_SECURE || '').toLowerCase() === 'true',
+                                smtpUser: process.env.SMTP_USER || env.SMTP_USER || undefined,
+                                smtpPass: process.env.SMTP_PASS || env.SMTP_PASS || undefined,
+                                smtpFrom: process.env.SMTP_FROM || env.SMTP_FROM || process.env.SMTP_USER || env.SMTP_USER || '',
+                            },
+                            new Date().toISOString(),
+                        );
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify(result));
+                    } catch (e: any) {
+                        console.error('purge-warning local error:', e?.message || e);
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: false, reason: 'error' }));
+                    }
+                })();
+                return;
+            }
+
             // Mock the Vercel API Route locally
             if (req.url?.startsWith('/api/materials') && req.method === 'GET') {
               try {

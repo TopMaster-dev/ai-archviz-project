@@ -202,10 +202,18 @@ create table if not exists projects (
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now(),
   deleted_at         timestamptz,
-  scheduled_purge_at timestamptz
+  scheduled_purge_at timestamptz,
+  auto_expired       boolean not null default false, -- ライフサイクル自動論理削除か（手動削除は false）。row 106
+  purge_warned_at    timestamptz                     -- 事前削除通知メール送信済み時刻（重複送信防止）。row 106
 );
+-- 既存DBへの安全網（idempotent）。
+alter table projects add column if not exists auto_expired    boolean not null default false;
+alter table projects add column if not exists purge_warned_at timestamptz;
 create index if not exists idx_projects_owner on projects (owner_id) where deleted_at is null;
 create index if not exists idx_projects_purge on projects (scheduled_purge_at) where deleted_at is not null;
+-- 事前通知メールの対象抽出用（自動失効・未通知のみ）。
+create index if not exists idx_projects_purge_warn on projects (scheduled_purge_at)
+  where deleted_at is not null and auto_expired and purge_warned_at is null;
 
 drop trigger if exists trg_projects_updated_at on projects;
 create trigger trg_projects_updated_at
@@ -485,7 +493,9 @@ begin
 
   update projects pr
   set deleted_at = now(),
-      scheduled_purge_at = now() + make_interval(days => grace_days)
+      scheduled_purge_at = now() + make_interval(days => grace_days),
+      auto_expired = true,       -- 自動失効マーク（手動削除と区別し、これだけ事前通知メールの対象にする）
+      purge_warned_at = null     -- 新規フラグごとに通知可能に（復元→再失効でも再通知される）
   from profiles pf
   where pf.id = pr.owner_id and pf.plan = 'free' and pr.deleted_at is null
     and pf.created_at < now() - interval '3 months';
@@ -493,6 +503,23 @@ begin
   get diagnostics flagged = row_count;
   return flagged;
 end $$;
+
+-- 事前削除通知メール（row 106）の送信対象を返す。自動失効（auto_expired）かつ未通知の論理削除済みのみ。
+-- SECURITY DEFINER で auth.users の email を結合する。サーバ（cron）が service_role で RPC 実行する。
+create or replace function purge_warning_targets()
+returns table (project_id uuid, project_name text, owner_id uuid, owner_email text, scheduled_purge_at timestamptz)
+language sql security definer set search_path = public as $$
+  select p.id, p.name, p.owner_id, u.email, p.scheduled_purge_at
+  from projects p
+  join auth.users u on u.id = p.owner_id
+  where p.deleted_at is not null
+    and p.scheduled_purge_at is not null
+    and p.auto_expired
+    and p.purge_warned_at is null
+    and u.email is not null;
+$$;
+-- 個人情報（メール）を返すため anon/authenticated には公開しない（cron の service_role のみ）。
+revoke execute on function public.purge_warning_targets() from public, anon, authenticated;
 
 create or replace function purge_soft_deleted_projects()
 returns int language plpgsql security definer set search_path = public as $$
