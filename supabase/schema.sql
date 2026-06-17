@@ -410,6 +410,40 @@ create or replace view admin_user_uploads as
   left join profiles p on p.id = u.owner_id;
 
 -- ---------------------------------------------------------------------------
+-- 9b) login_events（端末・IP ログイン記録／不正利用防止の監査証跡・管理表 row 53）
+--    INSERT はサーバ（api/session-log）が service_role で行う＝クライアントから IP/端末を偽装不可。
+--    本人は自分の履歴を SELECT 可。自動ロック（row 54）は本フェーズでは未実装（記録のみ）。
+-- ---------------------------------------------------------------------------
+create table if not exists login_events (
+  id          uuid primary key default gen_random_uuid(),
+  user_id     uuid not null references auth.users (id) on delete cascade,
+  ip          text,
+  user_agent  text,
+  screen      text,
+  timezone    text,
+  language    text,
+  created_at  timestamptz not null default now()
+);
+create index if not exists idx_login_events_user on login_events (user_id, created_at desc);
+
+alter table login_events enable row level security;
+-- 本人は自分のログイン履歴を閲覧可。INSERT ポリシーは作らない＝authenticated/anon は挿入不可で、
+-- 記録はサーバの service_role（RLS バイパス）経由のみ。これによりクライアントからの偽装記録を防ぐ。
+drop policy if exists "login_events: read own" on login_events;
+create policy "login_events: read own" on login_events for select using (auth.uid() = user_id);
+
+create or replace view admin_login_events as
+  select e.id, e.user_id, p.display_name as user_name, p.role as user_role,
+         e.ip, e.user_agent, e.screen, e.timezone, e.language, e.created_at
+  from login_events e
+  left join profiles p on p.id = e.user_id;
+
+-- 管理用ビューはオーナー権限で実行され RLS を迂回するため、PostgREST 経由で anon/authenticated に
+-- 全件露出させない。参照は service_role（管理ツール）のみに限定する（監査データの機密性確保）。
+revoke all on admin_login_events from anon, authenticated;
+revoke all on admin_user_uploads  from anon, authenticated;
+
+-- ---------------------------------------------------------------------------
 -- 10) Supabase Storage バケット + RLS（0004）
 -- ---------------------------------------------------------------------------
 insert into storage.buckets (id, name, public)

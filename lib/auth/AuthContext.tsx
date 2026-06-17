@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { ReactNode } from 'react';
 import { getSupabase, isSupabaseConfigured } from '../db/supabaseClient.js';
 import { translateAuthError } from './authErrors.js';
+import { recordLoginEvent } from '../db/loginLog.js';
 import type { Profile, UserRole } from '../db/types.js';
 import {
   updateProfile as dbUpdateProfile,
@@ -76,10 +77,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setLoading(false);
     });
 
-    const { data: sub } = sb.auth.onAuthStateChange((_event, session) => {
+    const { data: sub } = sb.auth.onAuthStateChange((event, session) => {
       setUserId(session?.user?.id ?? null);
       setEmail(session?.user?.email ?? null);
       void loadProfile(session?.user?.id ?? null);
+      // 端末・IP を記録（row 53）。supabase-js は再読込・復元・トークン更新でも SIGNED_IN を出すため、
+      // 本当の資格情報ログインでのみ進む last_sign_in_at をキーに recordLoginEvent 側で去重する。
+      if (event === 'SIGNED_IN' && session?.access_token) {
+        void recordLoginEvent(session.access_token, session.user?.last_sign_in_at ?? null);
+      }
     });
 
     return () => {

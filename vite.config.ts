@@ -322,6 +322,59 @@ export default defineConfig(({ mode }) => {
                 return;
             }
 
+            // 端末・IP ログイン記録（row 53）。本番 api/session-log.ts のローカル版。
+            if (req.url === '/api/session-log' && req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    res.setHeader('Content-Type', 'application/json');
+                    try {
+                        const sbUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || env.SUPABASE_URL || env.VITE_SUPABASE_URL || '';
+                        const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '';
+                        if (!sbUrl || !serviceKey) {
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify({ success: false, skipped: true }));
+                        }
+                        const authHeader = (req.headers['authorization'] as string) || '';
+                        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+                        if (!token) {
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify({ success: false, skipped: true }));
+                        }
+                        const pickIp = (h: any): string | null => {
+                            const raw = Array.isArray(h) ? h[0] : h;
+                            return typeof raw === 'string' && raw.trim() ? raw.split(',')[0].trim() : null;
+                        };
+                        const ip = pickIp(req.headers['x-real-ip']) || pickIp(req.headers['x-vercel-forwarded-for']) || pickIp(req.headers['x-forwarded-for']) || req.socket?.remoteAddress || null;
+                        const parsed = JSON.parse(body || '{}') as { userAgent?: string; screen?: string; timezone?: string; language?: string };
+                        const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+                        const { createClient } = await import('@supabase/supabase-js');
+                        const admin = createClient(sbUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+                        const { data: u, error: uErr } = await admin.auth.getUser(token);
+                        const userId = u?.user?.id;
+                        if (uErr || !userId) {
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify({ success: false, skipped: true }));
+                        }
+                        await admin.from('login_events').insert({
+                            user_id: userId,
+                            ip,
+                            user_agent: str(parsed.userAgent, 500),
+                            screen: str(parsed.screen, 32),
+                            timezone: str(parsed.timezone, 64),
+                            language: str(parsed.language, 32),
+                        });
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: true }));
+                    } catch (e: any) {
+                        console.error('session-log local error:', e?.message || e);
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: false, error: e?.message }));
+                    }
+                });
+                return;
+            }
+
             // Mock the Vercel API Route locally
             if (req.url?.startsWith('/api/materials') && req.method === 'GET') {
               try {
