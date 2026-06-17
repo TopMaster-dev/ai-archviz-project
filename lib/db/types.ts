@@ -21,6 +21,12 @@ export interface Profile {
   department: string | null;
   /** 学年（学生のみ）。管理表 row 46。 */
   school_year: string | null;
+  /** フリープラン付与クレジット総数（生成回数）。管理表 row 49/50。 */
+  ai_credits_total: number;
+  /** 消費済みクレジット数。残数 = max(0, total - used)。 */
+  ai_credits_used: number;
+  /** クレジット失効時刻（付与+3ヶ月）。null は失効なし。 */
+  ai_credits_expires_at: string | null;
   created_at: string;
 }
 

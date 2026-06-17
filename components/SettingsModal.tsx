@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { ByokKeyPanel } from './ByokKeyPanel.js';
+import { deriveCreditStatus } from '../utils/freePlanCredits.js';
 
 /**
  * 設定モーダル（2c-iv）。ホーム画面の歯車アイコンから開く。
@@ -65,6 +66,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
     void run(() => updatePassword(newPassword), 'パスワードを変更しました。', () => setNewPassword(''));
   };
 
+  // フリープランの AIクレジット状況（row 49/50）。機能無効時は active=false で非表示。
+  const aiCredits = deriveCreditStatus({
+    isFreePlan: profile?.plan === 'free',
+    total: profile?.ai_credits_total,
+    used: profile?.ai_credits_used,
+    expiresAt: profile?.ai_credits_expires_at,
+  });
+
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
       <div
@@ -122,6 +131,22 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
                 パスワードを変更
               </button>
             </section>
+
+            {aiCredits.active && (
+              <section className="space-y-1 border-t border-white/10 pt-4">
+                <h4 className="text-xs font-black uppercase tracking-wider text-emerald-300">プラン・クレジット</h4>
+                <p className="text-sm text-neutral-100">
+                  無料クレジット 残り <span className="font-bold">{aiCredits.remaining}</span> / {aiCredits.total} 回
+                </p>
+                {aiCredits.expiresAt && (
+                  <p className={`text-[11px] ${aiCredits.expired ? 'text-amber-300' : 'text-neutral-500'}`}>
+                    有効期限: {new Date(aiCredits.expiresAt).toLocaleDateString('ja-JP')}
+                    {aiCredits.expired && '（期限切れ）'}
+                  </p>
+                )}
+                <p className="text-[10px] text-neutral-500">AI生成（レンダー / 編集 / コーディネート）1回につき1クレジット消費します。</p>
+              </section>
+            )}
 
             <section className="border-t border-white/10 pt-4">
               <h4 className="mb-2 text-xs font-black uppercase tracking-wider text-emerald-300">APIキー</h4>

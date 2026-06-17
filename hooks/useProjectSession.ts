@@ -17,6 +17,8 @@ import {
 import { createEmptyProjectState, type ProjectState, type ProjectKind } from '../lib/project/projectState.js';
 import { refreshGeminiKey, resetGeminiKeyCache } from '../lib/byok.js';
 import type { ProjectSummary, PlanType } from '../lib/db/types.js';
+import { consumeAiCredit as dbConsumeAiCredit } from '../lib/db/credits.js';
+import { deriveCreditStatus, ENABLE_FREE_PLAN_AI_CREDITS, type CreditStatus } from '../utils/freePlanCredits.js';
 
 const DEFAULT_PROJECT_NAME = 'マイプロジェクト';
 
@@ -37,6 +39,10 @@ export interface ProjectSession {
   projectLimit: number | null;
   /** フリープランで上限に達しているか（新規作成を抑止）。 */
   atLimit: boolean;
+  /** AIクレジット状況（フリープラン・row 49/50）。機能無効/有料/ゲストは active=false。 */
+  aiCredits: CreditStatus;
+  /** 生成成功時に1クレジット消費（無効/有料/ゲストは何もしない）。残数表示更新のため profile を再読込。 */
+  consumeAiCredit(): Promise<void>;
   /** プロジェクト操作の実行中（UI のボタン無効化用）。 */
   busy: boolean;
   /** 直近の操作エラー（上限超過の案内などを含む）。 */
@@ -89,7 +95,7 @@ function messageOf(e: unknown): string {
  *       別 state のため未永続化（該当スライス移行時に対応）。
  */
 export function useProjectSession(): ProjectSession {
-  const { configured, userId, profile } = useAuth();
+  const { configured, userId, profile, refreshProfile } = useAuth();
   const [projectId, setProjectId] = useState<string | null>(null);
   const [projectName, setProjectName] = useState<string>('');
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
@@ -101,6 +107,21 @@ export function useProjectSession(): ProjectSession {
   const projectLimit = plan === 'free' ? FREE_PLAN_PROJECT_LIMIT : null;
   const projectCount = projects.length;
   const atLimit = projectLimit !== null && projectCount >= projectLimit;
+
+  // AIクレジット状況（row 49/50）。フラグ無効・有料・ゲストでは active=false（blocked も常に false）。
+  const aiCredits = deriveCreditStatus({
+    isFreePlan: plan === 'free',
+    total: profile?.ai_credits_total,
+    used: profile?.ai_credits_used,
+    expiresAt: profile?.ai_credits_expires_at,
+  });
+
+  // 生成成功時に1クレジット消費。フラグ無効/有料/ゲストでは何もしない（テストマーケ中は完全に不活性）。
+  const consumeAiCredit = useCallback(async () => {
+    if (!ENABLE_FREE_PLAN_AI_CREDITS || plan !== 'free') return;
+    await dbConsumeAiCredit();
+    await refreshProfile(); // 残数表示を更新
+  }, [plan, refreshProfile]);
 
   // ログイン時に最新プロジェクトを読み込む（無ければ作成）。
   useEffect(() => {
@@ -414,6 +435,8 @@ export function useProjectSession(): ProjectSession {
     projectCount,
     projectLimit,
     atLimit,
+    aiCredits,
+    consumeAiCredit,
     busy,
     error,
     switchProject,

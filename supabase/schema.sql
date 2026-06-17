@@ -56,6 +56,9 @@ create table if not exists profiles (
   terms_accepted_at timestamptz,            -- 規約・ポリシー同意時刻（row 43）
   department        text,                   -- 学部（学生のみ。row 46）
   school_year       text,                   -- 学年（学生のみ。row 46）
+  ai_credits_total      int not null default 0, -- フリープラン付与クレジット総数（row 49/50）
+  ai_credits_used       int not null default 0, -- 消費済みクレジット数（consume_ai_credit で加算）
+  ai_credits_expires_at timestamptz,            -- クレジット失効時刻（付与+3ヶ月）
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint student_requires_graduation_year
@@ -81,6 +84,18 @@ begin
   end if;
 end $$;
 
+-- フリープラン AIクレジット（生成回数）: 本登録時に 50 付与・3ヶ月失効（row 49/50）への安全網（idempotent）。
+alter table profiles add column if not exists ai_credits_total      int not null default 0;
+alter table profiles add column if not exists ai_credits_used       int not null default 0;
+alter table profiles add column if not exists ai_credits_expires_at timestamptz;
+-- 既存ユーザー（付与前=total 0）へ初期 50 付与（登録/作成日 +3ヶ月で失効）。
+-- total は減算しない（消費は used を加算）ため、使い切った人（total 50/used 50）は再付与されず、
+-- where ai_credits_total = 0 により再実行も no-op（冪等）。
+update profiles
+  set ai_credits_total = 50,
+      ai_credits_expires_at = coalesce(registered_at, created_at) + interval '3 months'
+  where ai_credits_total = 0;
+
 drop trigger if exists trg_profiles_updated_at on profiles;
 create trigger trg_profiles_updated_at
   before update on profiles
@@ -94,17 +109,31 @@ create policy "profiles: read own"   on profiles for select using (auth.uid() = 
 create policy "profiles: update own" on profiles for update using (auth.uid() = id);
 create policy "profiles: insert own" on profiles for insert with check (auth.uid() = id);
 
+-- 列単位の書き込み制限（RLS は行単位のみのため、本人でも改竄できる列を権限で塞ぐ）。
+-- plan（自己アップグレード防止）と ai_credits_*（残高改竄防止）はクライアントから直接 UPDATE 不可にする。
+-- これらの正規の書き換えはサーバ側のみ＝plan は service_role、付与は handle_new_user、消費は
+-- consume_ai_credit（いずれも SECURITY DEFINER / 管理ロール）で行う。
+-- 付与する列はクライアントの更新対象（ProfilePatch）と一致させること。
+revoke update on profiles from authenticated;
+grant  update (role, display_name, company, graduation_year, phone,
+               department, school_year, registered_at, terms_accepted_at)
+  on profiles to authenticated;
+
 create or replace function handle_new_user()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.profiles (id, role, display_name, company, graduation_year, phone)
+  -- 新規ユーザーにフリープラン 50 クレジットを付与し、3ヶ月後に失効させる（row 49/50）。
+  -- サーバ側（SECURITY DEFINER）で付与するため、クライアントから total/失効日を改竄できない。
+  insert into public.profiles (id, role, display_name, company, graduation_year, phone,
+                               ai_credits_total, ai_credits_used, ai_credits_expires_at)
   values (
     new.id,
     coalesce((new.raw_user_meta_data ->> 'role')::user_role, 'pro'),
     new.raw_user_meta_data ->> 'display_name',
     new.raw_user_meta_data ->> 'company',
     nullif(new.raw_user_meta_data ->> 'graduation_year', '')::int,
-    new.raw_user_meta_data ->> 'phone'
+    new.raw_user_meta_data ->> 'phone',
+    50, 0, now() + interval '3 months'
   );
   return new;
 end $$;
@@ -113,6 +142,30 @@ drop trigger if exists trg_on_auth_user_created on auth.users;
 create trigger trg_on_auth_user_created
   after insert on auth.users
   for each row execute function handle_new_user();
+
+-- AIクレジット消費（row 49/50）。本人の ai_credits_used を +1 し、残数（total-used, 下限0）を返す。
+-- SECURITY DEFINER + auth.uid() 固定により、クライアントから used を直接書き換えられない（改竄防止）。
+-- 生成成功ごとにアプリ側が1回呼ぶ。失効・残0の判定（事前ブロック）はアプリ側で行う。
+create or replace function consume_ai_credit()
+returns int language plpgsql security definer set search_path = public as $$
+declare tot int; usd int;
+begin
+  -- 残数があり、かつ未失効のときだけ +1（used が total を超えない・失効後は消費しない）。
+  update profiles
+    set ai_credits_used = ai_credits_used + 1
+    where id = auth.uid()
+      and ai_credits_used < ai_credits_total
+      and (ai_credits_expires_at is null or ai_credits_expires_at > now())
+    returning ai_credits_total, ai_credits_used into tot, usd;
+  if tot is null then
+    -- 更新されなかった（残0/失効/該当行なし）。現在値から残数を返す（無ければ 0）。
+    select ai_credits_total, ai_credits_used into tot, usd from profiles where id = auth.uid();
+    if tot is null then return 0; end if;
+  end if;
+  return greatest(0, tot - usd);
+end $$;
+revoke execute on function public.consume_ai_credit() from public;
+grant  execute on function public.consume_ai_credit() to authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 4) user_api_keys（BYOK）

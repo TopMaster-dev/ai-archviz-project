@@ -26,8 +26,12 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
   const [captureStep, setCaptureStep] = useState<'idle' | 'pt-base' | 'mask'>('idle');
   const [snapshotMode, setSnapshotMode] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 多重起動ガード（ボタンの disabled に依存せず、レンダー＝クレジットの二重消費を防ぐ・row 49/50）。
+  const inFlightRef = useRef(false);
 
   const handleInstantRender = async () => {
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     setRenderState(prev => ({ ...prev, isRendering: true, generationLog: ["AIレンダリングを開始中..."] }));
     setSnapshotMode(true);
     setError(null);
@@ -70,6 +74,7 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
     } finally {
       setRenderState(prev => ({ ...prev, isRendering: false }));
       setSnapshotMode(false);
+      inFlightRef.current = false;
       if (successUrl) onSuccessRef.current?.(successUrl);
     }
   };

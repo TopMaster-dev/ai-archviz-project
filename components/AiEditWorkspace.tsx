@@ -17,6 +17,7 @@ import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiFeedback, getRecentGoodHints } from '../lib/db/feedback.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
 import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
+import { creditBlockMessage } from '../utils/freePlanCredits.js';
 import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
@@ -487,12 +488,24 @@ export function AiEditWorkspace({
       setSubmitError('エリア編集を使う場合は、範囲選択を1つ以上設定してください。');
       return;
     }
+    // フリープランのクレジット枯渇/失効時は生成を抑止（row 49/50）。無効/有料/ゲストでは null=通過。
+    const creditMsg = creditBlockMessage(projectSession?.aiCredits);
+    if (creditMsg) {
+      setSubmitError(creditMsg);
+      return;
+    }
     void runEdit();
   };
 
   // コーディネート（完全お任せ）モード（管理表 row 207/213）: 個別指定なしで空間全体を再コーディネートする。
   const runCoordinate = useCallback(async () => {
     if (!activeVersion || isSubmitting) return;
+    // フリープランのクレジット枯渇/失効時は生成を抑止（row 49/50）。無効/有料/ゲストでは null=通過。
+    const creditMsg = creditBlockMessage(projectSession?.aiCredits);
+    if (creditMsg) {
+      setSubmitError(creditMsg);
+      return;
+    }
     setSubmitError(null);
     setIsSubmitting(true);
     try {
@@ -538,7 +551,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan]);
+  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession]);
 
   const onMouseDownPlacement = (e: React.MouseEvent) => {
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
@@ -845,9 +858,12 @@ export function AiEditWorkspace({
               <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
-                  disabled={isSubmitting || !activeVersion}
+                  disabled={isSubmitting || !activeVersion || !!projectSession?.aiCredits.blocked}
                   onClick={() => void runCoordinate()}
-                  title="空間全体をAIにお任せで再コーディネート（家具・装飾・演出を一新）"
+                  title={
+                    creditBlockMessage(projectSession?.aiCredits) ??
+                    '空間全体をAIにお任せで再コーディネート（家具・装飾・演出を一新）'
+                  }
                   className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-900/70 border border-purple-500/30 text-xs font-black text-purple-200 hover:bg-purple-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Sparkles className="w-3.5 h-3.5 shrink-0" />
@@ -1104,6 +1120,12 @@ export function AiEditWorkspace({
               {emptyCardCount > 0 && (
                 <p className="text-xs text-amber-300 font-bold">未入力{emptyCardCount}件</p>
               )}
+              {projectSession?.aiCredits.active && (
+                <p className={`text-[11px] font-bold ${projectSession.aiCredits.blocked ? 'text-amber-300' : 'text-neutral-400'}`}>
+                  無料クレジット 残り {projectSession.aiCredits.remaining} / {projectSession.aiCredits.total} 回
+                  {projectSession.aiCredits.expired && '（有効期限切れ）'}
+                </p>
+              )}
               <button
                 type="button"
                 disabled={
@@ -1111,7 +1133,8 @@ export function AiEditWorkspace({
                   isSubmitting ||
                   !hasAnyInput ||
                   requiresAreaPlacement ||
-                  emptyCardCount > 0
+                  emptyCardCount > 0 ||
+                  !!projectSession?.aiCredits.blocked
                 }
                 onClick={handleClickExecute}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:pointer-events-none font-black text-sm"

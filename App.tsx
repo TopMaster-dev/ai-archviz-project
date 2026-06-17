@@ -33,6 +33,7 @@ import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
 import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
 import { maybeApplyFreePlanOutputLimits } from './utils/freePlanImage.js';
+import { creditBlockMessage } from './utils/freePlanCredits.js';
 import { useShellNav } from './lib/shell/shellNavContext.js';
 import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
@@ -1156,6 +1157,8 @@ const App: React.FC = () => {
       const out = await maybeApplyFreePlanOutputLimits(url, projectSession?.plan === 'free');
       // 過去の生成履歴は消さず、新しいレンダーを履歴に「追加」する（見返せるように）。
       aiEditSession.addVersionFromRender(out);
+      // フリープランの生成クレジットを1消費（row 49/50）。無効/有料/ゲストでは何もしない。
+      void projectSession?.consumeAiCredit();
       // レンダ完了後（ローディング解除後）に AI 編集へ遷移
       setAiEditOpen(true);
       // 2c-i: このレンダー結果を一覧用サムネイルとして保存（ログイン時のみ／失敗は無視）。
@@ -2629,15 +2632,21 @@ const App: React.FC = () => {
              )}
 
              {!renderState.isRendering && viewMode === '3D' && (
-               <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+               <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex flex-col items-center gap-1.5">
                  <button
                    onClick={handleInstantRender}
-                   disabled={renderState.isRendering}
-                   className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-purple-900/75 border border-purple-500/30 text-purple-100 shadow-[0_8px_24px_rgba(76,29,149,0.35)] hover:bg-purple-800/80 transition-all disabled:opacity-60"
+                   disabled={renderState.isRendering || !!projectSession?.aiCredits.blocked}
+                   title={creditBlockMessage(projectSession?.aiCredits ?? null) ?? undefined}
+                   className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-purple-900/75 border border-purple-500/30 text-purple-100 shadow-[0_8px_24px_rgba(76,29,149,0.35)] hover:bg-purple-800/80 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
                  >
                    <Sparkles className="w-4 h-4 shrink-0" />
                    <span className="text-[11px] font-black uppercase tracking-widest">AIレンダリング</span>
                  </button>
+                 {projectSession?.aiCredits.blocked && (
+                   <span className="pointer-events-auto rounded-md bg-black/70 px-2 py-1 text-[10px] font-bold text-amber-300">
+                     {creditBlockMessage(projectSession.aiCredits)}
+                   </span>
+                 )}
                </div>
              )}
              
@@ -3978,6 +3987,8 @@ const App: React.FC = () => {
                                 styleMemo: p.styleMemo,
                                 objects: p.objects,
                             });
+                            // 編集/コーディネート成功で1クレジット消費（row 49/50）。無効/有料/ゲストでは何もしない。
+                            void projectSession?.consumeAiCredit();
                             setRenderState((prev) => ({
                                 ...prev,
                                 resultImageUrl: p.outputImageDataUrl,
