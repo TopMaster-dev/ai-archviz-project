@@ -31,19 +31,28 @@ export async function recordLoginEvent(
   if (!accessToken) return;
   const dedupKey = lastSignInAt || accessToken;
   try {
-    // 同一ログイン（同じ last_sign_in_at）は記録済みならスキップ。先に記録して競合での二重送信も防ぐ。
+    // 記録済みの同一ログイン（同じ last_sign_in_at）はスキップ。
     if (localStorage.getItem(LAST_LOGIN_KEY) === dedupKey) return;
-    localStorage.setItem(LAST_LOGIN_KEY, dedupKey);
   } catch {
     // localStorage 不可（プライベートモード等）。去重は効かないが記録は試みる。
   }
   try {
-    await fetch('/api/session-log', {
+    const res = await fetch('/api/session-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
       body: JSON.stringify(collectDeviceInfo()),
       keepalive: true,
     });
+    // 実際に記録できたときだけ去重キーを保存する。キー未設定でスキップ/失敗した場合は保存せず、
+    // 次回ログインで再試行できるようにする（設定前の試行で去重が汚染されるのを防ぐ）。
+    const data = (await res.json().catch(() => null)) as { success?: boolean } | null;
+    if (data?.success) {
+      try {
+        localStorage.setItem(LAST_LOGIN_KEY, dedupKey);
+      } catch {
+        /* 保存不可は無視 */
+      }
+    }
   } catch {
     // 監査記録の失敗は無視（ログインを妨げない）。
   }
