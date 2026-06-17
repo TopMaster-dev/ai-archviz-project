@@ -1,18 +1,25 @@
 import { useState } from 'react';
 import { LoginForm } from './LoginForm.js';
 import { LandingPage } from './LandingPage.js';
+import { LegalPage, type LegalKind } from './LegalPage.js';
 
 /**
  * 認証画面。
  * 未ログイン時はまずランディングページ（サービス説明・導線）を表示し、
  * 「ログイン」で従来のログインフォームへ切り替える（管理表 row 37/42/62/67）。
+ * 利用規約・プライバシーポリシーのページも未ログイン画面から閲覧できる（row 43。同意UIは登録画面側=row 38）。
  * Arise は招待制（管理者がアカウントを発行）のため、公開の新規登録フォームは提供しない（1c）。
  */
 export function AuthScreen() {
   const [view, setView] = useState<'landing' | 'login'>('landing');
+  const [legal, setLegal] = useState<LegalKind | null>(null);
+
+  if (legal) {
+    return <LegalPage kind={legal} onBack={() => setLegal(null)} />;
+  }
 
   if (view === 'landing') {
-    return <LandingPage onLogin={() => setView('login')} />;
+    return <LandingPage onLogin={() => setView('login')} onShowLegal={setLegal} />;
   }
 
   return (
@@ -28,6 +35,16 @@ export function AuthScreen() {
           <br />
           ご利用をご希望の方は、運営からの招待メールをご確認ください。
         </p>
+
+        <div className="mt-3 flex items-center justify-center gap-3 text-[11px] text-neutral-500">
+          <button type="button" onClick={() => setLegal('terms')} className="transition hover:text-neutral-300">
+            利用規約
+          </button>
+          <span className="text-neutral-700">/</span>
+          <button type="button" onClick={() => setLegal('privacy')} className="transition hover:text-neutral-300">
+            プライバシーポリシー
+          </button>
+        </div>
 
         <button
           type="button"

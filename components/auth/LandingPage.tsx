@@ -34,7 +34,13 @@ const STEPS = [
   { icon: Wand2, title: '仕上げる', desc: 'AIでパース化し、見積もりまで一気通貫。' },
 ] as const;
 
-export function LandingPage({ onLogin }: { onLogin: () => void }) {
+export function LandingPage({
+  onLogin,
+  onShowLegal,
+}: {
+  onLogin: () => void;
+  onShowLegal?: (kind: 'terms' | 'privacy') => void;
+}) {
   return (
     <div className="relative h-screen w-screen overflow-y-auto overflow-x-hidden bg-neutral-950 text-neutral-100">
       {/* 背景の装飾グラデーション（ゆっくり明滅） */}
@@ -190,6 +196,17 @@ export function LandingPage({ onLogin }: { onLogin: () => void }) {
         </main>
 
         <footer className="border-t border-white/10 px-6 py-8 text-center text-[11px] text-neutral-600 sm:px-10">
+          {onShowLegal && (
+            <div className="mb-2 flex items-center justify-center gap-3 text-neutral-500">
+              <button type="button" onClick={() => onShowLegal('terms')} className="transition hover:text-neutral-300">
+                利用規約
+              </button>
+              <span className="text-neutral-700">/</span>
+              <button type="button" onClick={() => onShowLegal('privacy')} className="transition hover:text-neutral-300">
+                プライバシーポリシー
+              </button>
+            </div>
+          )}
           © Arise — 建築・内装向け AI 空間デザイン
         </footer>
       </div>
