@@ -43,15 +43,15 @@ export default async function handler(req: any, res: any) {
   try {
     const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
-    // 未設定環境では黙ってスキップ（記録なし・ログインは継続）。
+    // 未設定環境では黙ってスキップ（記録なし・ログインは継続）。reason で原因を可視化（秘匿値は出さない）。
     if (!url || !serviceKey) {
-      return res.status(200).json({ success: false, skipped: true });
+      return res.status(200).json({ success: false, skipped: true, reason: 'server-not-configured' });
     }
 
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = typeof authHeader === 'string' && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) {
-      return res.status(200).json({ success: false, skipped: true });
+      return res.status(200).json({ success: false, skipped: true, reason: 'no-token' });
     }
 
     const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -59,11 +59,13 @@ export default async function handler(req: any, res: any) {
     const { data: u, error: uErr } = await admin.auth.getUser(token);
     const userId = u?.user?.id;
     if (uErr || !userId) {
-      return res.status(200).json({ success: false, skipped: true });
+      return res.status(200).json({ success: false, skipped: true, reason: 'invalid-token' });
     }
 
     const b = (req.body ?? {}) as { userAgent?: string; screen?: string; timezone?: string; language?: string };
-    await admin.from('login_events').insert({
+    // supabase-js は INSERT 失敗時に throw せず { error } を返すため、必ず error を検査する。
+    // ここを無視すると、キーが anon（RLS で拒否）等のとき行が入らないのに success を返してしまう。
+    const { error: insErr } = await admin.from('login_events').insert({
       user_id: userId,
       ip: clientIp(req),
       user_agent: str(b.userAgent, 500),
@@ -71,6 +73,10 @@ export default async function handler(req: any, res: any) {
       timezone: str(b.timezone, 64),
       language: str(b.language, 32),
     });
+    if (insErr) {
+      console.error('session-log insert failed:', insErr.message);
+      return res.status(200).json({ success: false, reason: 'insert-failed', error: insErr.message });
+    }
 
     return res.status(200).json({ success: true });
   } catch (e: any) {

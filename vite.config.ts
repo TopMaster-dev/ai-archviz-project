@@ -333,13 +333,13 @@ export default defineConfig(({ mode }) => {
                         const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '';
                         if (!sbUrl || !serviceKey) {
                             res.statusCode = 200;
-                            return res.end(JSON.stringify({ success: false, skipped: true }));
+                            return res.end(JSON.stringify({ success: false, skipped: true, reason: 'server-not-configured' }));
                         }
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
                         if (!token) {
                             res.statusCode = 200;
-                            return res.end(JSON.stringify({ success: false, skipped: true }));
+                            return res.end(JSON.stringify({ success: false, skipped: true, reason: 'no-token' }));
                         }
                         const pickIp = (h: any): string | null => {
                             const raw = Array.isArray(h) ? h[0] : h;
@@ -354,9 +354,10 @@ export default defineConfig(({ mode }) => {
                         const userId = u?.user?.id;
                         if (uErr || !userId) {
                             res.statusCode = 200;
-                            return res.end(JSON.stringify({ success: false, skipped: true }));
+                            return res.end(JSON.stringify({ success: false, skipped: true, reason: 'invalid-token' }));
                         }
-                        await admin.from('login_events').insert({
+                        // INSERT 失敗（例: キーが anon で RLS 拒否）を握りつぶさず error を検査する。
+                        const { error: insErr } = await admin.from('login_events').insert({
                             user_id: userId,
                             ip,
                             user_agent: str(parsed.userAgent, 500),
@@ -364,6 +365,11 @@ export default defineConfig(({ mode }) => {
                             timezone: str(parsed.timezone, 64),
                             language: str(parsed.language, 32),
                         });
+                        if (insErr) {
+                            console.error('session-log local insert failed:', insErr.message);
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify({ success: false, reason: 'insert-failed', error: insErr.message }));
+                        }
                         res.statusCode = 200;
                         return res.end(JSON.stringify({ success: true }));
                     } catch (e: any) {
