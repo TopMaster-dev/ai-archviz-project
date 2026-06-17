@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { useAuth } from '../../lib/auth/AuthContext.js';
 import { AuthScreen } from './AuthScreen.js';
 import { RegistrationScreen } from './RegistrationScreen.js';
+import { ProfileLoadingScreen } from './ProfileLoadingScreen.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
 import { ProjectSessionProvider } from '../../lib/project/projectSessionContext.js';
 import { AuthedShell } from './AuthedShell.js';
@@ -36,13 +37,10 @@ export function AuthGate({ children }: { children: ReactNode }) {
   if (!userId) return <AuthScreen />;
 
   // セッションはあるがプロフィール未取得（招待直後の読み込み中を含む）。
-  // handle_new_user トリガにより profiles 行は必ず作成されるため、ここは一時的な状態。
+  // 通常は handle_new_user トリガが profiles 行を必ず作成するため一時的な状態だが、
+  // スキーマ未適用などで解消しない場合に備え、一定時間後に再読み込み/ログアウトを提示する。
   if (!profile) {
-    return (
-      <div className="flex h-screen w-screen items-center justify-center bg-neutral-900 text-neutral-300">
-        読み込み中…
-      </div>
-    );
+    return <ProfileLoadingScreen />;
   }
 
   // 招待で作成された直後は role='pro' の空プロフィールが自動作成されるが本登録は未完了。

@@ -29,6 +29,13 @@ export default defineConfig(({ mode }) => {
   });
 
   return {
+    // 開発/プレビューサーバのポートを 3000 に固定する。
+    // Supabase の Site URL / Redirect URL（招待リンクのリダイレクト先）が
+    // http://localhost:3000 のため、ポートを揃えないと招待リンクが空きポートに当たり
+    // 「アプリが開かない」状態になる。strictPort=true なら 3000 が使えないとき
+    // 黙って別ポートへ移らず失敗させ、ポート不一致の再発を防ぐ。
+    server: { port: 3000, strictPort: true },
+    preview: { port: 3000, strictPort: true },
     resolve: {
       alias: {
         three: path.resolve(currentDir, 'node_modules/three'),
