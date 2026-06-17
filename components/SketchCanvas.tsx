@@ -326,6 +326,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [draggingFurnitureId, setDraggingFurnitureId] = useState<string | null>(null);
   const [rotatingFurnitureId, setRotatingFurnitureId] = useState<string | null>(null);
   const [furnitureHint, setFurnitureHint] = useState<string | null>(null);
+  // 左サイドツールパネル: lg未満ではドロワー化（既定で隠す）。lg以上は常時表示（この状態は無視）。
+  const [panelOpen, setPanelOpen] = useState(false);
   const furnitureHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rotationWallOkRef = useRef(true);
   /** リング回転ドラッグ開始時の yaw とマウス角度（絶対スナップでは掴み位置が飛ぶため相対で更新） */
@@ -2329,10 +2331,30 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   };
 
   return (
-    <div className="relative h-full w-full group pt-32 pb-6 pr-6 pl-[352px]" ref={containerRef}>
+    <div className="relative h-full w-full group pt-32 pb-6 pr-6 pl-6 lg:pl-[352px]" ref={containerRef}>
 
-      {/* 左サイドツールパネル（平面/天伏 + 下絵 + 梁）を1列にまとめて自動整列 */}
-      <div className="absolute top-28 left-6 z-40 flex w-[320px] flex-col gap-2">
+      {/* 左サイドツールパネル（平面/天伏 + 下絵 + 梁）。lg未満はドロワー（既定で隠し、左端タブで開閉）→ 狭幅でキャンバスを潰さない。 */}
+      {/* 狭幅: ドロワーを開くタブ（閉じている間だけ表示） */}
+      {!panelOpen && (
+        <button
+          type="button"
+          onClick={() => setPanelOpen(true)}
+          className="lg:hidden absolute left-0 top-1/2 z-[55] -translate-y-1/2 flex items-center gap-1.5 rounded-r-2xl border border-l-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-2 pr-3 text-[11px] font-black tracking-widest text-emerald-200 shadow-2xl backdrop-blur-md tap focus-ring"
+          aria-label="作図ツールを開く"
+        >
+          <svg className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" d="M9 5l7 7-7 7" /></svg>
+          ツール
+        </button>
+      )}
+      {/* 狭幅: ドロワー背景（タップで閉じる） */}
+      {panelOpen && (
+        <div className="lg:hidden absolute inset-0 z-[54] bg-black/60" onClick={() => setPanelOpen(false)} aria-hidden />
+      )}
+      <div
+        className={`absolute top-28 left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 transition-transform duration-300 lg:translate-x-0 ${
+          panelOpen ? 'translate-x-0' : '-translate-x-[150%] lg:translate-x-0'
+        }`}
+      >
       {/* 平面図 / 天伏図 切替（独立・最上段）(3b) */}
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-1.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
         <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
@@ -2618,8 +2640,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       </div>
       </div>
 
-      {/* Floating Toolbar (Right) */}
-      <div className="absolute top-1/2 -translate-y-1/2 right-4 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
+      {/* Floating Toolbar (Right→lg / 狭幅は左下に退避してスナップツールバーと干渉させない) */}
+      <div className="absolute z-50 flex flex-col gap-3 animate-in slide-in-from-right duration-700 bottom-6 left-6 lg:bottom-auto lg:left-auto lg:top-1/2 lg:-translate-y-1/2 lg:right-4">
         <button onClick={() => handleZoomButton('in')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">+</button>
         <button onClick={() => handleZoomButton('out')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">-</button>
         <button onClick={handleFitToScreen} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-xs font-black text-neutral-400 hover:bg-white/10 transition-all uppercase tracking-tighter">全体</button>
@@ -2628,7 +2650,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       {/* Floating Toolbar (Top Right) - Unified Controls */}
       {/* レスポンシブ（管理表 row 13）: 左の画面切替バー（約20rem）と重ならないよう最大幅を制限し、
           狭幅では gap/padding を縮小しつつ flex-wrap で折り返す（重なり防止）。 */}
-      <div className="absolute top-6 right-6 z-50 max-w-[calc(100vw_-_23rem)] animate-in slide-in-from-top duration-700 pointer-events-auto">
+      <div className="absolute top-32 right-3 z-50 max-w-[calc(100vw_-_7rem)] lg:top-6 lg:right-6 lg:max-w-[calc(100vw_-_23rem)] animate-in slide-in-from-top duration-700 pointer-events-auto">
           <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
               
               {/* Tool mode: 選択・壁・窓・ドア（横並び） */}
