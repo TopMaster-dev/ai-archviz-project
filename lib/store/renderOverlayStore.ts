@@ -7,10 +7,18 @@ interface RenderOverlayState {
   /** 「クラウドAIで超高画質レンダリング中…」等のオーバーレイ表示中なら true。 */
   active: boolean;
   setActive: (value: boolean) => void;
+  /**
+   * エディタ上部ツールバーの「下端 Y（px, ビューポート基準）」。別ツリーの UndoRedoBar が
+   * ハードコードの top ではなく実測値の直下に配置するために使う。0 のときは未計測（=従来の既定値）。
+   */
+  headerBottom: number;
+  setHeaderBottom: (value: number) => void;
 }
 
 export const useRenderOverlayStore = create<RenderOverlayState>((set) => ({
   active: false,
   // 値が変わらない場合は更新をスキップして不要な再描画を避ける。
   setActive: (value) => set((state) => (state.active === value ? state : { active: value })),
+  headerBottom: 0,
+  setHeaderBottom: (value) => set((state) => (state.headerBottom === value ? state : { headerBottom: value })),
 }));

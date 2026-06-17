@@ -1176,6 +1176,26 @@ const App: React.FC = () => {
   // エディタ離脱（アンマウント）時にフラグを必ず倒す（レンダ中にホームへ戻った等で true が残らないように）。
   useEffect(() => () => { useRenderOverlayStore.getState().setActive(false); }, []);
 
+  // 上部ツールバーの実測下端を共有ストアへ反映し、別ツリーの UndoRedoBar をその直下に置く
+  // （ヘッダー折り返しで高くなっても被らない）。ref コールバックでマウント/アンマウントを検知し、
+  // ResizeObserver で高さ変化を追従。未マウント時は 0 を入れて従来の固定 92px へフォールバックさせる。
+  const headerBarObserverRef = useRef<ResizeObserver | null>(null);
+  const setHeaderBarNode = useCallback((node: HTMLDivElement | null) => {
+    headerBarObserverRef.current?.disconnect();
+    headerBarObserverRef.current = null;
+    const store = useRenderOverlayStore.getState();
+    if (!node) {
+      store.setHeaderBottom(0);
+      return;
+    }
+    const update = () => useRenderOverlayStore.getState().setHeaderBottom(Math.round(node.getBoundingClientRect().bottom));
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    headerBarObserverRef.current = ro;
+  }, []);
+  useEffect(() => () => { headerBarObserverRef.current?.disconnect(); }, []);
+
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
     setRenderState((prev) => {
@@ -2566,7 +2586,7 @@ const App: React.FC = () => {
             }`}
           >
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
-                <div className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-3 pointer-events-none">
+                <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 md:gap-3 pointer-events-none">
                     {renderGlobalModeToggle(aiEditOpen ? 'ai' : viewMode)}
                     {viewMode === '3D' && (
                       <div className="flex items-start justify-end gap-2 flex-wrap">
@@ -3566,7 +3586,7 @@ const App: React.FC = () => {
                     </div>
 
                             {/* --- BOTTOM ROW (Debug, Camera presets, Furniture) --- */}
-                            <div className="absolute bottom-6 left-6 right-6 z-40 flex items-end justify-between gap-3 pointer-events-none">
+                            <div className="absolute bottom-6 left-6 right-6 z-40 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
                                 <div className="flex-1 min-w-0 flex justify-start">
                                     {renderState.debugBaseUrl ? (
                                         <div className="group cursor-pointer pointer-events-auto animate-in fade-in slide-in-from-bottom-4" onClick={() => setShowDebugModal(true)}>
@@ -3580,8 +3600,8 @@ const App: React.FC = () => {
                                     ) : null}
                                 </div>
 
-                                <div className="shrink-0 flex items-stretch justify-center gap-2 pointer-events-none">
-                                    <div className="glass px-2.5 py-2 rounded-xl border border-white/10 bg-black/50 backdrop-blur-md max-w-[min(40vw,200px)] w-[min(40vw,168px)] shrink-0 self-stretch min-h-0 flex flex-col overflow-hidden pointer-events-auto">
+                                <div className="min-w-0 flex items-stretch justify-center gap-1.5 md:gap-2 pointer-events-none">
+                                    <div className="glass px-2.5 py-2 rounded-xl border border-white/10 bg-black/50 backdrop-blur-md max-w-[min(40vw,200px)] w-[min(40vw,168px)] shrink-0 self-stretch min-h-0 hidden md:flex md:flex-col overflow-hidden pointer-events-auto">
                                         <p className="text-[9px] font-black uppercase text-neutral-400 tracking-wider mb-1.5 shrink-0">操作</p>
                                         <ul className="flex-1 min-h-0 max-h-full overflow-y-auto space-y-1 text-[9px] leading-snug text-neutral-200 font-semibold py-0.5">
                                             {cameraMode === 'orbit' ? (

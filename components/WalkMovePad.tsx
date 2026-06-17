@@ -14,60 +14,60 @@ export const WalkMovePad: React.FC<WalkMovePadProps> = ({ disabled, walkDigitalI
 
   return (
     <div
-      className={`grid grid-cols-3 gap-0.5 shrink-0 p-1 rounded-xl border border-white/10 bg-black/45 backdrop-blur-md shadow-xl pointer-events-auto ${className}`}
+      className={`grid grid-cols-3 gap-1 shrink-0 p-1.5 rounded-xl border border-white/10 bg-black/45 backdrop-blur-md shadow-xl pointer-events-auto ${className}`}
       onPointerLeave={() => setDigital(0, 0)}
     >
       <span />
       <button
         type="button"
         disabled={disabled}
-        className="p-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30"
+        className="tap flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30 focus-ring"
         onPointerDown={(e) => {
           e.preventDefault();
           setDigital(1, 0);
         }}
         onPointerUp={() => setDigital(0, 0)}
       >
-        <ChevronUp className="w-3.5 h-3.5 text-white/80" />
+        <ChevronUp className="w-4 h-4 text-white/80" />
       </button>
       <span />
       <button
         type="button"
         disabled={disabled}
-        className="p-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30"
+        className="tap flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30 focus-ring"
         onPointerDown={(e) => {
           e.preventDefault();
           setDigital(0, -1);
         }}
         onPointerUp={() => setDigital(0, 0)}
       >
-        <ChevronLeft className="w-3.5 h-3.5 text-white/80" />
+        <ChevronLeft className="w-4 h-4 text-white/80" />
       </button>
       <span />
       <button
         type="button"
         disabled={disabled}
-        className="p-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30"
+        className="tap flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30 focus-ring"
         onPointerDown={(e) => {
           e.preventDefault();
           setDigital(0, 1);
         }}
         onPointerUp={() => setDigital(0, 0)}
       >
-        <ChevronRight className="w-3.5 h-3.5 text-white/80" />
+        <ChevronRight className="w-4 h-4 text-white/80" />
       </button>
       <span />
       <button
         type="button"
         disabled={disabled}
-        className="p-1 rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30"
+        className="tap flex items-center justify-center rounded-lg bg-white/5 hover:bg-white/15 disabled:opacity-30 focus-ring"
         onPointerDown={(e) => {
           e.preventDefault();
           setDigital(-1, 0);
         }}
         onPointerUp={() => setDigital(0, 0)}
       >
-        <ChevronDown className="w-3.5 h-3.5 text-white/80" />
+        <ChevronDown className="w-4 h-4 text-white/80" />
       </button>
       <span />
     </div>

@@ -69,7 +69,7 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   return (
     <div className="relative flex items-center gap-3 pointer-events-auto">
       {selectedAssetCategory && (
-        <div className="absolute bottom-[calc(100%+16px)] right-0 w-full min-w-[320px] glass p-4 rounded-3xl border border-white/10 bg-black/80 backdrop-blur-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-2">
+        <div className="absolute bottom-[calc(100%+16px)] right-0 w-[min(90vw,360px)] glass p-4 rounded-3xl border border-white/10 bg-black/80 backdrop-blur-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 safe-r">
           <div className="flex justify-between items-center mb-3 px-1">
             <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">{selectedAssetCategory}</span>
             <button

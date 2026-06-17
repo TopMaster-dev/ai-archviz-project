@@ -12,6 +12,9 @@ export function UndoRedoBar() {
   const canUndo = useStore(useProjectStore.temporal, (t) => t.pastStates.length > 0);
   const canRedo = useStore(useProjectStore.temporal, (t) => t.futureStates.length > 0);
   const overlayActive = useRenderOverlayStore((s) => s.active);
+  // 上部ツールバーの実測下端の直下に配置（ヘッダーが折り返して高くなっても被らない）。
+  // 未計測（0）のときは従来の 92px にフォールバック＝挙動不変。
+  const headerBottom = useRenderOverlayStore((s) => s.headerBottom);
 
   if (overlayActive) return null;
 
@@ -19,7 +22,10 @@ export function UndoRedoBar() {
     'flex h-8 w-8 items-center justify-center rounded-lg text-neutral-200 transition hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent';
 
   return (
-    <div className="fixed top-[92px] left-1/2 z-[1000] flex -translate-x-1/2 gap-1 rounded-xl bg-neutral-800/80 p-1 shadow ring-1 ring-white/10">
+    <div
+      style={{ top: headerBottom > 0 ? headerBottom + 10 : 92 }}
+      className="fixed left-1/2 z-[1000] flex -translate-x-1/2 gap-1 rounded-xl bg-neutral-800/80 p-1 shadow ring-1 ring-white/10"
+    >
       <button
         type="button"
         onClick={() => useProjectStore.temporal.getState().undo()}
