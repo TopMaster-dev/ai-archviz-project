@@ -35,7 +35,14 @@ jobs:
       - name: Run backup
         env:
           SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
-        run: bash scripts/db-backup.sh
+        run: |
+          set -euo pipefail
+          # シークレット未設定なら、設定手順を明示してフェイルファスト（Annotations に表示される）。
+          if [ -z "${SUPABASE_DB_URL:-}" ]; then
+            echo "::error title=SUPABASE_DB_URL secret が未設定です::GitHub リポジトリの Settings → Secrets and variables → Actions → 'New repository secret' で SUPABASE_DB_URL を追加してください。値は Supabase ダッシュボード → Project Settings → Database → Connection string の 'Session pooler' もしくは 'Direct connection'（ポート :5432。Transaction pooler の :6543 は pg_dump 非対応のため不可）の接続文字列で、[YOUR-PASSWORD] を実際のDBパスワードに置換します。※ Vercel の環境変数とは別物で、GitHub 側への登録が必要です。"
+            exit 1
+          fi
+          bash scripts/db-backup.sh
 
       - name: Upload backup artifact
         uses: actions/upload-artifact@v4
