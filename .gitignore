@@ -13,3 +13,7 @@ pnpm-lock.yaml
 docs
 _renderpdf.mjs
 _clickceiling.mjs
+
+# DB バックアップのダンプ（個人情報を含むためコミット禁止・row 29）
+backups/
+*.dump

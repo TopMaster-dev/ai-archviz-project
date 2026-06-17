@@ -1,0 +1,46 @@
+name: Nightly DB Backup
+
+# Supabase 無料プランは自動バックアップが無いため、pg_dump を日次取得する（管理表 row 29）。
+# 必要シークレット: SUPABASE_DB_URL（セッションプーラー(:5432) か直接接続の接続文字列。
+#   トランザクションプーラー(:6543) は pg_dump 非対応なので不可）。
+# 取得物は GitHub Actions の Artifacts に保存（既定 30 日保持）。長期保管は supabase/BACKUP.md を参照。
+
+on:
+  schedule:
+    - cron: '0 18 * * *' # 毎日 18:00 UTC = 03:00 JST
+  workflow_dispatch: {} # 手動実行
+
+# 同時実行を防ぐ（前回が長引いても重複起動しない）。
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+jobs:
+  backup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client 17
+        run: |
+          set -euo pipefail
+          # Supabase は現在 Postgres 17。pg_dump はサーバより新しい必要があるため 17 を入れる
+          # （新しいクライアントは等しい/古いサーバを安全にダンプできる。古いと version mismatch で失敗）。
+          sudo apt-get update
+          sudo apt-get install -y postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y postgresql-client-17
+
+      - name: Run backup
+        env:
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: bash scripts/db-backup.sh
+
+      - name: Upload backup artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: arise-db-backup-${{ github.run_id }}
+          path: backups/*.dump
+          retention-days: 30
+          if-no-files-found: error
