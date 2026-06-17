@@ -2731,8 +2731,9 @@ const App: React.FC = () => {
              )}
 
              {viewMode === '3D' && (
-                // 16:9 (aspect-video) に強制固定し、はみ出ないように最大化するコンテナ
-                <div className="relative w-full aspect-video overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/10 bg-[#0a0a0a]">
+                // ビューエリアの高さいっぱいに広げる（幅は w-full のまま）。以前は aspect-video で
+                // 16:9 に固定 → items-end で下寄せされ、上部に黒い余白が出ていた。h-full で解消。
+                <div className="relative w-full h-full overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/10 bg-[#0a0a0a]">
                      <RoomViewer 
                         selections={selections as any} 
                         onMeshClick={handleMeshClick} 
@@ -3602,7 +3603,7 @@ const App: React.FC = () => {
                                     ) : null}
                                 </div>
 
-                                <div className="min-w-0 flex items-stretch justify-center gap-1.5 md:gap-2 pointer-events-none">
+                                <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2 pointer-events-none">
                                     <div className="glass px-2.5 py-2 rounded-xl border border-white/10 bg-black/50 backdrop-blur-md max-w-[min(40vw,200px)] w-[min(40vw,168px)] shrink-0 self-stretch min-h-0 hidden md:flex md:flex-col overflow-hidden pointer-events-auto">
                                         <p className="text-[9px] font-black uppercase text-neutral-400 tracking-wider mb-1.5 shrink-0">操作</p>
                                         <ul className="flex-1 min-h-0 max-h-full overflow-y-auto space-y-1 text-[9px] leading-snug text-neutral-200 font-semibold py-0.5">
@@ -3674,7 +3675,7 @@ const App: React.FC = () => {
                                         )}
                                 </div>
 
-                                <div className="flex-1 min-w-0 flex justify-end">
+                                <div className="flex-1 flex justify-end">
                                     <FurnitureAssetStrip
                                         processedCatalog={processedCatalog}
                                         assetCategories={assetCategories}
