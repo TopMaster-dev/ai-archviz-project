@@ -45,20 +45,41 @@ end $$;
 -- 3) profiles（phone 含む）+ トリガ + RLS + handle_new_user（0006版）
 -- ---------------------------------------------------------------------------
 create table if not exists profiles (
-  id              uuid primary key references auth.users (id) on delete cascade,
-  role            user_role   not null default 'pro',
-  display_name    text,
-  company         text,
-  graduation_year int,
-  phone           text,
-  plan            plan_type   not null default 'free',
-  created_at      timestamptz not null default now(),
-  updated_at      timestamptz not null default now(),
+  id                uuid primary key references auth.users (id) on delete cascade,
+  role              user_role   not null default 'pro',
+  display_name      text,
+  company           text,
+  graduation_year   int,
+  phone             text,
+  plan              plan_type   not null default 'free',
+  registered_at     timestamptz,            -- 本登録完了時刻（NULL=招待後の本登録待ち。row 38）
+  terms_accepted_at timestamptz,            -- 規約・ポリシー同意時刻（row 43）
+  department        text,                   -- 学部（学生のみ。row 46）
+  school_year       text,                   -- 学年（学生のみ。row 46）
+  created_at        timestamptz not null default now(),
+  updated_at        timestamptz not null default now(),
   constraint student_requires_graduation_year
     check (role <> 'student' or graduation_year is not null)
 );
 -- 既存DB（phone 追加前）への安全網
 alter table profiles add column if not exists phone text;
+
+-- 招待制の本登録フロー（row 38/43/46）への安全網（idempotent）。
+alter table profiles add column if not exists terms_accepted_at timestamptz;
+alter table profiles add column if not exists department        text;
+alter table profiles add column if not exists school_year       text;
+-- registered_at は「列を新設する初回のみ」既存ユーザーを本登録済みとして backfill する
+-- （再実行時に、まだ本登録していない招待ユーザーを誤って登録済みにしないため、列の有無で一度だけ判定）。
+do $$
+begin
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'profiles' and column_name = 'registered_at'
+  ) then
+    alter table profiles add column registered_at timestamptz;
+    update profiles set registered_at = created_at;
+  end if;
+end $$;
 
 drop trigger if exists trg_profiles_updated_at on profiles;
 create trigger trg_profiles_updated_at

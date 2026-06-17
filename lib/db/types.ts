@@ -13,6 +13,14 @@ export interface Profile {
   graduation_year: number | null;
   phone: string | null;
   plan: PlanType;
+  /** 本登録（招待後の属性入力・規約同意）完了時刻。NULL=本登録待ち（登録画面を表示）。管理表 row 38。 */
+  registered_at: string | null;
+  /** 利用規約・プライバシーポリシーへの同意時刻。管理表 row 43。 */
+  terms_accepted_at: string | null;
+  /** 学部（学生のみ）。管理表 row 46。 */
+  department: string | null;
+  /** 学年（学生のみ）。管理表 row 46。 */
+  school_year: string | null;
   created_at: string;
 }
 

@@ -7,6 +7,7 @@ import {
   updateProfile as dbUpdateProfile,
   updateEmail as dbUpdateEmail,
   updatePassword as dbUpdatePassword,
+  type ProfilePatch,
 } from '../db/profile.js';
 
 // 認証コンテキスト。属性別サインアップ（プロ/学生/施主、学生は卒業予定年度必須）に対応。
@@ -34,7 +35,7 @@ export interface AuthContextValue {
   signOut(): Promise<void>;
   resetPassword(email: string): Promise<{ error: string | null }>;
   refreshProfile(): Promise<void>;
-  updateProfile(patch: { display_name?: string | null; phone?: string | null }): Promise<{ error: string | null }>;
+  updateProfile(patch: ProfilePatch): Promise<{ error: string | null }>;
   updateEmail(email: string): Promise<{ error: string | null }>;
   updatePassword(password: string): Promise<{ error: string | null }>;
 }
@@ -138,7 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loadProfile, userId]);
 
   const updateProfile = useCallback(
-    async (patch: { display_name?: string | null; phone?: string | null }) => {
+    async (patch: ProfilePatch) => {
       try {
         await dbUpdateProfile(patch);
         await loadProfile(userId);
