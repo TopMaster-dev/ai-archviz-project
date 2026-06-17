@@ -27,6 +27,10 @@ export interface Profile {
   ai_credits_used: number;
   /** クレジット失効時刻（付与+3ヶ月）。null は失効なし。 */
   ai_credits_expires_at: string | null;
+  /** アカウントロック時刻（自動/管理）。null=有効。設定時はアプリ利用不可。管理表 row 54。 */
+  locked_at: string | null;
+  /** ロック理由（監査用）。 */
+  lock_reason: string | null;
   created_at: string;
 }
 

@@ -63,19 +63,35 @@ export default async function handler(req: any, res: any) {
     }
 
     const b = (req.body ?? {}) as { userAgent?: string; screen?: string; timezone?: string; language?: string };
+    const ip = clientIp(req);
+    const userAgent = str(b.userAgent, 500);
+    const screen = str(b.screen, 32);
     // supabase-js は INSERT 失敗時に throw せず { error } を返すため、必ず error を検査する。
     // ここを無視すると、キーが anon（RLS で拒否）等のとき行が入らないのに success を返してしまう。
     const { error: insErr } = await admin.from('login_events').insert({
       user_id: userId,
-      ip: clientIp(req),
-      user_agent: str(b.userAgent, 500),
-      screen: str(b.screen, 32),
+      ip,
+      user_agent: userAgent,
+      screen,
       timezone: str(b.timezone, 64),
       language: str(b.language, 32),
     });
     if (insErr) {
       console.error('session-log insert failed:', insErr.message);
       return res.status(200).json({ success: false, reason: 'insert-failed', error: insErr.message });
+    }
+
+    // 自動アカウントロック（row 54・フラグ ON 時のみ）。ベストエフォート（失敗してもログインは妨げない）。
+    // テスト期は共有Wi-Fiで誤検知しやすいため既定 OFF。
+    if (process.env.ENABLE_AUTO_ACCOUNT_LOCK === 'true' && ip && userAgent) {
+      const { error: lockErr } = await admin.rpc('evaluate_account_lock', {
+        p_ip: ip,
+        p_user_agent: userAgent,
+        p_screen: screen,
+        p_threshold: Number(process.env.AUTO_LOCK_THRESHOLD || 3),
+        p_window_hours: Number(process.env.AUTO_LOCK_WINDOW_HOURS || 24),
+      });
+      if (lockErr) console.error('evaluate_account_lock failed:', lockErr.message);
     }
 
     return res.status(200).json({ success: true });

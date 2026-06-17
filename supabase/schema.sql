@@ -59,6 +59,8 @@ create table if not exists profiles (
   ai_credits_total      int not null default 0, -- フリープラン付与クレジット総数（row 49/50）
   ai_credits_used       int not null default 0, -- 消費済みクレジット数（consume_ai_credit で加算）
   ai_credits_expires_at timestamptz,            -- クレジット失効時刻（付与+3ヶ月）
+  locked_at         timestamptz,            -- アカウントロック時刻（NULL=有効。自動/管理ロック・row 54）
+  lock_reason       text,                   -- ロック理由（監査用）
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
   constraint student_requires_graduation_year
@@ -95,6 +97,11 @@ update profiles
   set ai_credits_total = 50,
       ai_credits_expires_at = coalesce(registered_at, created_at) + interval '3 months'
   where ai_credits_total = 0;
+
+-- 自動アカウントロック（row 54）への安全網（idempotent）。locked_at/lock_reason は
+-- クライアントの更新対象（下の grant）に含めない＝本人が自分でロック解除できない（サーバのみ）。
+alter table profiles add column if not exists locked_at   timestamptz;
+alter table profiles add column if not exists lock_reason text;
 
 drop trigger if exists trg_profiles_updated_at on profiles;
 create trigger trg_profiles_updated_at
@@ -166,6 +173,48 @@ begin
 end $$;
 revoke execute on function public.consume_ai_credit() from public;
 grant  execute on function public.consume_ai_credit() to authenticated;
+
+-- 自動アカウントロック（row 54）。同一「IP＋端末FP(UA+画面)」から直近 window 内に
+-- ログインした異なるアカウントが threshold 以上なら、そのクラスタの未ロック分を一括ロックする。
+-- IP単独だと共有Wi-Fiで誤検知しやすいため、端末FP(UA+画面)の一致も条件にして「同一PC＋同一回線」に絞る。
+-- ログイン記録時（api/session-log）に評価。SECURITY DEFINER（サーバの service_role のみ実行）。
+create or replace function evaluate_account_lock(
+  p_ip text,
+  p_user_agent text,
+  p_screen text,
+  p_threshold int default 3,
+  p_window_hours int default 24
+)
+returns int language plpgsql security definer set search_path = public as $$
+declare cluster_users uuid[]; locked_count int;
+begin
+  if p_ip is null or p_user_agent is null then return 0; end if;
+  select array_agg(distinct user_id) into cluster_users
+  from login_events
+  where ip = p_ip
+    and user_agent = p_user_agent
+    and (p_screen is null or screen = p_screen)
+    and created_at > now() - make_interval(hours => greatest(1, p_window_hours));
+  if cluster_users is null or array_length(cluster_users, 1) < greatest(2, p_threshold) then
+    return 0;
+  end if;
+  update profiles
+    set locked_at = now(),
+        lock_reason = format('auto: %s accounts from same device/IP within %sh',
+                             array_length(cluster_users, 1), p_window_hours)
+    where id = any(cluster_users) and locked_at is null;
+  get diagnostics locked_count = row_count;
+  return locked_count;
+end $$;
+revoke execute on function public.evaluate_account_lock(text,text,text,int,int) from public, anon, authenticated;
+
+-- 管理用: ロック中アカウント一覧（解除は locked_at=null に更新）。email を含むため service_role 限定。
+create or replace view admin_locked_accounts as
+  select p.id, p.display_name, p.role, p.locked_at, p.lock_reason, u.email
+  from profiles p
+  join auth.users u on u.id = p.id
+  where p.locked_at is not null;
+revoke all on admin_locked_accounts from anon, authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 4) user_api_keys（BYOK）

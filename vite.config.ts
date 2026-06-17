@@ -348,6 +348,8 @@ export default defineConfig(({ mode }) => {
                         const ip = pickIp(req.headers['x-real-ip']) || pickIp(req.headers['x-vercel-forwarded-for']) || pickIp(req.headers['x-forwarded-for']) || req.socket?.remoteAddress || null;
                         const parsed = JSON.parse(body || '{}') as { userAgent?: string; screen?: string; timezone?: string; language?: string };
                         const str = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+                        const userAgent = str(parsed.userAgent, 500);
+                        const screen = str(parsed.screen, 32);
                         const { createClient } = await import('@supabase/supabase-js');
                         const admin = createClient(sbUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
                         const { data: u, error: uErr } = await admin.auth.getUser(token);
@@ -360,8 +362,8 @@ export default defineConfig(({ mode }) => {
                         const { error: insErr } = await admin.from('login_events').insert({
                             user_id: userId,
                             ip,
-                            user_agent: str(parsed.userAgent, 500),
-                            screen: str(parsed.screen, 32),
+                            user_agent: userAgent,
+                            screen,
                             timezone: str(parsed.timezone, 64),
                             language: str(parsed.language, 32),
                         });
@@ -369,6 +371,15 @@ export default defineConfig(({ mode }) => {
                             console.error('session-log local insert failed:', insErr.message);
                             res.statusCode = 200;
                             return res.end(JSON.stringify({ success: false, reason: 'insert-failed', error: insErr.message }));
+                        }
+                        // 自動アカウントロック（row 54・フラグ ON 時のみ）。ベストエフォート。
+                        if ((process.env.ENABLE_AUTO_ACCOUNT_LOCK || env.ENABLE_AUTO_ACCOUNT_LOCK) === 'true' && ip && userAgent) {
+                            const { error: lockErr } = await admin.rpc('evaluate_account_lock', {
+                                p_ip: ip, p_user_agent: userAgent, p_screen: screen,
+                                p_threshold: Number(process.env.AUTO_LOCK_THRESHOLD || env.AUTO_LOCK_THRESHOLD || 3),
+                                p_window_hours: Number(process.env.AUTO_LOCK_WINDOW_HOURS || env.AUTO_LOCK_WINDOW_HOURS || 24),
+                            });
+                            if (lockErr) console.error('evaluate_account_lock local failed:', lockErr.message);
                         }
                         res.statusCode = 200;
                         return res.end(JSON.stringify({ success: true }));

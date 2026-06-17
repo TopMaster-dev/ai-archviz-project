@@ -3,6 +3,7 @@ import { useAuth } from '../../lib/auth/AuthContext.js';
 import { AuthScreen } from './AuthScreen.js';
 import { RegistrationScreen } from './RegistrationScreen.js';
 import { ProfileLoadingScreen } from './ProfileLoadingScreen.js';
+import { LockedScreen } from './LockedScreen.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
 import { ProjectSessionProvider } from '../../lib/project/projectSessionContext.js';
 import { AuthedShell } from './AuthedShell.js';
@@ -41,6 +42,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
   // スキーマ未適用などで解消しない場合に備え、一定時間後に再読み込み/ログアウトを提示する。
   if (!profile) {
     return <ProfileLoadingScreen />;
+  }
+
+  // 自動/管理ロック（row 54）。locked_at が設定されたアカウントはアプリ利用を停止する。
+  // 自動ロックの検知は ENABLE_AUTO_ACCOUNT_LOCK 有効時のみ作動するため、無効（既定）なら locked_at は付かず無害。
+  if (profile.locked_at) {
+    return <LockedScreen />;
   }
 
   // 招待で作成された直後は role='pro' の空プロフィールが自動作成されるが本登録は未完了。
