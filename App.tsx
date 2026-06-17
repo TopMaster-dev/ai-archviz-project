@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback, Suspense, startTransition, memo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, Environment } from '@react-three/drei';
-import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download } from 'lucide-react';
+import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download, ChevronLeft } from 'lucide-react';
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
 import { MaterialCategory, Product, RenderState, FurnitureItem, FurnitureCatalogItem, Opening, ToolMode, AddKind, CameraPreset, CameraBlendRequest, AiEstimateItem } from './types.js';
 import { NumericField } from './components/NumericField.js';
@@ -897,6 +897,9 @@ const App: React.FC = () => {
 
   // UI States
   const [showCostPanel, setShowCostPanel] = useState(false);
+  // 右サイドバー（見積＋カタログ）の開閉。xl 未満では画面を覆うドロワー（既定は閉=キャンバス全幅）、
+  // xl 以上では常時表示の固定カラム（CSS で制御）。狭い画面でパネルがキャンバスを潰す問題（row 13）の解消。
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [aiEstimateItems, setAiEstimateItems] = useState<AiEstimateItem[]>([]);
   const [materialUnitPriceOverrides, setMaterialUnitPriceOverrides] = useState<Record<string, number>>({});
   // 建材ラインのメモ（productId キー、セッション内のみ）（4c）。
@@ -2588,8 +2591,26 @@ const App: React.FC = () => {
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
                 <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 md:gap-3 pointer-events-none">
                     {renderGlobalModeToggle(aiEditOpen ? 'ai' : viewMode)}
+                    {!renderState.isRendering && viewMode === '3D' && (
+                      <div className="pointer-events-none flex flex-col items-center gap-1.5 shrink-0 order-2">
+                        <button
+                          onClick={handleInstantRender}
+                          disabled={renderState.isRendering || !!projectSession?.aiCredits.blocked}
+                          title={creditBlockMessage(projectSession?.aiCredits ?? null) ?? undefined}
+                          className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-purple-900/75 border border-purple-500/30 text-purple-100 shadow-[0_8px_24px_rgba(76,29,149,0.35)] hover:bg-purple-800/80 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
+                        >
+                          <Sparkles className="w-4 h-4 shrink-0" />
+                          <span className="text-[11px] font-black uppercase tracking-widest">AIレンダリング</span>
+                        </button>
+                        {projectSession?.aiCredits.blocked && (
+                          <span className="pointer-events-auto rounded-md bg-black/70 px-2 py-1 text-[10px] font-bold text-amber-300">
+                            {creditBlockMessage(projectSession.aiCredits)}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     {viewMode === '3D' && (
-                      <div className="flex items-start justify-end gap-2 flex-wrap">
+                      <div className="flex items-start justify-end gap-2 flex-wrap order-3">
                         <div className="glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-2 bg-black/40 backdrop-blur-md shadow-xl pointer-events-auto shrink-0 h-[46px]">
                           <span className="text-[10px] font-black uppercase text-neutral-400 tracking-widest">天井高</span>
                           <div className="flex items-center gap-1.5">
@@ -2651,25 +2672,6 @@ const App: React.FC = () => {
                 </div>
              )}
 
-             {!renderState.isRendering && viewMode === '3D' && (
-               <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none flex flex-col items-center gap-1.5">
-                 <button
-                   onClick={handleInstantRender}
-                   disabled={renderState.isRendering || !!projectSession?.aiCredits.blocked}
-                   title={creditBlockMessage(projectSession?.aiCredits ?? null) ?? undefined}
-                   className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-purple-900/75 border border-purple-500/30 text-purple-100 shadow-[0_8px_24px_rgba(76,29,149,0.35)] hover:bg-purple-800/80 transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-                 >
-                   <Sparkles className="w-4 h-4 shrink-0" />
-                   <span className="text-[11px] font-black uppercase tracking-widest">AIレンダリング</span>
-                 </button>
-                 {projectSession?.aiCredits.blocked && (
-                   <span className="pointer-events-auto rounded-md bg-black/70 px-2 py-1 text-[10px] font-bold text-amber-300">
-                     {creditBlockMessage(projectSession.aiCredits)}
-                   </span>
-                 )}
-               </div>
-             )}
-             
              {viewMode === 'sketch' && (
                 <div className="absolute inset-0 z-10 w-full h-full">
                      <SketchCanvas 
@@ -3736,9 +3738,30 @@ const App: React.FC = () => {
 
       </div>
 
-      {/* --- RIGHT SIDEBAR (Catalog + Cost) --- */}
+      {/* --- RIGHT SIDEBAR (Catalog + Cost) --- xl未満はドロワー、xl以上は固定カラム --- */}
       {viewMode === '3D' && (
-        <aside className="relative w-[min(440px,92vw)] h-full flex flex-col z-20 shrink-0 shadow-2xl animate-in slide-in-from-right duration-500 bg-[#050505] border-l border-white/5">
+        <>
+          {/* 狭幅: ドロワーを開くタブ（閉じている間だけ表示） */}
+          {!sidebarOpen && (
+            <button
+              type="button"
+              onClick={() => setSidebarOpen(true)}
+              className="xl:hidden fixed right-0 top-1/2 z-[60] -translate-y-1/2 flex items-center gap-1.5 rounded-l-2xl border border-r-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-3 pr-2 text-[11px] font-black tracking-widest text-emerald-200 shadow-e3 backdrop-blur-md tap focus-ring safe-r"
+              aria-label="見積・カタログを開く"
+            >
+              <ChevronLeft className="h-4 w-4 shrink-0" />
+              見積
+            </button>
+          )}
+          {/* 狭幅: ドロワー背景（タップで閉じる） */}
+          {sidebarOpen && (
+            <div className="xl:hidden fixed inset-0 z-[60] bg-black/60" onClick={() => setSidebarOpen(false)} aria-hidden />
+          )}
+          <aside
+            className={`fixed inset-y-0 right-0 z-[61] w-[min(92vw,380px)] xl:static xl:z-20 xl:w-[min(34vw,440px)] h-full flex flex-col shrink-0 shadow-2xl bg-[#050505] border-l border-white/5 transition-transform duration-300 ${
+              sidebarOpen ? 'translate-x-0' : 'translate-x-full'
+            } xl:translate-x-0`}
+          >
           {/* 1. ESTIMATED COST (Top) */}
           {renderEstimatePanel(false)}
 
@@ -3895,6 +3918,7 @@ const App: React.FC = () => {
           </div>
 
         </aside>
+        </>
       )}
 
       {estimateGuardOpen && (
