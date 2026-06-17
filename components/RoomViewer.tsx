@@ -257,8 +257,13 @@ const Beam3DMesh: React.FC<{
     };
   }, [editable, isSelected, intersectAtY, centerMm, handleD]);
 
+  // 外側ビュー（近接壁カットアウェイ中）は梁を「素通り」させ、奥の壁/床/天井を選択できるようにする
+  // （カットアウェイ壁を素通りにした row 170 と同方針・row 198「梁越しで壁の外からクリックすると選択不可」）。
+  // クリック時点の最新カットアウェイ状態を ref からライブに読む（再レンダのタイミングに依存しない）。
+  const isCutAwayActive = () => !!wallHiddenRef && Object.values(wallHiddenRef.current).some(Boolean);
+
   const startMove = (e: ThreeEvent<PointerEvent>) => {
-    if (!editable) return;
+    if (!editable || isCutAwayActive()) return;
     e.stopPropagation();
     if (!isSelected) { onSelect(); return; }
     if (isWallBeam) return; // 壁梁は壁固定
@@ -270,7 +275,7 @@ const Beam3DMesh: React.FC<{
     onDragStart?.();
   };
   const startRotate = (e: ThreeEvent<PointerEvent>) => {
-    if (!editable || isWallBeam) return;
+    if (!editable || isWallBeam || isCutAwayActive()) return;
     e.stopPropagation();
     dragRef.current = { mode: 'rotate', startCx: beam.cx, startCy: beam.cy, startWx: 0, startWz: 0, planeY: by, cbx: bx, cbz: bz };
     liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
@@ -325,8 +330,8 @@ const Beam3DMesh: React.FC<{
         castShadow
         receiveShadow
         onPointerDown={startMove}
-        onClick={(e) => { if (editable) e.stopPropagation(); }}
-        onPointerOver={(e) => { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); }}
+        onClick={(e) => { if (editable && !isCutAwayActive()) e.stopPropagation(); }}
+        onPointerOver={(e) => { if (!isCutAwayActive()) { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); } }}
         onPointerOut={() => onHoverNameChange?.(null)}
       >
         {!usePrism && <boxGeometry args={[lengthM, heightM, widthM]} />}
@@ -344,7 +349,7 @@ const Beam3DMesh: React.FC<{
           ref={handleRef}
           position={[bx + handleD * Math.cos(angleRad), by, bz + handleD * Math.sin(angleRad)]}
           onPointerDown={startRotate}
-          onClick={(e) => e.stopPropagation()}
+          onClick={(e) => { if (!isCutAwayActive()) e.stopPropagation(); }}
           renderOrder={12}
         >
           <sphereGeometry args={[0.13, 16, 16]} />
