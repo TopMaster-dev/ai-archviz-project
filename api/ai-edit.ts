@@ -46,6 +46,7 @@ export default async function handler(req: any, res: any) {
       aspectRatio?: string;
       imageSize?: string;
       coordinate?: boolean;
+      learnedHints?: unknown;
     };
 
     if (!body.baseImage) {
@@ -54,6 +55,10 @@ export default async function handler(req: any, res: any) {
 
     // コーディネート（完全お任せ）モード（row 207/213）: 個別の入力は不要なため入力必須チェックを省く。
     const coordinate = body.coordinate === true;
+    // in-context反映（row 211/219）: 過去の高評価傾向。プロンプト末尾に参考添付。
+    const learnedHints = Array.isArray(body.learnedHints)
+      ? body.learnedHints.filter((h): h is string => typeof h === 'string' && h.trim().length > 0).slice(0, 5)
+      : undefined;
 
     const objects: AiEditObjectReference[] = [];
     if (Array.isArray(body.objects)) {
@@ -116,6 +121,7 @@ export default async function handler(req: any, res: any) {
       imageSize,
       placementNarratives,
       coordinate,
+      learnedHints,
     });
 
     return res.status(200).json({ success: true, url: dataUrl });

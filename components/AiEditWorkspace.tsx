@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
-import { recordAiFeedback } from '../lib/db/feedback.js';
+import { recordAiFeedback, getRecentGoodHints } from '../lib/db/feedback.js';
 import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
@@ -189,17 +189,28 @@ export function AiEditWorkspace({
   // AI生成の良し悪し評価（good/bad）。記録は ai_feedback_events へベストエフォート（管理表 row 209/215）。
   const [feedbackByVersion, setFeedbackByVersion] = useState<Record<string, 'good' | 'bad'>>({});
   const feedbackRef = useRef<Record<string, 'good' | 'bad'>>({});
-  const submitFeedback = useCallback(async (versionId: string, verdict: 'good' | 'bad') => {
-    if (!versionId || feedbackRef.current[versionId] === verdict) return;
-    feedbackRef.current = { ...feedbackRef.current, [versionId]: verdict };
-    setFeedbackByVersion({ ...feedbackRef.current });
-    try {
-      await recordAiFeedback({ verdict, imageRef: versionId, feature: 'ai_design' });
-    } catch (e) {
-      // 記録失敗はUI操作を妨げない（ベストエフォート）。選択状態は維持する。
-      console.warn('[ai feedback] 評価の記録に失敗しました', e);
-    }
-  }, []);
+  const submitFeedback = useCallback(
+    async (versionId: string, verdict: 'good' | 'bad') => {
+      if (!versionId || feedbackRef.current[versionId] === verdict) return;
+      feedbackRef.current = { ...feedbackRef.current, [versionId]: verdict };
+      setFeedbackByVersion({ ...feedbackRef.current });
+      // in-context反映（row 211/219）用に、その版のスタイル傾向（styleMemo）を併せて記録する。
+      const v = versions.find((x) => x.id === versionId);
+      const styleMemo = v?.styleMemo?.trim() || undefined;
+      try {
+        await recordAiFeedback({
+          verdict,
+          imageRef: versionId,
+          feature: 'ai_design',
+          promptContext: styleMemo ? { styleMemo } : null,
+        });
+      } catch (e) {
+        // 記録失敗はUI操作を妨げない（ベストエフォート）。選択状態は維持する。
+        console.warn('[ai feedback] 評価の記録に失敗しました', e);
+      }
+    },
+    [versions],
+  );
 
   // 初回ポップアップ:「評価すると精度が上がる」旨を一度だけ案内（localStorage で既読管理）。
   const [showFeedbackTip, setShowFeedbackTip] = useState(false);
@@ -383,12 +394,15 @@ export function AiEditWorkspace({
         }))
       );
 
+      // in-context反映（row 211/219）: 過去に高評価した傾向を取得し、生成プロンプトへ参考添付（ベストエフォート）。
+      const learnedHints = await getRecentGoodHints().catch(() => [] as string[]);
       const body: Record<string, unknown> = {
         baseImage: baseScaled,
         styleImage: styleScaled,
         objects: objectsScaled,
         aspectRatio,
         imageSize,
+        learnedHints,
       };
       if (isSituationCardVisible && draftStyleMemo.trim()) {
         body.styleMemo = draftStyleMemo.trim();
@@ -476,10 +490,12 @@ export function AiEditWorkspace({
       const baseScaled = await downscaleDataUrlIfNeeded(activeVersion.outputImageDataUrl);
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
+      // in-context反映（row 211/219）: 過去に高評価した傾向をコーディネートにも参考添付（ベストエフォート）。
+      const learnedHints = await getRecentGoodHints().catch(() => [] as string[]);
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify({ baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: '2K' }),
+        body: JSON.stringify({ baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: '2K', learnedHints }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
@@ -1113,12 +1129,14 @@ export function AiEditWorkspace({
         sourceImageDataUrl={activeVersion?.outputImageDataUrl ?? null}
         onExported={() => {
           // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3「保存等」）: 書き出し＝採用とみなし good を記録。
+          // in-context反映（row 211/219）用に、その版のスタイル傾向も併せて残す。
           if (!activeVersion) return;
+          const styleMemo = activeVersion.styleMemo?.trim() || undefined;
           void recordAiFeedback({
             verdict: 'good',
             imageRef: activeVersion.id,
             feature: 'ai_design',
-            promptContext: { implicit: true, signal: 'export' },
+            promptContext: { implicit: true, signal: 'export', ...(styleMemo ? { styleMemo } : {}) },
           }).catch((e) => console.warn('[ai feedback] 暗黙的good評価の記録に失敗', e));
         }}
       />

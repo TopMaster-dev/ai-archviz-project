@@ -3,11 +3,15 @@ import { buildAiEditReferenceGuide, describeObjectPlacements } from './aiEditPro
 
 export const GEMINI_IMAGE_MODEL = 'gemini-3-pro-image-preview';
 
-/** 配置説明用 Flash モデル（サーバー側 `process.env.GEMINI_PLACEMENT_CAPTION_MODEL` で上書き） */
+/**
+ * テキスト生成用 Flash モデル（配置説明・AIエージェント相談で共用）。
+ * サーバー側 `process.env.GEMINI_PLACEMENT_CAPTION_MODEL` で上書き可能。
+ * 既定は現行モデル gemini-2.5-flash（旧 gemini-2.0-flash は提供終了=404 のため更新・260617）。
+ */
 export function resolvePlacementCaptionModel(): string {
   return (
     (typeof process !== 'undefined' && process.env?.GEMINI_PLACEMENT_CAPTION_MODEL?.trim()) ||
-    'gemini-2.0-flash'
+    'gemini-2.5-flash'
   );
 }
 
@@ -167,6 +171,8 @@ export async function generateGeminiImageEdit(
     placementNarratives?: Record<string, string>;
     /** コーディネート（完全お任せ）モード。個別指定なしで空間全体を再コーディネート（row 207/213）。 */
     coordinate?: boolean;
+    /** in-context反映（row 211/219）: 過去に高評価した傾向。プロンプト末尾に参考添付。 */
+    learnedHints?: string[];
   }
 ): Promise<string> {
   const instruction = buildAiEditReferenceGuide({
@@ -175,6 +181,7 @@ export async function generateGeminiImageEdit(
     objects: params.objects,
     placementNarratives: params.placementNarratives,
     coordinate: params.coordinate,
+    learnedHints: params.learnedHints,
   });
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [

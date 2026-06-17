@@ -208,6 +208,7 @@ export default defineConfig(({ mode }) => {
                             aspectRatio,
                             imageSize,
                             coordinate,
+                            learnedHints,
                         } = parsed;
                         if (!baseImage) {
                             res.statusCode = 400;
@@ -252,6 +253,9 @@ export default defineConfig(({ mode }) => {
                             imageSize: isz,
                             placementNarratives,
                             coordinate: coordinate === true,
+                            learnedHints: Array.isArray(learnedHints)
+                                ? learnedHints.filter((h: unknown): h is string => typeof h === 'string' && h.trim().length > 0).slice(0, 5)
+                                : undefined,
                         });
 
                         res.statusCode = 200;

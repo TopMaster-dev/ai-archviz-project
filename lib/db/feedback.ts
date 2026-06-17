@@ -31,3 +31,30 @@ export async function recordAiFeedback(opts: {
   });
   if (error) throw error;
 }
+
+/**
+ * ユーザー自身が過去に「good」評価した生成の傾向（styleMemo）を新しい順に返す（管理表 row 211/219）。
+ * フェーズ1のin-context反映（各ユーザー個別）に使用。次回生成プロンプトへ参考として差し込む。
+ * RLS の SELECT は本人の行のみ（auth.uid()=user_id）。ベストエフォート（未構成/未ログインは空配列）。
+ */
+export async function getRecentGoodHints(limit = 5): Promise<string[]> {
+  const sb = getSupabase();
+  if (!sb) return [];
+  const { data: userData } = await sb.auth.getUser();
+  if (!userData.user?.id) return [];
+  const { data, error } = await sb
+    .from('ai_feedback_events')
+    .select('prompt_context')
+    .eq('verdict', 'good')
+    .order('created_at', { ascending: false })
+    .limit(40);
+  if (error || !data) return [];
+  const hints: string[] = [];
+  for (const row of data as Array<{ prompt_context: { styleMemo?: unknown } | null }>) {
+    const memo = row.prompt_context?.styleMemo;
+    const text = typeof memo === 'string' ? memo.trim() : '';
+    if (text && !hints.includes(text)) hints.push(text);
+    if (hints.length >= limit) break;
+  }
+  return hints;
+}

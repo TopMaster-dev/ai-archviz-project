@@ -98,6 +98,20 @@ export function buildCoordinatePrompt(): string {
 `.trim();
 }
 
+/**
+ * in-context反映（管理表 row 211/219・フェーズ1）: ユーザーが過去に高評価した傾向を参考としてプロンプト末尾に添える。
+ * あくまで参考であり、今回の指示・座標・ベース画像の整合を最優先する旨を明記する。
+ */
+function appendLearnedHints(prompt: string, learnedHints?: string[]): string {
+  const hints = (learnedHints ?? []).map((h) => h.trim()).filter(Boolean).slice(0, 5);
+  if (hints.length === 0) return prompt;
+  return `${prompt}
+
+【参考: このユーザーが過去に高評価した傾向（好みの参考・強制ではない）】
+- ${hints.join('\n- ')}
+上記は好みの参考に留め、今回の指示・配置座標・ベース画像との整合を最優先すること。`;
+}
+
 export function buildAiEditReferenceGuide(params: {
   hasStyle: boolean;
   styleMemo?: string;
@@ -106,8 +120,10 @@ export function buildAiEditReferenceGuide(params: {
   placementNarratives?: Record<string, string>;
   /** コーディネート（完全お任せ）モード。true のとき個別指定を無視し全体を再コーディネートする。 */
   coordinate?: boolean;
+  /** in-context反映（row 211/219）: 過去に高評価した傾向（styleMemo）。プロンプト末尾に参考添付。 */
+  learnedHints?: string[];
 }): string {
-  if (params.coordinate) return buildCoordinatePrompt();
+  if (params.coordinate) return appendLearnedHints(buildCoordinatePrompt(), params.learnedHints);
   const hasObjects = params.objects.length > 0;
   const hasObjectRefs = params.objects.some((o) => !!o.imageDataUrl);
   const mode = resolvePromptMode(params.hasStyle, hasObjects);
@@ -150,5 +166,5 @@ export function buildAiEditReferenceGuide(params: {
   lines.push('');
   lines.push('上記に従い、ベース画像を編集した1枚の画像を生成してください。');
 
-  return lines.join('\n');
+  return appendLearnedHints(lines.join('\n'), params.learnedHints);
 }
