@@ -32,6 +32,7 @@ import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
 import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
+import { maybeApplyFreePlanOutputLimits } from './utils/freePlanImage.js';
 import { useShellNav } from './lib/shell/shellNavContext.js';
 import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
@@ -1150,13 +1151,15 @@ const App: React.FC = () => {
     setError,
     handleInstantRender,
   } = useAiRenderer({
-    onCanvasRenderSuccess: (url) => {
+    onCanvasRenderSuccess: async (url) => {
+      // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効（freePlanImage 参照）。
+      const out = await maybeApplyFreePlanOutputLimits(url, projectSession?.plan === 'free');
       // 過去の生成履歴は消さず、新しいレンダーを履歴に「追加」する（見返せるように）。
-      aiEditSession.addVersionFromRender(url);
+      aiEditSession.addVersionFromRender(out);
       // レンダ完了後（ローディング解除後）に AI 編集へ遷移
       setAiEditOpen(true);
       // 2c-i: このレンダー結果を一覧用サムネイルとして保存（ログイン時のみ／失敗は無視）。
-      void makeThumbnailDataUrl(url)
+      void makeThumbnailDataUrl(out)
         .then((thumb) => projectSession?.setProjectThumbnail(thumb))
         .catch(() => {});
     },

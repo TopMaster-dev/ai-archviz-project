@@ -15,6 +15,8 @@ import {
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiFeedback, getRecentGoodHints } from '../lib/db/feedback.js';
+import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
+import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
 import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
@@ -183,6 +185,10 @@ export function AiEditWorkspace({
   const [dragStart, setDragStart] = useState<{ nx: number; ny: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ nx: number; ny: number } | null>(null);
   const [imgLayout, setImgLayout] = useState({ ox: 0, oy: 0, dw: 1, dh: 1 });
+
+  // フリープラン出力制限（縮小＋透かし・row 51/52）用にプランを参照（ゲスト=null=制限なし）。
+  const projectSession = useOptionalProjectSession();
+  const isFreePlan = projectSession?.plan === 'free';
 
   const baseDisplayUrl = activeVersion?.outputImageDataUrl ?? null;
 
@@ -418,6 +424,8 @@ export function AiEditWorkspace({
 
       let outUrl = data.url as string;
       outUrl = await resizeDataUrlToSize(outUrl, baseW, baseH);
+      // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
+      outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
 
       const prevOut = activeVersion.outputImageDataUrl;
       setCompareA(prevOut);
@@ -462,6 +470,7 @@ export function AiEditWorkspace({
     isSituationCardVisible,
     draftObjects,
     onEditSuccess,
+    isFreePlan,
   ]);
 
   const handleClickExecute = () => {
@@ -501,6 +510,7 @@ export function AiEditWorkspace({
       if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
       let outUrl = data.url as string;
       outUrl = await resizeDataUrlToSize(outUrl, baseW, baseH);
+      outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
       setCompareA(activeVersion.outputImageDataUrl);
       setCompareB(outUrl);
       setCompareSlider(50);
@@ -528,7 +538,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, isSubmitting, versions, onEditSuccess]);
+  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan]);
 
   const onMouseDownPlacement = (e: React.MouseEvent) => {
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
