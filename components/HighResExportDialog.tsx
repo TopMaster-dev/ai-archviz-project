@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
+import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import {
   describePixelAspect,
@@ -120,6 +121,8 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExpor
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '書き出しに失敗しました');
+      // トークン計測（row 58・無効時は no-op）。高解像度書き出しも生成1回。
+      void recordAiUsage({ feature: 'export', usage: data.usage, model: data.model, imageCount: 1 });
       let url = data.url as string;
       const p = dpiPreset!;
       url = await resizeDataUrlToSize(url, p.width, p.height);

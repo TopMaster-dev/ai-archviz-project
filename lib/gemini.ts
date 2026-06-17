@@ -3,6 +3,23 @@ import { buildAiEditReferenceGuide, describeObjectPlacements } from './aiEditPro
 
 export const GEMINI_IMAGE_MODEL = 'gemini-3-pro-image-preview';
 
+// トークン計測（管理表 row 58）。Gemini generateContent 応答の usageMetadata からトークン数を取り出す。
+export interface TokenUsage {
+  promptTokenCount: number;
+  candidatesTokenCount: number;
+  totalTokenCount: number;
+}
+export function readUsage(result: unknown): TokenUsage | null {
+  const u = (result as { usageMetadata?: { promptTokenCount?: unknown; candidatesTokenCount?: unknown; totalTokenCount?: unknown } })
+    ?.usageMetadata;
+  if (!u) return null;
+  return {
+    promptTokenCount: Number(u.promptTokenCount) || 0,
+    candidatesTokenCount: Number(u.candidatesTokenCount) || 0,
+    totalTokenCount: Number(u.totalTokenCount) || 0,
+  };
+}
+
 /**
  * テキスト生成用 Flash モデル（配置説明・AIエージェント相談で共用）。
  * サーバー側 `process.env.GEMINI_PLACEMENT_CAPTION_MODEL` で上書き可能。
@@ -117,7 +134,7 @@ export interface AgentChatMessage {
 export async function generateAgentReply(
   apiKey: string,
   params: { messages: AgentChatMessage[]; imageDataUrl?: string | null }
-): Promise<string> {
+): Promise<{ reply: string; usage: TokenUsage | null }> {
   const system = `あなたは建築・内装に精通したプロのAIデザインアドバイザーです。Arise（2D作図→3D→AIパース→概算見積もりの空間デザインツール）のユーザーを支援します。
 - 配色・素材・家具・照明・レイアウト・コーディネート、見積もりや進め方の相談に、日本語で具体的かつ実務的に助言する。
 - 不要な前置きは避け、要点は短い段落や箇条書きで簡潔に。
@@ -153,7 +170,7 @@ export async function generateAgentReply(
   const result = await response.json();
   const text = result.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text)?.text;
   if (!text || typeof text !== 'string') throw new Error('エージェントの応答が空でした。');
-  return text.trim();
+  return { reply: text.trim(), usage: readUsage(result) };
 }
 
 /** マルチ参照対応のインテリア編集（ベース + スタイル0〜1 + オブジェクト複数） */
@@ -174,7 +191,7 @@ export async function generateGeminiImageEdit(
     /** in-context反映（row 211/219）: 過去に高評価した傾向。プロンプト末尾に参考添付。 */
     learnedHints?: string[];
   }
-): Promise<string> {
+): Promise<{ url: string; usage: TokenUsage | null }> {
   const instruction = buildAiEditReferenceGuide({
     hasStyle: !!params.styleImageDataUrl,
     styleMemo: params.styleMemo?.trim() || undefined,
@@ -265,7 +282,7 @@ export async function generateGeminiImageEdit(
   if (!dataUrl) {
     throw new Error('Could not extract image data from response.');
   }
-  return dataUrl;
+  return { url: dataUrl, usage: readUsage(result) };
 }
 
 export type GeminiClayRenderOptions = {
@@ -278,7 +295,7 @@ export async function generateGeminiImage(
   baseImageBase64: string,
   userInstruction: string = '',
   options?: GeminiClayRenderOptions
-) {
+): Promise<{ url: string; usage: TokenUsage | null }> {
   const proVisualizerPrompt = `
 1. 役割と専門性
 あなたは、建築ビジュアライゼーション（Architectural Visualization）に特化した、世界最高峰のAIレタッチ・エンジニアです。
@@ -376,5 +393,5 @@ ${userInstruction}
   }
 
   if (!dataUrl) throw new Error('Could not extract image data from response.');
-  return dataUrl;
+  return { url: dataUrl, usage: readUsage(result) };
 }

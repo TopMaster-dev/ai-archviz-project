@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { RenderState } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
+import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import {
   PREVIEW_ASPECT_RATIO,
@@ -60,6 +61,9 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
 
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'Generation failed');
+
+      // トークン計測（row 58・無効時は no-op）。レンダーは生成画像1枚。
+      void recordAiUsage({ feature: 'render', usage: data.usage, model: data.model, imageCount: 1 });
 
       successUrl = data.url;
       setRenderState(prev => ({

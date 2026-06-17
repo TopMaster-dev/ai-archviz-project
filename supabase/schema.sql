@@ -429,6 +429,44 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- 8b) ai_usage_events（トークン計測の基礎・管理表 row 58。テスト中は無効＝記録なし）
+--     AI生成（レンダー/編集/コーディネート/エージェント）ごとのトークン消費を記録する土台。
+--     記録はクライアント（recordAiUsage, RLS insert own）。本人は自分の利用を read 可。
+-- ---------------------------------------------------------------------------
+create table if not exists ai_usage_events (
+  id            uuid primary key default gen_random_uuid(),
+  user_id       uuid references auth.users (id) on delete set null,
+  project_id    uuid references projects (id) on delete set null,
+  feature       text not null default 'ai',   -- render / ai_edit / ai_coordinate / agent
+  model         text,
+  input_tokens  int not null default 0,
+  output_tokens int not null default 0,
+  total_tokens  int not null default 0,
+  image_count   int not null default 0,
+  created_at    timestamptz not null default now()
+);
+create index if not exists idx_ai_usage_user on ai_usage_events (user_id, created_at desc);
+create index if not exists idx_ai_usage_feature_day on ai_usage_events (feature, created_at);
+
+alter table ai_usage_events enable row level security;
+drop policy if exists "ai_usage: insert own" on ai_usage_events;
+drop policy if exists "ai_usage: read own"   on ai_usage_events;
+create policy "ai_usage: insert own" on ai_usage_events for insert with check (auth.uid() = user_id);
+create policy "ai_usage: read own"   on ai_usage_events for select using (auth.uid() = user_id);
+
+-- 管理用: ユーザー×機能ごとのトークン集計（請求/原価管理の基礎）。email 等を含むため service_role 限定。
+create or replace view admin_ai_usage as
+  select e.user_id, p.display_name, p.role, e.feature,
+         count(*)            as event_count,
+         sum(e.total_tokens) as total_tokens,
+         sum(e.image_count)  as image_count,
+         max(e.created_at)   as last_used_at
+  from ai_usage_events e
+  left join profiles p on p.id = e.user_id
+  group by e.user_id, p.display_name, p.role, e.feature;
+revoke all on admin_ai_usage from anon, authenticated;
+
+-- ---------------------------------------------------------------------------
 -- 9) user_uploads（0003）+ 管理画面ビュー
 -- ---------------------------------------------------------------------------
 create table if not exists user_uploads (

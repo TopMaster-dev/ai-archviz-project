@@ -6,7 +6,7 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, type AgentChatMessage } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, resolvePlacementCaptionModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { normalizeObjectReference } from './lib/aiEditNormalize.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
@@ -173,14 +173,14 @@ export default defineConfig(({ mode }) => {
                                 ? imageSize.trim()
                                 : undefined;
 
-                        const dataUrl = await generateGeminiImage(apiKey, baseImageBase64, prompt ?? '', {
+                        const { url: dataUrl, usage } = await generateGeminiImage(apiKey, baseImageBase64, prompt ?? '', {
                             aspectRatio: ar,
                             imageSize: isz,
                         });
 
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, url: dataUrl }));
+                        return res.end(JSON.stringify({ success: true, url: dataUrl, usage, model: GEMINI_IMAGE_MODEL }));
                     } catch (e: any) {
                         res.statusCode = 500;
                         res.setHeader('Content-Type', 'application/json');
@@ -251,7 +251,7 @@ export default defineConfig(({ mode }) => {
                             }
                         }
 
-                        const dataUrl = await generateGeminiImageEdit(apiKey, {
+                        const { url: dataUrl, usage } = await generateGeminiImageEdit(apiKey, {
                             baseImageDataUrl: baseImage,
                             styleImageDataUrl: styleImage ?? null,
                             styleMemo: memo,
@@ -267,7 +267,7 @@ export default defineConfig(({ mode }) => {
 
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, url: dataUrl }));
+                        return res.end(JSON.stringify({ success: true, url: dataUrl, usage, model: GEMINI_IMAGE_MODEL }));
                     } catch (e: any) {
                         console.error('ai-edit local error:', e);
                         res.statusCode = 500;
@@ -305,13 +305,13 @@ export default defineConfig(({ mode }) => {
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: 'メッセージが必要です。' }));
                         }
-                        const reply = await generateAgentReply(apiKey, {
+                        const { reply, usage } = await generateAgentReply(apiKey, {
                             messages,
                             imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : null,
                         });
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, reply }));
+                        return res.end(JSON.stringify({ success: true, reply, usage, model: resolvePlacementCaptionModel() }));
                     } catch (e: any) {
                         console.error('agent local error:', e);
                         res.statusCode = 500;

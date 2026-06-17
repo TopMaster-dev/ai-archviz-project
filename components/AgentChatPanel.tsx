@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Loader2, MessageCircle, Send, X } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
+import { recordAiUsage } from '../lib/db/aiUsage.js';
 import type { AgentChatMessage } from '../lib/gemini.js';
 
 /**
@@ -36,6 +37,8 @@ export function AgentChatPanel({ imageDataUrl }: { imageDataUrl?: string | null 
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '応答の取得に失敗しました');
+      // トークン計測（row 58・無効時は no-op）。エージェントはテキスト（添付画像があれば 1）。
+      void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: imageDataUrl ? 1 : 0 });
       setMessages((prev) => [...prev, { role: 'assistant', content: String(data.reply ?? '') }]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');

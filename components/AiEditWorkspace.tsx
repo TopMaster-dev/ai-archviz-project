@@ -15,6 +15,7 @@ import {
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiFeedback, getRecentGoodHints } from '../lib/db/feedback.js';
+import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
 import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
 import { creditBlockMessage } from '../utils/freePlanCredits.js';
@@ -422,6 +423,8 @@ export function AiEditWorkspace({
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '編集に失敗しました');
+      // トークン計測（row 58・無効時は no-op）。
+      void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
 
       let outUrl = data.url as string;
       outUrl = await resizeDataUrlToSize(outUrl, baseW, baseH);
@@ -521,6 +524,8 @@ export function AiEditWorkspace({
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
+      // トークン計測（row 58・無効時は no-op）。
+      void recordAiUsage({ feature: 'ai_coordinate', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
       let outUrl = data.url as string;
       outUrl = await resizeDataUrlToSize(outUrl, baseW, baseH);
       outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);

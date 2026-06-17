@@ -1,4 +1,4 @@
-import { generateGeminiImageEdit, generatePlacementNarratives } from '../lib/gemini.js';
+import { generateGeminiImageEdit, generatePlacementNarratives, GEMINI_IMAGE_MODEL } from '../lib/gemini.js';
 import type { AiEditObjectReference } from '../types.js';
 import { normalizeObjectReference } from '../lib/aiEditNormalize.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
@@ -112,7 +112,7 @@ export default async function handler(req: any, res: any) {
       }
     }
 
-    const dataUrl = await generateGeminiImageEdit(apiKey, {
+    const { url: dataUrl, usage } = await generateGeminiImageEdit(apiKey, {
       baseImageDataUrl: body.baseImage,
       styleImageDataUrl,
       styleMemo,
@@ -124,7 +124,7 @@ export default async function handler(req: any, res: any) {
       learnedHints,
     });
 
-    return res.status(200).json({ success: true, url: dataUrl });
+    return res.status(200).json({ success: true, url: dataUrl, usage, model: GEMINI_IMAGE_MODEL });
   } catch (e: any) {
     console.error('ai-edit error:', e);
     res.status(500).json({ success: false, error: e.message });

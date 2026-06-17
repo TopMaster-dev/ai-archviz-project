@@ -1,4 +1,4 @@
-import { generateGeminiImage } from '../lib/gemini.js';
+import { generateGeminiImage, GEMINI_IMAGE_MODEL } from '../lib/gemini.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 
 export default async function handler(req: any, res: any) {
@@ -41,12 +41,12 @@ export default async function handler(req: any, res: any) {
         const baseImageBase64 = image.replace(/^data:image\/\w+;base64,/, '');
         const ar = typeof aspectRatio === 'string' && aspectRatio.trim() ? aspectRatio.trim() : undefined;
         const isz = typeof imageSize === 'string' && imageSize.trim() ? imageSize.trim() : undefined;
-        const dataUrl = await generateGeminiImage(apiKey, baseImageBase64, prompt ?? '', {
+        const { url: dataUrl, usage } = await generateGeminiImage(apiKey, baseImageBase64, prompt ?? '', {
             aspectRatio: ar,
             imageSize: isz,
         });
 
-        return res.status(200).json({ success: true, url: dataUrl });
+        return res.status(200).json({ success: true, url: dataUrl, usage, model: GEMINI_IMAGE_MODEL });
     } catch (e: any) {
         console.error("Server Error:", e);
         res.status(500).json({ success: false, error: e.message });

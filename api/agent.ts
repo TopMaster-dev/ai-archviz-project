@@ -1,4 +1,4 @@
-import { generateAgentReply, type AgentChatMessage } from '../lib/gemini.js';
+import { generateAgentReply, resolvePlacementCaptionModel, type AgentChatMessage } from '../lib/gemini.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 
 /**
@@ -44,11 +44,11 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'メッセージが必要です。' });
     }
 
-    const reply = await generateAgentReply(apiKey, {
+    const { reply, usage } = await generateAgentReply(apiKey, {
       messages,
       imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : null,
     });
-    return res.status(200).json({ success: true, reply });
+    return res.status(200).json({ success: true, reply, usage, model: resolvePlacementCaptionModel() });
   } catch (e: any) {
     console.error('agent error:', e);
     res.status(500).json({ success: false, error: e.message });
