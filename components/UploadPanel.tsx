@@ -175,6 +175,14 @@ export function UploadPanel() {
   }
 
   const busy = busyKind != null;
+  // 容量警告（管理表 row 31）: 本人のアップロード合計と上限しきい値。接近/超過で警告。
+  // しきい値は運用に応じて調整可（テストマーケ・本番で見直し）。
+  const STORAGE_SOFT_LIMIT_BYTES = 500 * 1024 * 1024; // 500MB
+  const totalBytes = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+  const usagePct = Math.min(100, Math.round((totalBytes / STORAGE_SOFT_LIMIT_BYTES) * 100));
+  const overLimit = totalBytes >= STORAGE_SOFT_LIMIT_BYTES;
+  const nearLimit = !overLimit && usagePct >= 80;
+  const fmtMB = (b: number) => (b / (1024 * 1024)).toFixed(1);
 
   return (
     <div className="rounded-lg bg-neutral-900/60 p-3 text-xs text-neutral-200">
@@ -183,6 +191,29 @@ export function UploadPanel() {
         独自の 3D モデル（{ACCEPTED_EXT.model.join(' / ')}）やテクスチャ（
         {ACCEPTED_EXT.texture.join(' / ')}）を保存できます。
       </p>
+
+      {/* 容量警告（管理表 row 31）: 使用量バー＋接近/超過時の警告 */}
+      <div className="mb-2">
+        <div className="mb-1 flex items-center justify-between text-[11px]">
+          <span className="text-neutral-400">ストレージ使用量</span>
+          <span className={`font-mono ${overLimit ? 'text-red-300' : nearLimit ? 'text-amber-300' : 'text-neutral-400'}`}>
+            {fmtMB(totalBytes)} / {fmtMB(STORAGE_SOFT_LIMIT_BYTES)} MB
+          </span>
+        </div>
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+          <div
+            className={`h-full rounded-full transition-all ${overLimit ? 'bg-red-500' : nearLimit ? 'bg-amber-500' : 'bg-emerald-500'}`}
+            style={{ width: `${Math.max(2, usagePct)}%` }}
+          />
+        </div>
+        {(overLimit || nearLimit) && (
+          <p className={`mt-1 text-[10px] leading-snug ${overLimit ? 'text-red-300' : 'text-amber-300'}`}>
+            {overLimit
+              ? '容量の上限に達しました。不要なアップロードを削除してください。'
+              : '容量の上限に近づいています。不要なアップロードの削除をご検討ください。'}
+          </p>
+        )}
+      </div>
 
       {/* テクスチャに割り当てるカテゴリ。「＋テクスチャ」で追加する素材の表示カテゴリを決める
           （壁/床/天井のいずれか、または共通＝全カテゴリに表示）。一覧から後で変更も可能。 */}
