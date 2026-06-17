@@ -1182,6 +1182,8 @@ const App: React.FC = () => {
   // 上部ツールバーの実測下端を共有ストアへ反映し、別ツリーの UndoRedoBar をその直下に置く
   // （ヘッダー折り返しで高くなっても被らない）。ref コールバックでマウント/アンマウントを検知し、
   // ResizeObserver で高さ変化を追従。未マウント時は 0 を入れて従来の固定 92px へフォールバックさせる。
+  // 上部ツールバーの実測高さ(px)。3Dキャンバスの上端インセット計算に使う（折り返しで高くなっても追従）。
+  const [headerHeight, setHeaderHeight] = useState(0);
   const headerBarObserverRef = useRef<ResizeObserver | null>(null);
   const setHeaderBarNode = useCallback((node: HTMLDivElement | null) => {
     headerBarObserverRef.current?.disconnect();
@@ -1189,15 +1191,23 @@ const App: React.FC = () => {
     const store = useRenderOverlayStore.getState();
     if (!node) {
       store.setHeaderBottom(0);
+      setHeaderHeight(0);
       return;
     }
-    const update = () => useRenderOverlayStore.getState().setHeaderBottom(Math.round(node.getBoundingClientRect().bottom));
+    const update = () => {
+      const rect = node.getBoundingClientRect();
+      useRenderOverlayStore.getState().setHeaderBottom(Math.round(rect.bottom));
+      setHeaderHeight(Math.round(rect.height));
+    };
     update();
     const ro = new ResizeObserver(update);
     ro.observe(node);
     headerBarObserverRef.current = ro;
   }, []);
   useEffect(() => () => { headerBarObserverRef.current?.disconnect(); }, []);
+  // 3Dビューのキャンバス上端インセット = top-6(24) + ツールバー高 + Undo/Redoバー(上余白10 + 高さ40) + 下余白15。
+  // → キャンバスは常に Undo/Redo アイコンの約15px下から始まり、ツールバー領域に食い込まない。未計測時は132で代替。
+  const canvasTopInset = headerHeight > 0 ? headerHeight + 89 : 132;
 
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
@@ -2587,6 +2597,7 @@ const App: React.FC = () => {
             className={`flex-1 relative flex justify-center overflow-hidden bg-black/50 ${
               viewMode === '3D' ? 'items-end p-0' : 'items-center p-4 lg:p-8'
             }`}
+            style={viewMode === '3D' ? { paddingTop: canvasTopInset } : undefined}
           >
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
                 <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 md:gap-3 pointer-events-none">
