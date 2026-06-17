@@ -18,7 +18,27 @@
                     },
                     animation: {
                         'spin-slow': 'spin 3s linear infinite',
-                    }
+                    },
+                    // --- デザインシステム トークン（UIリニューアル Unit 0）---
+                    // すべて「追加」のみ。既定の Tailwind スケール（text-/rounded- 等）は上書きせず、
+                    // 既存クラスの見た目は不変。各ページ改修時にこれらの新トークンへ順次移行する。
+                    colors: {
+                        surface: { base: '#050505', raised: '#0d0d0d', overlay: '#111111', sunken: '#080808' },
+                        line: { subtle: 'rgba(255,255,255,0.10)', DEFAULT: 'rgba(255,255,255,0.16)', strong: 'rgba(255,255,255,0.24)' },
+                        accent: { DEFAULT: '#10b981', hover: '#34d399', soft: 'rgba(16,185,129,0.12)', ring: '#34d399' },
+                        danger: { DEFAULT: '#ef4444', soft: 'rgba(239,68,68,0.12)' },
+                        warn: { DEFAULT: '#f59e0b', soft: 'rgba(245,158,11,0.12)' },
+                    },
+                    fontSize: {
+                        '2xs': ['11px', '15px'], // 最小密度テキストの下限（11px未満は使わない）
+                    },
+                    boxShadow: {
+                        e1: '0 1px 2px rgba(0,0,0,0.4)',
+                        e2: '0 4px 12px rgba(0,0,0,0.45)',
+                        e3: '0 8px 24px rgba(0,0,0,0.5)',
+                        e4: '0 16px 48px rgba(0,0,0,0.6)', // モーダル
+                    },
+                    zIndex: { canvas: '10', sidebar: '20', toolbar: '30', panel: '40', modal: '1000', toast: '1100', critical: '9999' },
                 },
             },
         }

@@ -82,6 +82,53 @@ canvas {
   cursor: pointer;
 }
 
+/* ===========================================================================
+ * デザインシステム 共通ユーティリティ（UIリニューアル Unit 0）
+ * すべて「追加」のみ。使用するまで既存UIへの影響はゼロ。各ページ改修で順次採用する。
+ * =========================================================================== */
+
+/* キーボード操作用フォーカスリング（現状ボタンに可視フォーカスが無い） */
+.focus-ring { outline: none; }
+.focus-ring:focus-visible {
+  box-shadow: 0 0 0 2px #050505, 0 0 0 4px #34d399;
+  border-radius: inherit;
+}
+
+/* タッチ安全な操作サイズ。タッチ端末は44px、実ポインタ(マウス)では36pxへ緩めCAD密度を維持 */
+.tap { min-height: 44px; min-width: 44px; }
+@media (hover: hover) and (pointer: fine) { .tap { min-height: 36px; min-width: 36px; } }
+
+/* ガラスパネルの余白バリアント（.glass と併用） */
+.glass-sm { padding: 4px 8px; border-radius: 12px; }
+.glass-md { padding: 8px 12px; border-radius: 16px; }
+.glass-lg { padding: 12px 16px; border-radius: 20px; }
+
+/* 暗色面で見えるスクロールバー（見積パネル/設定モーダル等が現状ほぼ不可視） */
+.scroll-dark { scrollbar-color: rgba(255, 255, 255, 0.2) transparent; scrollbar-width: thin; }
+.scroll-dark::-webkit-scrollbar { width: 8px; height: 8px; }
+.scroll-dark::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 9999px; }
+.scroll-dark::-webkit-scrollbar-track { background: transparent; }
+
+/* 汎用 暗色レンジスライダー（.catalog-thumb-size-slider の一般化） */
+.range-dark { -webkit-appearance: none; appearance: none; background: transparent; }
+.range-dark::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: rgba(255, 255, 255, 0.12); }
+.range-dark::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none; width: 14px; height: 14px; margin-top: -5px;
+  border-radius: 9999px; background: #10b981; border: 1px solid rgba(255, 255, 255, 0.35); cursor: pointer;
+}
+.range-dark::-moz-range-track { height: 4px; border-radius: 9999px; background: rgba(255, 255, 255, 0.12); }
+.range-dark::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 9999px; background: #10b981;
+  border: 1px solid rgba(255, 255, 255, 0.35); cursor: pointer;
+}
+
+/* hover はホバー可能端末のみ（モバイルの hover 固着を防ぐ） */
+@media (hover: hover) { .hover-lift:hover { transform: translateY(-4px); } }
+
+/* ノッチ/ジェスチャ セーフエリア（固定オーバーレイ用） */
+.safe-r { padding-right: max(0px, env(safe-area-inset-right)); }
+.safe-b { padding-bottom: max(0px, env(safe-area-inset-bottom)); }
+
 /* Keyframes */
 @keyframes keyframe-fade-in { from { opacity: 0; } to { opacity: 1; } }
 @keyframes keyframe-slide-in-right { from { transform: translateX(100%); } to { transform: translateX(0); } }
