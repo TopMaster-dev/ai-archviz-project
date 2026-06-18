@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Download,
   ImagePlus,
@@ -170,6 +171,8 @@ export function AiEditWorkspace({
   onUploadBaseImage,
 }: Props) {
   const [highResExportOpen, setHighResExportOpen] = useState(false);
+  // 右サイドバー（見積＋編集パネル）: xl未満はドロワー化（既定で隠す）。xl以上は固定カラム（この状態は無視）。
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [compareA, setCompareA] = useState<string | null>(null);
@@ -849,9 +852,28 @@ export function AiEditWorkspace({
         </main>
         </div>
 
-        {/* App.tsx 3D 右サイドバーと同一構成: 見積を直下配置 → flex-1 列（カタログ相当のスクロール + 下端 CTA） */}
-        {/* 親行はルートの px-3 分狭いので、92vw ではなく 92% で 3D 右レールと同程度の見かけ幅に寄せる */}
-        <aside className="relative h-full w-[min(440px,92%)] shrink-0 flex flex-col z-20 bg-[#050505] border-l border-white/5 shadow-2xl min-h-0">
+        {/* 見積＋編集パネル。3D右レールと同一構成。xl未満はドロワー（既定で隠し、右端タブで開閉）→ 狭幅で中央の編集画像を潰さない。xl以上は従来の固定カラム。 */}
+        {/* 狭幅: ドロワーを開くタブ（閉じている間だけ表示） */}
+        {!sidebarOpen && (
+          <button
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            className="xl:hidden fixed right-0 top-1/2 z-[60] -translate-y-1/2 flex items-center gap-1.5 rounded-l-2xl border border-r-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-3 pr-2 text-[11px] font-black tracking-widest text-emerald-200 shadow-2xl backdrop-blur-md tap focus-ring safe-r"
+            aria-label="見積・編集パネルを開く"
+          >
+            <ChevronLeft className="h-4 w-4 shrink-0" />
+            見積
+          </button>
+        )}
+        {/* 狭幅: ドロワー背景（タップで閉じる） */}
+        {sidebarOpen && (
+          <div className="xl:hidden fixed inset-0 z-[60] bg-black/60" onClick={() => setSidebarOpen(false)} aria-hidden />
+        )}
+        <aside
+          className={`fixed inset-y-0 right-0 z-[61] w-[min(92vw,400px)] xl:static xl:z-20 xl:w-[min(440px,92%)] h-full flex flex-col shrink-0 bg-[#050505] border-l border-white/5 shadow-2xl min-h-0 transition-transform duration-300 ${
+            sidebarOpen ? 'translate-x-0' : 'translate-x-full'
+          } xl:translate-x-0`}
+        >
           {estimatePanel ?? null}
 
           <div className="flex-1 flex flex-col min-h-0 relative z-10 bg-[#050505]">
