@@ -12,6 +12,7 @@ import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { FurnitureAssetStrip, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
+import { UploadPanel } from './components/UploadPanel.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
 import { lookDirection } from './utils/walkthrough.js';
@@ -1594,6 +1595,32 @@ const App: React.FC = () => {
     })();
   }, []);
 
+  // マイ素材（アップロード済みテクスチャ）をエディタの素材一覧へ再同期する。2Dの「マイ素材」モーダルで
+  // アップロード/削除/カテゴリ変更した結果を即座に反映する（新規は前置、削除済みの upload-tex は除去）。
+  const refreshTextureUploads = useCallback(async () => {
+    try {
+      const uploads = await listUserUploads('texture');
+      const items = uploads.map(uploadToProduct);
+      const validIds = new Set(items.map((i) => i.id));
+      setProducts((prev) => {
+        const kept = prev.filter((p) => !p.id.startsWith('upload-tex-') || validIds.has(p.id));
+        const seen = new Set(kept.map((p) => p.id));
+        const add = items.filter((i) => !seen.has(i.id));
+        return add.length ? [...add, ...kept] : kept;
+      });
+    } catch (e) {
+      console.warn('マイ素材の同期に失敗:', e);
+    }
+  }, []);
+  // 2Dビューの「マイ素材（テクスチャ）」アップロードモーダルの開閉。
+  const [texturePanelOpen, setTexturePanelOpen] = useState(false);
+  useEffect(() => {
+    if (!texturePanelOpen) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setTexturePanelOpen(false); };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [texturePanelOpen]);
+
   // Fetch Furniture dynamically from API（本番=Cloudinary）。
   // Cloudinary 未構成/空/失敗時は、同梱の静的カタログ public/models/catalog.json に
   // フォールバックして家具を表示する（Cloudinary が有効ならそちらを優先）。
@@ -2725,7 +2752,16 @@ const App: React.FC = () => {
                      />
                      
                      {!renderState.isRendering && (
-                        <div className="absolute bottom-6 right-6 z-40 pointer-events-auto">
+                        <div className="absolute bottom-6 right-6 z-40 pointer-events-auto flex flex-col items-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => setTexturePanelOpen(true)}
+                                className="tap focus-ring inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#111]/90 px-4 py-2.5 text-[11px] font-bold text-neutral-200 shadow-lg backdrop-blur transition-colors hover:border-emerald-500/60 hover:text-white"
+                                title="独自のテクスチャをアップロードして素材一覧に追加（割り当ては3Dビューで）"
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
+                                マイ素材
+                            </button>
                             <FurnitureAssetStrip
                                 processedCatalog={processedCatalog}
                                 assetCategories={assetCategories}
@@ -2736,6 +2772,31 @@ const App: React.FC = () => {
                                 fetchStatus={furnitureCatalogFetchStatus}
                                 fetchErrorMessage={furnitureCatalogErrorText}
                             />
+                        </div>
+                     )}
+
+                     {texturePanelOpen && (
+                        <div
+                           className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4"
+                           onClick={() => setTexturePanelOpen(false)}
+                           role="dialog"
+                           aria-modal="true"
+                        >
+                           <div
+                              className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0c0c0c] shadow-2xl"
+                              onClick={(e) => e.stopPropagation()}
+                           >
+                              <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
+                                 <h2 className="text-sm font-semibold text-white">マイアップロード（素材）</h2>
+                                 <button type="button" onClick={() => setTexturePanelOpen(false)} className="tap rounded-lg px-2 py-1 text-neutral-400 hover:text-white" aria-label="閉じる">✕</button>
+                              </div>
+                              <div className="scroll-dark overflow-y-auto p-4">
+                                 <p className="mb-3 text-[11px] leading-snug text-neutral-400">
+                                    アップロードしたテクスチャは素材一覧へ自動追加され、3Dビューで壁・床・天井に割り当てできます。
+                                 </p>
+                                 <UploadPanel onUploadsChanged={refreshTextureUploads} />
+                              </div>
+                           </div>
                         </div>
                      )}
                 </div>

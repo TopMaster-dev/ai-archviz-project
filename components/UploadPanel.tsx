@@ -78,7 +78,7 @@ function fmtDate(iso: string): string {
 
 const KIND_LABEL: Record<UploadKind, string> = { model: '3Dモデル', texture: 'テクスチャ' };
 
-export function UploadPanel() {
+export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => void } = {}) {
   const { configured } = useAuth();
   const confirm = useConfirm();
   const [uploads, setUploads] = useState<UserUpload[]>([]);
@@ -126,6 +126,7 @@ export function UploadPanel() {
       setUploads((prev) => [row, ...prev]);
       const catNote = kind === 'texture' ? `（${textureCategoryLabel(texCategory)}）` : '';
       setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
+      if (kind === 'texture') onUploadsChanged?.(); // エディタの素材一覧へ即時反映
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'アップロードに失敗しました。');
     } finally {
@@ -145,6 +146,7 @@ export function UploadPanel() {
       else delete next.category; // 共通＝未設定
       const row = await updateUserUploadMetadata(u.id, next);
       setUploads((prev) => prev.map((x) => (x.id === u.id ? row : x)));
+      if (u.kind === 'texture') onUploadsChanged?.(); // カテゴリ変更を素材一覧へ反映
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'カテゴリの変更に失敗しました。');
     } finally {
@@ -161,6 +163,7 @@ export function UploadPanel() {
       // 削除したテクスチャが現在のプロジェクトの壁/床等に割り当て済みなら既定へ戻す。
       scrubDeletedTextureFromProject(u);
       setUploads((prev) => prev.filter((x) => x.id !== u.id));
+      if (u.kind === 'texture') onUploadsChanged?.(); // 削除を素材一覧から除去
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '削除に失敗しました。');
     } finally {
