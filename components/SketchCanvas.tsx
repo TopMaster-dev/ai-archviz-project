@@ -213,9 +213,6 @@ interface SketchCanvasProps {
   onCeilingViewChange?: (v: boolean) => void;
   /** 全消去: App 側で確定済みの壁/建具/家具/梁/選択もまとめてクリアする。 */
   onClearAll?: () => void;
-  /** 上部チップ（モード切替＋Undo/Redoバー＋ホームボタン）の下端インセット(px, 実測)。
-   *  スナップツールバーをこの直下に出して、上部チップと重ならないようにする（3Dキャンバスと同方式）。 */
-  topInset?: number;
 }
 
 const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -226,7 +223,6 @@ const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () =>
 
 export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   initialPoints,
-  topInset,
   onSketchUpdate, 
   onApply, 
   gridSize = 1000, 
@@ -2686,12 +2682,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       </div>
 
       {/* Floating Toolbar (Top Right) - Unified Controls */}
-      {/* レスポンシブ（管理表 row 13）: 左の画面切替バー（約20rem）と重ならないよう最大幅を制限し、
-          狭幅では gap/padding を縮小しつつ flex-wrap で折り返す（重なり防止）。 */}
-      <div
-        style={{ top: topInset ?? 128 }}
-        className="absolute right-3 z-50 max-w-[calc(100vw_-_7rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] animate-in slide-in-from-top duration-700 pointer-events-auto"
-      >
+      {/* レスポンシブ（管理表 row 13）: xl以上は1行に収まるので最上段（top-6, モード切替の右隣の空きを活用）。
+          xl未満は折り返して背が高くなるため、上部チップ（Undo/Redo・ホーム）の下 top-[136px] に退避して重なり防止。 */}
+      <div className="absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] xl:top-6 lg:right-6 lg:max-w-[calc(100vw_-_24rem)] animate-in slide-in-from-top duration-700 pointer-events-auto">
           <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
               
               {/* Tool mode: 選択・壁・窓・ドア（横並び。狭幅では折り返す） */}

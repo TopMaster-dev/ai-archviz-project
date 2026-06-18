@@ -2687,7 +2687,6 @@ const App: React.FC = () => {
                 <div className="absolute inset-0 z-10 w-full h-full">
                      <SketchCanvas
                         initialPoints={sketchPoints}
-                        topInset={canvasTopInset}
                         gridSize={gridSnapSize}
                         lengthSnapSize={lengthSnapSize} 
                         isLengthSnapEnabled={isLengthSnapEnabled} 
