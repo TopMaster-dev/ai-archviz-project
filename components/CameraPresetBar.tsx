@@ -112,7 +112,7 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
           保存
         </button>
         <div className="w-px h-6 bg-white/15 shrink-0 self-center" aria-hidden />
-        <div className="flex items-center gap-1 min-w-0 overflow-x-auto scrollbar-thin scrollbar-thumb-white/15 scrollbar-track-transparent py-0.5 flex-1">
+        <div className="flex items-center gap-1 min-w-0 overflow-x-auto scroll-dark py-0.5 flex-1">
           {visible.length === 0 ? (
             <span className="text-[9px] text-white/35 font-bold px-2 whitespace-nowrap">保存した視点がありません</span>
           ) : (

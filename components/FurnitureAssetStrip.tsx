@@ -83,7 +83,7 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
               </svg>
             </button>
           </div>
-          <div className="grid grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pr-1 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+          <div className="grid grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pr-1 scroll-dark">
             {processedCatalog
               .filter((item) => item.type === selectedAssetCategory)
               .map((item) => (

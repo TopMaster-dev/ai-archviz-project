@@ -855,7 +855,7 @@ export function AiEditWorkspace({
           {estimatePanel ?? null}
 
           <div className="flex-1 flex flex-col min-h-0 relative z-10 bg-[#050505]">
-            <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-0 pb-6 space-y-2 md:px-4 md:pb-8 md:space-y-3 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+            <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-0 pb-6 space-y-2 md:px-4 md:pb-8 md:space-y-3 scroll-dark">
             <div>
               <div className="text-[10px] font-black uppercase text-neutral-500 tracking-widest mb-2">
                 参照画像

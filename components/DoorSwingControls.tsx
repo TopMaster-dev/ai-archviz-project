@@ -20,7 +20,7 @@ export function DoorSwingControls({
   onToggleOpen: () => void;
 }) {
   const btnClass = (active?: boolean) =>
-    `flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${
+    `tap focus-ring flex-1 rounded-lg border px-2 py-1 text-[10px] transition-colors ${
       active
         ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300'
         : 'border-white/15 bg-black/40 text-white hover:border-emerald-500/50'

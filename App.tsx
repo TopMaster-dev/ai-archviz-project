@@ -2481,7 +2481,7 @@ const App: React.FC = () => {
           </div>
 
           {showCostPanel ? (
-            <div className="min-h-0 min-w-0 overflow-y-auto px-4 pb-4 pt-2 opacity-100 md:px-5 md:pb-6 xl:px-6 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent transition-opacity duration-500 ease-in-out">
+            <div className="min-h-0 min-w-0 overflow-y-auto px-4 pb-4 pt-2 opacity-100 md:px-5 md:pb-6 xl:px-6 scroll-dark transition-opacity duration-500 ease-in-out">
               <EstimatePanelDetailScroll
                 forAiEdit={forAiEdit}
                 aggregatedMaterials={aggregatedMaterials}
@@ -2871,7 +2871,7 @@ const App: React.FC = () => {
                         };
 
                         return (
-                            <div className={`absolute top-6 right-6 ${propertyPanelWidthClass} flex flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scrollbar-thin scrollbar-thumb-white/20 scrollbar-track-transparent`}>
+                            <div className={`absolute top-6 right-6 ${propertyPanelWidthClass} flex flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark`}>
                                 {!hasAnySelection && (
                                     <div className={`${propertyCardBaseClass} px-4 py-4`}>
                                         <p className="text-[11px] font-black uppercase tracking-widest text-emerald-300">プロパティ</p>
@@ -3779,7 +3779,7 @@ const App: React.FC = () => {
 
           {/* MATERIAL CATALOG */}
           <div className="flex-1 flex flex-col min-h-0 relative z-10 bg-[#050505]">
-            <div className="flex-1 overflow-y-auto px-6 pt-0 pb-6 space-y-2 md:px-8 md:pb-8 md:space-y-3 scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+            <div className="flex-1 overflow-y-auto px-6 pt-0 pb-6 space-y-2 md:px-8 md:pb-8 md:space-y-3 scroll-dark">
                 
                 {/* サムネ表示密度（左） / 並び替え（右） */}
                 <div className="flex items-center justify-end gap-3 mb-2 flex-wrap">
