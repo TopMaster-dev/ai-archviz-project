@@ -173,6 +173,8 @@ export function AiEditWorkspace({
   const [highResExportOpen, setHighResExportOpen] = useState(false);
   // 右サイドバー（見積＋編集パネル）: xl未満はドロワー化（既定で隠す）。xl以上は固定カラム（この状態は無視）。
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // 履歴サイドバー: md未満はドロワー化（既定で隠す）。md以上は固定カラム（この状態は無視）。
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [compareA, setCompareA] = useState<string | null>(null);
@@ -606,23 +608,21 @@ export function AiEditWorkspace({
   if (!activeVersion) {
     return (
       <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950 text-white pl-3 pr-0 pt-0 pb-0">
-        <div className="absolute top-6 left-6 right-6 z-50 flex items-start justify-between pointer-events-none">
+        <div className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 pointer-events-none">
           {renderModeBarOrHome()}
-        </div>
-        {!photoOnly && (
-          <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          {!photoOnly && (
             <button
               type="button"
               disabled
-              className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+              className="pointer-events-auto shrink-0 flex items-center justify-center gap-2 px-4 sm:px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
               title="履歴の仕上がり画像が必要です"
             >
               <Download className="w-4 h-4 shrink-0" />
               <span className="text-[11px] font-black uppercase tracking-widest">この画像を書き出し</span>
             </button>
-          </div>
-        )}
-        <div className="flex-1 flex items-center justify-center pt-20">
+          )}
+        </div>
+        <div className="flex-1 flex items-center justify-center pt-32 sm:pt-20">
           {photoOnly ? (
             <div className="flex flex-col items-center gap-4 text-center">
               <p className="text-sm text-neutral-300">写真をアップロードして、AI画像編集を始めましょう。</p>
@@ -657,10 +657,9 @@ export function AiEditWorkspace({
 
   return (
     <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950 text-white pl-3 pr-0 pt-0 pb-0 gap-3">
-      <div className="absolute top-6 left-6 right-6 z-50 flex items-start justify-between pointer-events-none">
+      {/* 上部バー: モード切替（左）＋ 書き出し（右）。狭幅は折り返す（中央固定だとモード切替に重なるため）。 */}
+      <div className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 pointer-events-none">
         {renderModeBarOrHome()}
-      </div>
-      <div className="absolute top-6 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
         <button
           type="button"
           disabled={!activeVersion?.outputImageDataUrl}
@@ -670,15 +669,35 @@ export function AiEditWorkspace({
               ? '高解像は API 経由、プレビュー用は元画像をそのまま保存'
               : '履歴の仕上がり画像が必要です'
           }
-          className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] hover:bg-emerald-900/80 transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+          className="pointer-events-auto shrink-0 flex items-center justify-center gap-2 px-4 sm:px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] hover:bg-emerald-900/80 transition-all disabled:opacity-35 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4 shrink-0" />
           <span className="text-[11px] font-black uppercase tracking-widest">この画像を書き出し</span>
         </button>
       </div>
       <div className="flex flex-1 min-h-0 min-w-0">
-        <div className="flex flex-1 min-h-0 min-w-0 pt-20">
-        <aside className="w-44 lg:w-52 border-r border-white/10 flex flex-col shrink-0 min-h-0">
+        {/* pt: 狭幅は上部バーが2段に折り返すため広めに確保（重なり防止）。sm以上は1段なので従来どおり。 */}
+        <div className="flex flex-1 min-h-0 min-w-0 pt-32 sm:pt-20">
+        {/* 履歴。md未満はドロワー（左端タブで開閉）→ 狭幅で中央の編集画像を潰さない。md以上は固定カラム。 */}
+        {!historyOpen && (
+          <button
+            type="button"
+            onClick={() => { setHistoryOpen(true); setSidebarOpen(false); }}
+            className="md:hidden fixed left-0 top-1/2 z-[60] -translate-y-1/2 flex items-center gap-1.5 rounded-r-2xl border border-l-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-2 pr-3 text-[11px] font-black tracking-widest text-emerald-200 shadow-2xl backdrop-blur-md tap focus-ring"
+            aria-label="履歴を開く"
+          >
+            <ChevronRight className="h-4 w-4 shrink-0" />
+            履歴
+          </button>
+        )}
+        {historyOpen && (
+          <div className="md:hidden fixed inset-0 z-[60] bg-black/60" onClick={() => setHistoryOpen(false)} aria-hidden />
+        )}
+        <aside
+          className={`fixed inset-y-0 left-0 z-[61] w-[min(80vw,240px)] bg-zinc-950 md:static md:z-auto md:w-44 lg:w-52 md:bg-transparent border-r border-white/10 flex flex-col shrink-0 min-h-0 transition-transform duration-300 ${
+            historyOpen ? 'translate-x-0' : '-translate-x-[110%]'
+          } md:translate-x-0`}
+        >
           <div className="p-3 pb-2 border-b border-white/10 shrink-0">
             <div className="text-[10px] font-black uppercase tracking-widest text-neutral-500">履歴</div>
           </div>
@@ -857,7 +876,7 @@ export function AiEditWorkspace({
         {!sidebarOpen && (
           <button
             type="button"
-            onClick={() => setSidebarOpen(true)}
+            onClick={() => { setSidebarOpen(true); setHistoryOpen(false); }}
             className="xl:hidden fixed right-0 top-1/2 z-[60] -translate-y-1/2 flex items-center gap-1.5 rounded-l-2xl border border-r-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-3 pr-2 text-[11px] font-black tracking-widest text-emerald-200 shadow-2xl backdrop-blur-md tap focus-ring safe-r"
             aria-label="見積・編集パネルを開く"
           >
