@@ -3,6 +3,7 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { NumericField } from './NumericField.js';
 import { Point, Opening, OpeningType, ToolMode, AddKind, FurnitureItem } from '../types.js';
 import type { UnderlaySettings, Beam } from '../lib/project/projectState.js';
+import { useRenderOverlayStore } from '../lib/store/renderOverlayStore.js';
 import {
   SKETCH_BASE_SCALE,
   getRoomTransform,
@@ -377,6 +378,31 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+
+  // 上部ツールバーが最上段(md以上: top-6)にあるとき、その実測下端を共有ストアへ。
+  // 別ツリーの UndoRedoBar / ホームボタンがその直下へ退避し、最上段ツールバーと重ならないようにする。
+  // 下段(top-[136px], md未満)のときは rect.top が大きいので 0 を入れ、従来位置のままにする。
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const node = toolbarRef.current;
+    const setBottom = useRenderOverlayStore.getState().setSketchToolbarBottom;
+    if (!node || typeof ResizeObserver === 'undefined') return;
+    const update = () => {
+      const rect = node.getBoundingClientRect();
+      // top が小さい＝最上段(top-6)に上げた状態のときだけ、下端を通知（退避を有効化）。
+      setBottom(rect.top < 100 ? Math.round(rect.bottom) : 0);
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+      setBottom(0);
+    };
+  }, []);
+
   const { centerMm } = getRoomTransform(pointsMm.map((p) => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })));
 
   const screenToWorld = useCallback((px: Point) => ({
@@ -2682,9 +2708,17 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       </div>
 
       {/* Floating Toolbar (Top Right) - Unified Controls */}
-      {/* レスポンシブ（管理表 row 13）: xl以上は1行に収まるので最上段（top-6, モード切替の右隣の空きを活用）。
-          xl未満は折り返して背が高くなるため、上部チップ（Undo/Redo・ホーム）の下 top-[136px] に退避して重なり防止。 */}
-      <div className="absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] xl:top-6 lg:right-6 lg:max-w-[calc(100vw_-_24rem)] animate-in slide-in-from-top duration-700 pointer-events-auto">
+      {/* レスポンシブ（管理表 row 13）: md以上は最上段（top-6, モード切替の右隣の空きを活用）に上げ、
+          Undo/Redo・ホームはこのツールバーの直下へ退避（上の useEffect が下端をストアへ通知）。
+          md未満は折り返しで背が高くなるため top-[136px]（チップの下）に退避して重なり防止。
+          最大幅は: md以上=モード切替(約20rem)を、lg以上=左固定パネル(24rem)を避ける。 */}
+      {/* ※ slide-in 系のエントリーアニメ（translateY transform）は付けない:
+          getBoundingClientRect は transform を含むため、アニメ途中の歪んだ値を計測してしまい、
+          下端通知（Undo/Redo・ホームの退避位置）がズレる。アニメ無し＝確定レイアウトを即時計測。 */}
+      <div
+        ref={toolbarRef}
+        className="absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:top-6 md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] pointer-events-auto"
+      >
           <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
               
               {/* Tool mode: 選択・壁・窓・ドア（横並び。狭幅では折り返す） */}

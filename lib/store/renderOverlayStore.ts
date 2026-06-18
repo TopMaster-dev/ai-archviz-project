@@ -13,6 +13,13 @@ interface RenderOverlayState {
    */
   headerBottom: number;
   setHeaderBottom: (value: number) => void;
+  /**
+   * 2Dスケッチの上部ツールバーが最上段(top-6)にあるときの実測下端 Y（px, ビューポート基準）。
+   * >0 のとき、別ツリーの UndoRedoBar とホームボタン(AccountMenu)をこの直下へ退避させ、最上段へ上げた
+   * 2Dツールバーと重ならないようにする。0 = 2D非表示 もしくはツールバーが下段(top-[136px])にある（=従来位置）。
+   */
+  sketchToolbarBottom: number;
+  setSketchToolbarBottom: (value: number) => void;
 }
 
 export const useRenderOverlayStore = create<RenderOverlayState>((set) => ({
@@ -21,4 +28,7 @@ export const useRenderOverlayStore = create<RenderOverlayState>((set) => ({
   setActive: (value) => set((state) => (state.active === value ? state : { active: value })),
   headerBottom: 0,
   setHeaderBottom: (value) => set((state) => (state.headerBottom === value ? state : { headerBottom: value })),
+  sketchToolbarBottom: 0,
+  setSketchToolbarBottom: (value) =>
+    set((state) => (state.sketchToolbarBottom === value ? state : { sketchToolbarBottom: value })),
 }));

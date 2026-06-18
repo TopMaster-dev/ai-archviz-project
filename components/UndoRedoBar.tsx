@@ -15,6 +15,9 @@ export function UndoRedoBar() {
   // 上部ツールバーの実測下端の直下に配置（ヘッダーが折り返して高くなっても被らない）。
   // 未計測（0）のときは従来の 92px にフォールバック＝挙動不変。
   const headerBottom = useRenderOverlayStore((s) => s.headerBottom);
+  // 2Dで作図ツールバーを最上段へ上げているとき（>0）は、そのツールバーの直下へ退避する（重なり防止）。
+  const sketchToolbarBottom = useRenderOverlayStore((s) => s.sketchToolbarBottom);
+  const topPx = sketchToolbarBottom > 0 ? sketchToolbarBottom + 10 : headerBottom > 0 ? headerBottom + 10 : 92;
 
   if (overlayActive) return null;
 
@@ -23,7 +26,7 @@ export function UndoRedoBar() {
 
   return (
     <div
-      style={{ top: headerBottom > 0 ? headerBottom + 10 : 92 }}
+      style={{ top: topPx }}
       className="fixed left-1/2 z-[1000] flex -translate-x-1/2 gap-1 rounded-xl bg-neutral-800/80 p-1 shadow ring-1 ring-white/10"
     >
       <button
