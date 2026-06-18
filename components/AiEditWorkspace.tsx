@@ -15,7 +15,7 @@ import {
 } from 'lucide-react';
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
-import { recordAiFeedback, getRecentGoodHints } from '../lib/db/feedback.js';
+import { recordAiFeedback, getLearnedHints } from '../lib/db/feedback.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
 import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
@@ -407,8 +407,8 @@ export function AiEditWorkspace({
         }))
       );
 
-      // in-context反映（row 211/219）: 過去に高評価した傾向を取得し、生成プロンプトへ参考添付（ベストエフォート）。
-      const learnedHints = await getRecentGoodHints().catch(() => [] as string[]);
+      // in-context反映（row 211/219）: 個人の高評価傾向＋全体共有プールを取得し、生成プロンプトへ参考添付（ベストエフォート）。
+      const learnedHints = await getLearnedHints().catch(() => [] as string[]);
       const body: Record<string, unknown> = {
         baseImage: baseScaled,
         styleImage: styleScaled,
@@ -521,7 +521,7 @@ export function AiEditWorkspace({
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       // in-context反映（row 211/219）: 過去に高評価した傾向をコーディネートにも参考添付（ベストエフォート）。
-      const learnedHints = await getRecentGoodHints().catch(() => [] as string[]);
+      const learnedHints = await getLearnedHints().catch(() => [] as string[]);
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },

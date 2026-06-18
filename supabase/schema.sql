@@ -429,6 +429,66 @@ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- 8a-2) AI in-context 学習: 全体共有「学習ヒント」プール（0006・管理表 row 211/219・Plan A「全体浸透」）
+--     個人ごとの getRecentGoodHints とは別に、複数ユーザーにまたがって good 評価された
+--     短い意匠フレーズ（styleMemo）だけを匿名・集約し、全ユーザーの生成プロンプトへ in-context で差し込む。
+--     プライバシー: user_id は保持しない。distinct ユーザー数しきい値（既定3）＋文字数上限で、
+--     個人特有の長文・固有情報の混入を防ぐ（＝複数人にまたがる「傾向」だけが残る）。
+--     書き込みは集計関数(security definer)のみ。読み取りは authenticated 全員（全体浸透のため）。
+-- ---------------------------------------------------------------------------
+create table if not exists ai_learned_hints (
+  id            uuid primary key default gen_random_uuid(),
+  feature       text not null default 'ai_design',
+  hint          text not null,
+  sample_count  int not null default 0,   -- 採用された good イベント数
+  user_count    int not null default 0,   -- distinct ユーザー数（>= p_min_users のみ採用）
+  score         numeric not null default 0,
+  updated_at    timestamptz not null default now(),
+  unique (feature, hint)
+);
+alter table ai_learned_hints enable row level security;
+drop policy if exists "learned_hints: read authenticated" on ai_learned_hints;
+create policy "learned_hints: read authenticated" on ai_learned_hints
+  for select using (auth.role() = 'authenticated');
+
+-- 夜間集計: 直近 p_days 日の good イベントから styleMemo を抽出し、
+-- distinct ユーザー数 >= p_min_users のものだけを feature ごと上位 p_limit 件、全体プールへ入れ替え反映する。
+-- delete+insert は同一関数（=同一トランザクション）内なので原子的（失敗時はロールバック）。
+create or replace function aggregate_learned_hints(
+  p_days      int default 30,
+  p_min_users int default 3,
+  p_limit     int default 20,
+  p_max_len   int default 60
+) returns void language plpgsql security definer set search_path = public as $$
+begin
+  delete from ai_learned_hints;
+  insert into ai_learned_hints (feature, hint, sample_count, user_count, score)
+  select feature, hint, sample_count, user_count, score
+  from (
+    select feature, hint, sample_count, user_count,
+           (user_count * 2 + sample_count)::numeric as score,
+           row_number() over (partition by feature
+                              order by (user_count * 2 + sample_count) desc, hint) as rn
+    from (
+      select coalesce(feature, 'ai_design')      as feature,
+             btrim(prompt_context->>'styleMemo')  as hint,
+             count(*)                              as sample_count,
+             count(distinct user_id)               as user_count
+      from ai_feedback_events
+      where verdict = 'good'
+        and user_id is not null
+        and created_at >= now() - make_interval(days => p_days)
+        and prompt_context ? 'styleMemo'
+        and length(btrim(coalesce(prompt_context->>'styleMemo', ''))) between 2 and p_max_len
+      group by 1, 2
+      having count(distinct user_id) >= p_min_users
+    ) agg
+    where hint <> ''
+  ) ranked
+  where rn <= p_limit;
+end $$;
+
+-- ---------------------------------------------------------------------------
 -- 8b) ai_usage_events（トークン計測の基礎・管理表 row 58。テスト中は無効＝記録なし）
 --     AI生成（レンダー/編集/コーディネート/エージェント）ごとのトークン消費を記録する土台。
 --     記録はクライアント（recordAiUsage, RLS insert own）。本人は自分の利用を read 可。
@@ -624,6 +684,7 @@ do $$ begin perform cron.unschedule('arise_ai_feedback_aggregate'); exception wh
 do $$ begin perform cron.schedule('arise_flag_expired',  '0 18 * * *',  $c$ select flag_expired_free_data(); $c$); exception when others then null; end $$;
 do $$ begin perform cron.schedule('arise_purge_deleted', '30 18 * * *', $c$ select purge_soft_deleted_projects(); $c$); exception when others then null; end $$;
 do $$ begin perform cron.schedule('arise_ai_feedback_aggregate', '0 17 * * *', $c$ select aggregate_ai_feedback(); $c$); exception when others then null; end $$;
+do $$ begin perform cron.schedule('arise_learned_hints', '15 17 * * *', $c$ select aggregate_learned_hints(); $c$); exception when others then null; end $$;
 
 -- ============================================================================
 --  完了。確認用:

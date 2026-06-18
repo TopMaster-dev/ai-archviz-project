@@ -103,7 +103,12 @@ export function buildCoordinatePrompt(): string {
  * あくまで参考であり、今回の指示・座標・ベース画像の整合を最優先する旨を明記する。
  */
 function appendLearnedHints(prompt: string, learnedHints?: string[]): string {
-  const hints = (learnedHints ?? []).map((h) => h.trim()).filter(Boolean).slice(0, 5);
+  // プロンプトインジェクション対策: 改行・制御文字を除去し空白を畳んで1行の短い意匠フレーズに正規化、
+  // 1件あたり長さも上限化する（学習ヒントはユーザー由来テキストのため、構造突破を許さない）。
+  const hints = (learnedHints ?? [])
+    .map((h) => Array.from(h).map((ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch)).join('').replace(/ +/g, ' ').trim().slice(0, 80))
+    .filter(Boolean)
+    .slice(0, 5);
   if (hints.length === 0) return prompt;
   return `${prompt}
 
