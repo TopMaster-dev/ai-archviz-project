@@ -4,6 +4,7 @@ import { NumericField } from './NumericField.js';
 import { Point, Opening, OpeningType, ToolMode, AddKind, FurnitureItem } from '../types.js';
 import type { UnderlaySettings, Beam } from '../lib/project/projectState.js';
 import { useRenderOverlayStore } from '../lib/store/renderOverlayStore.js';
+import { useConfirm } from './ConfirmDialog.js';
 import {
   SKETCH_BASE_SCALE,
   getRoomTransform,
@@ -329,6 +330,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [furnitureHint, setFurnitureHint] = useState<string | null>(null);
   // 左サイドツールパネル: lg未満ではドロワー化（既定で隠す）。lg以上は常時表示（この状態は無視）。
   const [panelOpen, setPanelOpen] = useState(false);
+  const confirm = useConfirm();
   const furnitureHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rotationWallOkRef = useRef(true);
   /** リング回転ドラッグ開始時の yaw とマウス角度（絶対スナップでは掴み位置が飛ぶため相対で更新） */
@@ -2789,8 +2791,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   </button>
                   
                   <button
-                      onClick={() => {
-                        if (!window.confirm('壁・窓・ドア・家具・梁をすべて削除します。よろしいですか？')) return;
+                      onClick={async () => {
+                        if (!(await confirm({ message: '壁・窓・ドア・家具・梁をすべて削除します。よろしいですか？', confirmLabel: '全消去', danger: true }))) return;
                         // ローカル（描画中の壁・選択）
                         setPointsMm([]); setIsClosed(false); setIsDrawing(false);
                         setSelectedPointIndex(null); setSelectedEdgeIndex(null); setSelectedBeamId(null);

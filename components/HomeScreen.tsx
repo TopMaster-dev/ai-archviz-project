@@ -7,6 +7,7 @@ import type { DeletedProjectSummary } from '../lib/db/types.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
 import { OnboardingGuide } from './OnboardingGuide.js';
+import { useConfirm } from './ConfirmDialog.js';
 
 /**
  * ログインと2Dスケッチ（エディタ）の間に表示する独立した「ホーム画面」。
@@ -37,6 +38,7 @@ function ProjectThumb({ url, name }: { url: string | null; name: string }) {
 
 export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const { email, signOut } = useAuth();
+  const confirm = useConfirm();
   const {
     projects,
     projectId,
@@ -315,8 +317,14 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                             </button>
                             <button
                               type="button"
-                              onClick={() => {
-                                if (window.confirm('このプロジェクトを削除しますか？（14日間は復元可能）')) {
+                              onClick={async () => {
+                                if (
+                                  await confirm({
+                                    message: 'このプロジェクトを削除しますか？（14日間は復元可能）',
+                                    confirmLabel: '削除',
+                                    danger: true,
+                                  })
+                                ) {
                                   void deleteCurrentProject();
                                 }
                               }}

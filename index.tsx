@@ -6,6 +6,7 @@ import App from './App.js';
 import { AuthProvider } from './lib/auth/AuthContext.js';
 import { AuthGate } from './components/auth/AuthGate.js';
 import { SharedProjectViewer } from './components/share/SharedProjectViewer.js';
+import { ConfirmProvider } from './components/ConfirmDialog.js';
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {
@@ -20,13 +21,15 @@ const root = ReactDOM.createRoot(rootElement);
 root.render(
   <React.StrictMode>
     <AuthProvider>
-      {shareToken ? (
-        <SharedProjectViewer token={shareToken} />
-      ) : (
-        <AuthGate>
-          <App />
-        </AuthGate>
-      )}
+      <ConfirmProvider>
+        {shareToken ? (
+          <SharedProjectViewer token={shareToken} />
+        ) : (
+          <AuthGate>
+            <App />
+          </AuthGate>
+        )}
+      </ConfirmProvider>
     </AuthProvider>
   </React.StrictMode>
 );

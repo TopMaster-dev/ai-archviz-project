@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
+import { useConfirm } from './ConfirmDialog.js';
 
 /**
  * プロジェクト管理 UI（アカウントメニュー内に表示）。
@@ -22,6 +23,7 @@ export function ProjectPanel() {
     renameCurrentProject,
     deleteCurrentProject,
   } = useProjectSessionContext();
+  const confirm = useConfirm();
 
   const [nameDraft, setNameDraft] = useState(projectName);
   const [renaming, setRenaming] = useState(false);
@@ -107,8 +109,14 @@ export function ProjectPanel() {
         <button
           type="button"
           disabled={busy || projects.length <= 1}
-          onClick={() => {
-            if (window.confirm('このプロジェクトを削除しますか？（14日間は復元可能）')) {
+          onClick={async () => {
+            if (
+              await confirm({
+                message: 'このプロジェクトを削除しますか？（14日間は復元可能）',
+                confirmLabel: '削除',
+                danger: true,
+              })
+            ) {
               void deleteCurrentProject();
             }
           }}

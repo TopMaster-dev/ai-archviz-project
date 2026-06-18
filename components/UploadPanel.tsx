@@ -16,6 +16,7 @@ import {
   textureCategoryLabel,
 } from '../lib/uploadsCatalog.js';
 import { useProjectStore } from '../lib/store/projectStore.js';
+import { useConfirm } from './ConfirmDialog.js';
 
 /**
  * 削除したテクスチャを壁/床/天井などに割り当て済みなら、その割当を既定（null）へ戻す。
@@ -79,6 +80,7 @@ const KIND_LABEL: Record<UploadKind, string> = { model: '3Dモデル', texture: 
 
 export function UploadPanel() {
   const { configured } = useAuth();
+  const confirm = useConfirm();
   const [uploads, setUploads] = useState<UserUpload[]>([]);
   const [loading, setLoading] = useState(false);
   const [busyKind, setBusyKind] = useState<UploadKind | null>(null);
@@ -151,7 +153,7 @@ export function UploadPanel() {
   };
 
   const handleDelete = async (u: UserUpload) => {
-    if (!window.confirm(`「${u.originalName ?? 'このファイル'}」を削除しますか？`)) return;
+    if (!(await confirm({ message: `「${u.originalName ?? 'このファイル'}」を削除しますか？`, confirmLabel: '削除', danger: true }))) return;
     setDeletingId(u.id);
     setMsg(null);
     try {
