@@ -1,7 +1,22 @@
 import type { AiEditObjectReference } from '../types.js';
 import { buildAiEditReferenceGuide, describeObjectPlacements } from './aiEditPrompt.js';
 
-export const GEMINI_IMAGE_MODEL = 'gemini-3-pro-image-preview';
+// ---------------------------------------------------------------------------
+// AI モデルの使い分け（管理表 row 209/258「AIAPIの最適化・選択」）。
+// タスクごとに「品質重視の画像モデル」と「低コスト・低レイテンシのテキストモデル」を分け、
+// いずれもサーバー環境変数で個別に差し替え可能にする（再デプロイ無しでコスト/品質/レイテンシを調整）。
+//   画像生成・編集（高品質が必須）      : GEMINI_IMAGE_MODEL             既定 gemini-3-pro-image-preview
+//   配置キャプション（軽量・高頻度）    : GEMINI_PLACEMENT_CAPTION_MODEL 既定 gemini-2.5-flash
+//   AIエージェント相談（推論重視）      : GEMINI_AGENT_MODEL             既定=キャプションと同じ
+// エージェントだけ別 env にしてあるのは、ローンチ後に相談の回答品質を上げたい場合、
+// 影響範囲を generateAgentReply に閉じたまま上位モデルへ差し替えられるようにするため。
+// 参考: requirements/AI_API_使い分け検討_260618.md
+// ---------------------------------------------------------------------------
+const resolveEnvModel = (name: string): string | undefined =>
+  (typeof process !== 'undefined' ? process.env?.[name]?.trim() : undefined) || undefined;
+
+/** 画像生成・編集モデル（AIレンダリング / AI画像編集）。品質重視。env GEMINI_IMAGE_MODEL で上書き可。 */
+export const GEMINI_IMAGE_MODEL = resolveEnvModel('GEMINI_IMAGE_MODEL') || 'gemini-3-pro-image-preview';
 
 // トークン計測（管理表 row 58）。Gemini generateContent 応答の usageMetadata からトークン数を取り出す。
 export interface TokenUsage {
@@ -21,15 +36,21 @@ export function readUsage(result: unknown): TokenUsage | null {
 }
 
 /**
- * テキスト生成用 Flash モデル（配置説明・AIエージェント相談で共用）。
- * サーバー側 `process.env.GEMINI_PLACEMENT_CAPTION_MODEL` で上書き可能。
+ * 配置キャプション生成用の軽量テキストモデル（高頻度・低コスト）。
+ * env `GEMINI_PLACEMENT_CAPTION_MODEL` で上書き可能。
  * 既定は現行モデル gemini-2.5-flash（旧 gemini-2.0-flash は提供終了=404 のため更新・260617）。
  */
 export function resolvePlacementCaptionModel(): string {
-  return (
-    (typeof process !== 'undefined' && process.env?.GEMINI_PLACEMENT_CAPTION_MODEL?.trim()) ||
-    'gemini-2.5-flash'
-  );
+  return resolveEnvModel('GEMINI_PLACEMENT_CAPTION_MODEL') || 'gemini-2.5-flash';
+}
+
+/**
+ * AIエージェント相談チャット用モデル。配置キャプションとは別に差し替え可能にし、
+ * ローンチ後に相談の回答品質だけを上位モデルへ上げられるようにする（影響範囲は generateAgentReply のみ）。
+ * env `GEMINI_AGENT_MODEL` で上書き可能。既定はキャプションモデルと同じ（テストマーケ期は単一ベンダー運用）。
+ */
+export function resolveAgentModel(): string {
+  return resolveEnvModel('GEMINI_AGENT_MODEL') || resolvePlacementCaptionModel();
 }
 
 export function parseImageDataUrl(dataUrl: string): { mimeType: string; base64: string } {
@@ -157,7 +178,7 @@ export async function generateAgentReply(
     contents,
     generationConfig: { temperature: 0.6, responseModalities: ['TEXT'] },
   };
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${resolvePlacementCaptionModel()}:generateContent`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${resolveAgentModel()}:generateContent`;
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },

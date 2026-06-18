@@ -6,7 +6,7 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, resolvePlacementCaptionModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { normalizeObjectReference } from './lib/aiEditNormalize.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
@@ -311,7 +311,7 @@ export default defineConfig(({ mode }) => {
                         });
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, reply, usage, model: resolvePlacementCaptionModel() }));
+                        return res.end(JSON.stringify({ success: true, reply, usage, model: resolveAgentModel() }));
                     } catch (e: any) {
                         console.error('agent local error:', e);
                         res.statusCode = 500;
