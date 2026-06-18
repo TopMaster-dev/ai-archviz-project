@@ -213,6 +213,9 @@ interface SketchCanvasProps {
   onCeilingViewChange?: (v: boolean) => void;
   /** 全消去: App 側で確定済みの壁/建具/家具/梁/選択もまとめてクリアする。 */
   onClearAll?: () => void;
+  /** 上部チップ（モード切替＋Undo/Redoバー＋ホームボタン）の下端インセット(px, 実測)。
+   *  スナップツールバーをこの直下に出して、上部チップと重ならないようにする（3Dキャンバスと同方式）。 */
+  topInset?: number;
 }
 
 const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () => void }) => (
@@ -221,8 +224,9 @@ const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () =>
   </button>
 );
 
-export const SketchCanvas: React.FC<SketchCanvasProps> = ({ 
-  initialPoints, 
+export const SketchCanvas: React.FC<SketchCanvasProps> = ({
+  initialPoints,
+  topInset,
   onSketchUpdate, 
   onApply, 
   gridSize = 1000, 
@@ -2650,11 +2654,14 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       {/* Floating Toolbar (Top Right) - Unified Controls */}
       {/* レスポンシブ（管理表 row 13）: 左の画面切替バー（約20rem）と重ならないよう最大幅を制限し、
           狭幅では gap/padding を縮小しつつ flex-wrap で折り返す（重なり防止）。 */}
-      <div className="absolute top-32 right-3 z-50 max-w-[calc(100vw_-_7rem)] lg:top-6 lg:right-6 lg:max-w-[calc(100vw_-_23rem)] animate-in slide-in-from-top duration-700 pointer-events-auto">
+      <div
+        style={{ top: topInset ?? 128 }}
+        className="absolute right-3 z-50 max-w-[calc(100vw_-_7rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] animate-in slide-in-from-top duration-700 pointer-events-auto"
+      >
           <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
               
-              {/* Tool mode: 選択・壁・窓・ドア（横並び） */}
-              <div className="flex items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">
+              {/* Tool mode: 選択・壁・窓・ドア（横並び。狭幅では折り返す） */}
+              <div className="flex flex-wrap items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">
                 <button
                   type="button"
                   onClick={() => setToolMode('select')}
@@ -2707,8 +2714,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               </div>
               <div className="w-px h-8 bg-white/10" />
 
-              {/* Editing Controls */}
-              <div className="flex items-center gap-2">
+              {/* Editing Controls（狭幅では折り返す） */}
+              <div className="flex flex-wrap items-center gap-2">
                   <button
                       onClick={handleDeleteSelected}
                       className={`h-11 px-6 rounded-xl text-xs font-black uppercase tracking-wider transition-all border flex items-center justify-center min-w-[120px]
@@ -2741,7 +2748,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               <div className="w-px h-8 bg-white/10" />
 
               {/* Snap Controls */}
-              <div className="flex items-center gap-6 px-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 lg:gap-6 px-2">
                   {/* Length Snap */}
                   <div className="flex items-center gap-3">
                       <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">長さ(mm)</span>
