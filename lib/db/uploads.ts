@@ -79,6 +79,31 @@ export function validateUpload(file: File, kind: UploadKind): string | null {
   return null;
 }
 
+/**
+ * 本人のアップロード総容量のソフト上限（バイト・管理表 row 31「容量警告プロセス」）。
+ * これを超える追加はブロックし、接近（80%以上）で警告する。運用に応じて調整可。
+ */
+export const STORAGE_SOFT_LIMIT_BYTES = 500 * 1024 * 1024; // 500MB
+
+/**
+ * 追加アップロードが総容量のソフト上限を超えるか判定する（純粋関数・テスト対象）。
+ * 既に上限到達、または今回の追加で上限超過となる場合はユーザー向けメッセージを返す（問題なければ null）。
+ */
+export function checkStorageCapacity(
+  currentTotalBytes: number,
+  addBytes: number,
+  limit: number = STORAGE_SOFT_LIMIT_BYTES,
+): string | null {
+  const mb = Math.round(limit / (1024 * 1024));
+  if (currentTotalBytes >= limit) {
+    return `ストレージ容量の上限（${mb}MB）に達しています。不要なアップロードを削除してから追加してください。`;
+  }
+  if (currentTotalBytes + addBytes > limit) {
+    return `このファイルを追加すると容量上限（${mb}MB）を超えます。不要なアップロードを削除してください。`;
+  }
+  return null;
+}
+
 interface UploadRow {
   id: string;
   kind: UploadKind;

@@ -2,8 +2,10 @@ import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import {
   ACCEPTED_EXT,
+  checkStorageCapacity,
   deleteUserUpload,
   listUserUploads,
+  STORAGE_SOFT_LIMIT_BYTES,
   updateUserUploadMetadata,
   uploadUserFile,
   type UploadKind,
@@ -117,6 +119,15 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
 
   const handleFile = async (kind: UploadKind, file: File | undefined) => {
     if (!file) return;
+    // 容量警告プロセス（管理表 row 31）: 本人の総容量がソフト上限に達する/超える追加はブロックする。
+    const currentTotal = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+    const capacityMsg = checkStorageCapacity(currentTotal, file.size);
+    if (capacityMsg) {
+      setMsg(capacityMsg);
+      if (modelInputRef.current) modelInputRef.current.value = '';
+      if (textureInputRef.current) textureInputRef.current.value = '';
+      return;
+    }
     setBusyKind(kind);
     setMsg(null);
     try {
@@ -180,9 +191,8 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   }
 
   const busy = busyKind != null;
-  // 容量警告（管理表 row 31）: 本人のアップロード合計と上限しきい値。接近/超過で警告。
-  // しきい値は運用に応じて調整可（テストマーケ・本番で見直し）。
-  const STORAGE_SOFT_LIMIT_BYTES = 500 * 1024 * 1024; // 500MB
+  // 容量警告（管理表 row 31）: 本人のアップロード合計と上限しきい値。接近で警告し、超過する追加はブロックする。
+  // しきい値（STORAGE_SOFT_LIMIT_BYTES）は lib/db/uploads.ts と共有し、表示・追加ブロックで同一値を使う。
   const totalBytes = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
   const usagePct = Math.min(100, Math.round((totalBytes / STORAGE_SOFT_LIMIT_BYTES) * 100));
   const overLimit = totalBytes >= STORAGE_SOFT_LIMIT_BYTES;
@@ -246,7 +256,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       <div className="mb-3 flex gap-1.5">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || overLimit}
           onClick={() => handlePick('model')}
           className="flex-1 rounded bg-emerald-600 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
         >
@@ -254,7 +264,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
         </button>
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || overLimit}
           onClick={() => handlePick('texture')}
           className="flex-1 rounded bg-neutral-700 py-1.5 font-semibold text-white transition hover:bg-neutral-600 disabled:opacity-50"
         >

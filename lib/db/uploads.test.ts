@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { sanitizeUploadFileName, buildStoragePath, validateUpload, MAX_BYTES } from './uploads.js';
+import {
+  sanitizeUploadFileName,
+  buildStoragePath,
+  validateUpload,
+  MAX_BYTES,
+  checkStorageCapacity,
+  STORAGE_SOFT_LIMIT_BYTES,
+} from './uploads.js';
 
 // File は .name / .size のみ参照されるため、最小のダミーで十分（環境非依存）。
 const fakeFile = (name: string, size: number): File => ({ name, size }) as unknown as File;
@@ -58,5 +65,27 @@ describe('validateUpload', () => {
   it('rejects files over the size limit', () => {
     expect(validateUpload(fakeFile('big.glb', MAX_BYTES.model + 1), 'model')).toMatch(/大きすぎます/);
     expect(validateUpload(fakeFile('big.png', MAX_BYTES.texture + 1), 'texture')).toMatch(/大きすぎます/);
+  });
+});
+
+describe('checkStorageCapacity', () => {
+  const L = STORAGE_SOFT_LIMIT_BYTES;
+  it('allows adding when under the limit', () => {
+    expect(checkStorageCapacity(0, 1000)).toBeNull();
+    expect(checkStorageCapacity(L / 2, 1000)).toBeNull();
+  });
+  it('allows a file that exactly reaches the limit (boundary, not over)', () => {
+    expect(checkStorageCapacity(L - 1000, 1000)).toBeNull();
+  });
+  it('blocks when already at or over the limit', () => {
+    expect(checkStorageCapacity(L, 1)).toMatch(/上限.*達して/);
+    expect(checkStorageCapacity(L + 1, 1)).toMatch(/上限.*達して/);
+  });
+  it('blocks when this file would push the total over the limit', () => {
+    expect(checkStorageCapacity(L - 500, 1000)).toMatch(/超えます/);
+  });
+  it('respects a custom limit argument', () => {
+    expect(checkStorageCapacity(800, 200, 1000)).toBeNull(); // 800+200 == 1000, not over
+    expect(checkStorageCapacity(900, 200, 1000)).toMatch(/超えます/);
   });
 });
