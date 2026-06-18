@@ -257,16 +257,22 @@ const Beam3DMesh: React.FC<{
     };
   }, [editable, isSelected, intersectAtY, centerMm, handleD]);
 
-  // 外側ビュー（近接壁カットアウェイ中）は梁を「素通り」させ、奥の壁/床/天井を選択できるようにする
-  // （カットアウェイ壁を素通りにした row 170 と同方針・row 198「梁越しで壁の外からクリックすると選択不可」）。
+  // 「見えている」梁は外側ビュー（近接壁カットアウェイ中）でも「選択・ホバー」可能（家具と同様に最前面で選択する。
+  // 260619 クライアント要望で、row 198「梁越しに奥の壁を選択」より見える梁の選択を優先）。
+  // ただし「移動・回転（ドラッグ）」はカットアウェイ中＝外側ビューでは無効にし、室内ビュー（または2D天伏図）で行う。
   // クリック時点の最新カットアウェイ状態を ref からライブに読む（再レンダのタイミングに依存しない）。
   const isCutAwayActive = () => !!wallHiddenRef && Object.values(wallHiddenRef.current).some(Boolean);
+  // 自身が非表示（所属する近接壁がカットアウェイ中で visible=false）の壁梁は見えないので、従来どおり
+  // クリック/ホバーを素通りさせ、奥の壁を選択できるようにする（見えない梁を選択／前面で遮らない）。
+  const isSelfHidden = () => boxRef.current?.visible === false;
 
   const startMove = (e: ThreeEvent<PointerEvent>) => {
-    if (!editable || isCutAwayActive()) return;
+    if (!editable || isSelfHidden()) return;
     e.stopPropagation();
+    // 選択は外側ビュー（カットアウェイ中）でも可能＝家具と同様に最前面で選択する。
     if (!isSelected) { onSelect(); return; }
-    if (isWallBeam) return; // 壁梁は壁固定
+    // 移動はカットアウェイ中（外側ビュー）では無効＝選択のみ。壁梁は常に壁固定。
+    if (isWallBeam || isCutAwayActive()) return;
     const p = intersectAtY(e.clientX, e.clientY, by);
     if (!p) return;
     dragRef.current = { mode: 'move', startCx: beam.cx, startCy: beam.cy, startWx: p.x, startWz: p.z, planeY: by, cbx: bx, cbz: bz };
@@ -330,8 +336,8 @@ const Beam3DMesh: React.FC<{
         castShadow
         receiveShadow
         onPointerDown={startMove}
-        onClick={(e) => { if (editable && !isCutAwayActive()) e.stopPropagation(); }}
-        onPointerOver={(e) => { if (!isCutAwayActive()) { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); } }}
+        onClick={(e) => { if (editable && !isSelfHidden()) e.stopPropagation(); }}
+        onPointerOver={(e) => { if (!isSelfHidden()) { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); } }}
         onPointerOut={() => onHoverNameChange?.(null)}
       >
         {!usePrism && <boxGeometry args={[lengthM, heightM, widthM]} />}
