@@ -2355,7 +2355,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         <div className="lg:hidden absolute inset-0 z-[54] bg-black/60" onClick={() => setPanelOpen(false)} aria-hidden />
       )}
       <div
-        className={`absolute top-28 left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 transition-transform duration-300 lg:translate-x-0 ${
+        className={`absolute top-28 left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 max-h-[calc(100vh-9rem)] overflow-y-auto scroll-dark pr-1 transition-transform duration-300 lg:translate-x-0 ${
           panelOpen ? 'translate-x-0' : '-translate-x-[150%] lg:translate-x-0'
         }`}
       >
@@ -2384,6 +2384,40 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           >
             天伏図
           </button>
+        </div>
+      </div>
+
+      {/* スナップ設定（旧・上部ツールバーから移設。lg以上は左カラム常時表示／狭幅はドロワー内。下絵スナップは下絵カード側）。 */}
+      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl flex flex-col gap-2">
+        <p className="text-[9px] font-black uppercase tracking-wider text-neutral-500">スナップ</p>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-bold text-neutral-400">長さ(mm)</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <NumericField value={lengthSnapSize} onChange={onLengthSnapSizeChange} dragSensitivity={5} className="h-8 w-[72px]" inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50" />
+            <ToggleSwitch enabled={isLengthSnapEnabled ?? true} onChange={() => onLengthSnapToggle(!isLengthSnapEnabled)} />
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-bold text-neutral-400">角度</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <NumericField value={angleSnap} onChange={onAngleSnapChange} dragSensitivity={0.5} className="h-8 w-[58px]" inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50" />
+            <ToggleSwitch enabled={isAngleSnapEnabled ?? true} onChange={() => onAngleSnapToggle(!isAngleSnapEnabled)} />
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-bold text-neutral-400">グリッド</span>
+          <div className="flex items-center gap-2 shrink-0">
+            <select value={gridSize} onChange={(e) => onGridSizeChange(Number(e.target.value))} className="bg-[#000]/30 border border-white/10 rounded-lg pl-2 pr-1 h-8 text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer hover:bg-white/5 transition-all">
+              <option value="500">500mm</option>
+              <option value="1000">1m</option>
+              <option value="10000">10m</option>
+            </select>
+            <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-bold text-neutral-400" title="既存の頂点・整列にスナップ">頂点スナップ</span>
+          <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
         </div>
       </div>
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
@@ -2644,8 +2678,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       </div>
       </div>
 
-      {/* Floating Toolbar (Right→lg / 狭幅は左下に退避してスナップツールバーと干渉させない) */}
-      <div className="absolute z-50 flex flex-col gap-3 animate-in slide-in-from-right duration-700 bottom-6 left-6 lg:bottom-auto lg:left-auto lg:top-1/2 lg:-translate-y-1/2 lg:right-4">
+      {/* Floating Toolbar (Right) — 全幅で右中央。スナップ設定を左パネルへ移したので上部ツールバーは低くなり干渉しない。 */}
+      <div className="absolute top-1/2 -translate-y-1/2 right-4 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
         <button onClick={() => handleZoomButton('in')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">+</button>
         <button onClick={() => handleZoomButton('out')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">-</button>
         <button onClick={handleFitToScreen} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-xs font-black text-neutral-400 hover:bg-white/10 transition-all uppercase tracking-tighter">全体</button>
@@ -2743,70 +2777,6 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   >
                       全消去
                   </button>
-              </div>
-
-              <div className="w-px h-8 bg-white/10" />
-
-              {/* Snap Controls */}
-              <div className="flex flex-wrap items-center gap-x-3 gap-y-2 lg:gap-6 px-2">
-                  {/* Length Snap */}
-                  <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">長さ(mm)</span>
-                      <div className="relative group h-9">
-                          <NumericField
-                              value={lengthSnapSize}
-                              onChange={onLengthSnapSizeChange}
-                              dragSensitivity={5}
-                              className="h-9 w-[72px]"
-                              inputClassName="h-9 py-0 text-emerald-400 focus-visible:ring-emerald-500/50"
-                          />
-                      </div>
-                      <ToggleSwitch enabled={isLengthSnapEnabled ?? true} onChange={() => onLengthSnapToggle(!isLengthSnapEnabled)} />
-                  </div>
-
-                  {/* Angle Snap */}
-                  <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">角度</span>
-                      <div className="relative h-9">
-                          <NumericField
-                              value={angleSnap}
-                              onChange={onAngleSnapChange}
-                              dragSensitivity={0.5}
-                              className="h-9 w-[58px]"
-                              inputClassName="h-9 py-0 text-emerald-400 focus-visible:ring-emerald-500/50"
-                          />
-                      </div>
-                      <ToggleSwitch enabled={isAngleSnapEnabled ?? true} onChange={() => onAngleSnapToggle(!isAngleSnapEnabled)} />
-                  </div>
-
-                  {/* Grid Snap Toggle */}
-                  <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider">グリッド</span>
-                      <div className="relative">
-                          <select 
-                              value={gridSize} 
-                              onChange={(e) => onGridSizeChange(Number(e.target.value))}
-                              className="bg-[#000]/30 border border-white/10 rounded-lg pl-3 pr-2 h-9 text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer hover:bg-white/5 transition-all w-[70px]"
-                          >
-                              <option value="500">500mm</option>
-                              <option value="1000">1m</option>
-                              <option value="10000">10m</option>
-                          </select>
-                      </div>
-                      <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
-                  </div>
-
-                  {/* Vertex / Dimension Snap Toggle */}
-                  <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider" title="既存の頂点・整列にスナップ">頂点</span>
-                      <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
-                  </div>
-
-                  {/* Underlay (下絵) Snap Toggle */}
-                  <div className="flex items-center gap-3">
-                      <span className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider" title="下絵画像の枠（角・辺・中心）にスナップ">下絵</span>
-                      <ToggleSwitch enabled={isUnderlaySnapEnabled} onChange={() => setIsUnderlaySnapEnabled(!isUnderlaySnapEnabled)} />
-                  </div>
               </div>
 
               <div className="w-px h-8 bg-white/10" />
