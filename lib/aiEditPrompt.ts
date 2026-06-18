@@ -112,7 +112,7 @@ function appendLearnedHints(prompt: string, learnedHints?: string[]): string {
   if (hints.length === 0) return prompt;
   return `${prompt}
 
-【参考: このユーザーが過去に高評価した傾向（好みの参考・強制ではない）】
+【参考: 高評価が多い意匠の傾向（あなたの好み＋全体の傾向の参考。強制ではない）】
 - ${hints.join('\n- ')}
 上記は好みの参考に留め、今回の指示・配置座標・ベース画像との整合を最優先すること。`;
 }

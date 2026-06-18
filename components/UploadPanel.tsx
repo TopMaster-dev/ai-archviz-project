@@ -54,7 +54,8 @@ function scrubDeletedTextureFromProject(upload: UserUpload): void {
  * 一覧・削除できる。実体は Storage、所在/メタは user_uploads 台帳に記録され、
  * 管理画面（service_role）から全件把握できる（クライアント要望 #6）。
  *
- * エディタ取り込み（家具カタログ/素材への反映）は後続スライス #6b で対応。
+ * ホーム画面に加え、2Dビューの「マイ素材」モーダルからも開く（onUploadsChanged で素材一覧へ即時反映）。
+ * テクスチャは uploadToProduct でエディタの素材パレットに取り込まれ、3Dビューで壁/床/天井へ割り当て可能。
  */
 
 function fmtBytes(bytes: number | null): string {
