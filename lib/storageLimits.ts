@@ -1,0 +1,15 @@
+// ストレージ容量の単一の真実源（管理表 row 31）。
+// クライアントの使用量表示・追加ブロック（lib/db/uploads.ts → UploadPanel）と、
+// 容量警告メール（api/cron/storage-warning.ts, vite dev mirror, lib/server/storageWarning.ts）で同じ値を使う。
+// 依存のない純粋モジュールなので、クライアント・サーバ双方から安全に import できる。
+// 注: supabase/schema.sql の storage_warning_targets() の引数デフォルト（419430400=400MB）も
+//     この警告しきい値に合わせる。サーバ(cron)は常に明示値を渡すため、SQL側の既定は手動起動時のバックアップ。
+
+/** アップロード総容量のソフト上限（バイト）。 */
+export const STORAGE_SOFT_LIMIT_BYTES = 500 * 1024 * 1024; // 500MB
+
+/** 上限に対する「接近」とみなす割合（この割合で表示警告・メール通知）。 */
+export const STORAGE_WARN_FRACTION = 0.8;
+
+/** 容量警告（接近表示・メール）を発するしきい値（バイト）。既定 = 上限の80% = 400MB。 */
+export const STORAGE_WARN_THRESHOLD_BYTES = Math.round(STORAGE_SOFT_LIMIT_BYTES * STORAGE_WARN_FRACTION);

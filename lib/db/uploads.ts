@@ -1,4 +1,5 @@
 import { getSupabase } from './supabaseClient.js';
+import { STORAGE_SOFT_LIMIT_BYTES } from '../storageLimits.js';
 
 // ユーザーアップロード資産（3Dモデル / テクスチャ）の保存・一覧・削除。
 //
@@ -79,11 +80,9 @@ export function validateUpload(file: File, kind: UploadKind): string | null {
   return null;
 }
 
-/**
- * 本人のアップロード総容量のソフト上限（バイト・管理表 row 31「容量警告プロセス」）。
- * これを超える追加はブロックし、接近（80%以上）で警告する。運用に応じて調整可。
- */
-export const STORAGE_SOFT_LIMIT_BYTES = 500 * 1024 * 1024; // 500MB
+// 容量上限（管理表 row 31）は lib/storageLimits.ts を単一の真実源とし、ここから再エクスポートする
+// （既存の import 互換: UploadPanel などは uploads.ts から取り込む）。
+export { STORAGE_SOFT_LIMIT_BYTES };
 
 /**
  * 追加アップロードが総容量のソフト上限を超えるか判定する（純粋関数・テスト対象）。

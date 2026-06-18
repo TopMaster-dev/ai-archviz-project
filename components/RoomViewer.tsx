@@ -257,13 +257,10 @@ const Beam3DMesh: React.FC<{
     };
   }, [editable, isSelected, intersectAtY, centerMm, handleD]);
 
-  // 「見えている」梁は外側ビュー（近接壁カットアウェイ中）でも「選択・ホバー」可能（家具と同様に最前面で選択する。
-  // 260619 クライアント要望で、row 198「梁越しに奥の壁を選択」より見える梁の選択を優先）。
-  // ただし「移動・回転（ドラッグ）」はカットアウェイ中＝外側ビューでは無効にし、室内ビュー（または2D天伏図）で行う。
-  // クリック時点の最新カットアウェイ状態を ref からライブに読む（再レンダのタイミングに依存しない）。
-  const isCutAwayActive = () => !!wallHiddenRef && Object.values(wallHiddenRef.current).some(Boolean);
+  // 「見えている」梁は外側ビュー（近接壁カットアウェイ中）でも、家具と同様に「選択・ホバー・移動・回転」可能。
+  // 260619 クライアント要望: row 198（梁を外から選択）＋ row 143（自由梁の移動制限の解除＝外側ビューでも移動可）。
   // 自身が非表示（所属する近接壁がカットアウェイ中で visible=false）の壁梁は見えないので、従来どおり
-  // クリック/ホバーを素通りさせ、奥の壁を選択できるようにする（見えない梁を選択／前面で遮らない）。
+  // クリック/ホバー/移動を素通りさせ、奥の壁を選択できるようにする（見えない梁を選択／前面で遮らない）。
   const isSelfHidden = () => boxRef.current?.visible === false;
 
   const startMove = (e: ThreeEvent<PointerEvent>) => {
@@ -271,8 +268,8 @@ const Beam3DMesh: React.FC<{
     e.stopPropagation();
     // 選択は外側ビュー（カットアウェイ中）でも可能＝家具と同様に最前面で選択する。
     if (!isSelected) { onSelect(); return; }
-    // 移動はカットアウェイ中（外側ビュー）では無効＝選択のみ。壁梁は常に壁固定。
-    if (isWallBeam || isCutAwayActive()) return;
+    // 壁梁は常に壁固定（row 155）。自由梁は室内・外側ビューのどちらでも移動可（row 143）。
+    if (isWallBeam) return;
     const p = intersectAtY(e.clientX, e.clientY, by);
     if (!p) return;
     dragRef.current = { mode: 'move', startCx: beam.cx, startCy: beam.cy, startWx: p.x, startWz: p.z, planeY: by, cbx: bx, cbz: bz };
@@ -281,7 +278,7 @@ const Beam3DMesh: React.FC<{
     onDragStart?.();
   };
   const startRotate = (e: ThreeEvent<PointerEvent>) => {
-    if (!editable || isWallBeam || isCutAwayActive()) return;
+    if (!editable || isWallBeam) return;
     e.stopPropagation();
     dragRef.current = { mode: 'rotate', startCx: beam.cx, startCy: beam.cy, startWx: 0, startWz: 0, planeY: by, cbx: bx, cbz: bz };
     liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
@@ -355,7 +352,7 @@ const Beam3DMesh: React.FC<{
           ref={handleRef}
           position={[bx + handleD * Math.cos(angleRad), by, bz + handleD * Math.sin(angleRad)]}
           onPointerDown={startRotate}
-          onClick={(e) => { if (!isCutAwayActive()) e.stopPropagation(); }}
+          onClick={(e) => e.stopPropagation()}
           renderOrder={12}
         >
           <sphereGeometry args={[0.13, 16, 16]} />

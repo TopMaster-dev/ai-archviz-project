@@ -668,6 +668,48 @@ $$;
 -- 個人情報（メール）を返すため anon/authenticated には公開しない（cron の service_role のみ）。
 revoke execute on function public.purge_warning_targets() from public, anon, authenticated;
 
+-- ---------------------------------------------------------------------------
+-- 容量警告メール（管理表 row 31）。本人のアップロード総容量がしきい値（既定=上限500MBの80%=400MB）に
+-- 達したユーザーへ日次でメール通知する（Vercel Cron → api/cron/storage-warning）。重複送信防止に
+-- storage_warnings へ最終通知時刻と通知時点の総容量を記録し、クールダウン期間内かつ容量が増えていなければ
+-- 再送しない。書き込みは cron の service_role のみ（INSERT/UPDATE ポリシーを作らない＝RLSで一般ユーザー不可）。
+-- ---------------------------------------------------------------------------
+create table if not exists storage_warnings (
+  owner_id    uuid primary key references auth.users (id) on delete cascade,
+  warned_at   timestamptz not null default now(),
+  total_bytes bigint not null default 0
+);
+alter table storage_warnings enable row level security;
+drop policy if exists "storage_warnings: read own" on storage_warnings;
+create policy "storage_warnings: read own" on storage_warnings
+  for select using (auth.uid() = owner_id);
+
+-- 通知対象（本人の総容量がしきい値以上で、未通知 or クールダウン経過 or 前回通知時より容量増加）を返す。
+-- 個人情報（メール）を返すため anon/authenticated には公開しない（cron の service_role のみ）。
+create or replace function storage_warning_targets(
+  p_threshold_bytes bigint default 419430400,  -- 既定 400MB（= 500MB 上限の 80%）
+  p_cooldown_days   int    default 7
+)
+returns table (owner_id uuid, owner_email text, total_bytes bigint)
+language sql security definer set search_path = public as $$
+  select t.owner_id, u.email, t.total_bytes
+  from (
+    select owner_id, sum(coalesce(bytes, 0))::bigint as total_bytes
+    from user_uploads
+    group by owner_id
+  ) t
+  join auth.users u on u.id = t.owner_id
+  left join storage_warnings w on w.owner_id = t.owner_id
+  where t.total_bytes >= p_threshold_bytes
+    and u.email is not null
+    and (
+      w.owner_id is null
+      or w.warned_at < now() - make_interval(days => p_cooldown_days)
+      or t.total_bytes > w.total_bytes
+    );
+$$;
+revoke execute on function public.storage_warning_targets(bigint, int) from public, anon, authenticated;
+
 create or replace function purge_soft_deleted_projects()
 returns int language plpgsql security definer set search_path = public as $$
 declare purged int;

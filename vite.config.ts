@@ -7,6 +7,7 @@ import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
 import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
+import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { normalizeObjectReference } from './lib/aiEditNormalize.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
@@ -422,6 +423,45 @@ export default defineConfig(({ mode }) => {
                         return res.end(JSON.stringify(result));
                     } catch (e: any) {
                         console.error('purge-warning local error:', e?.message || e);
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: false, reason: 'error' }));
+                    }
+                })();
+                return;
+            }
+
+            // 容量警告メール（row 31）。本番 api/cron/storage-warning.ts のローカル版。
+            // ローカル検証: curl -H "Authorization: Bearer <CRON_SECRET>" http://localhost:3000/api/cron/storage-warning
+            if (req.url === '/api/cron/storage-warning' && (req.method === 'GET' || req.method === 'POST')) {
+                void (async () => {
+                    res.setHeader('Content-Type', 'application/json');
+                    const secret = process.env.CRON_SECRET || env.CRON_SECRET || '';
+                    const auth = (req.headers['authorization'] as string) || '';
+                    if (!secret || auth !== `Bearer ${secret}`) {
+                        res.statusCode = 401;
+                        return res.end(JSON.stringify({ error: 'Unauthorized' }));
+                    }
+                    try {
+                        const { runStorageWarning } = await import('./lib/server/storageWarning.js');
+                        const result = await runStorageWarning(
+                            {
+                                url: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || env.SUPABASE_URL || env.VITE_SUPABASE_URL || '',
+                                serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
+                                smtpHost: process.env.SMTP_HOST || env.SMTP_HOST || '',
+                                smtpPort: Number(process.env.SMTP_PORT || env.SMTP_PORT || 587),
+                                smtpSecure: String(process.env.SMTP_SECURE || env.SMTP_SECURE || '').toLowerCase() === 'true',
+                                smtpUser: process.env.SMTP_USER || env.SMTP_USER || undefined,
+                                smtpPass: process.env.SMTP_PASS || env.SMTP_PASS || undefined,
+                                smtpFrom: process.env.SMTP_FROM || env.SMTP_FROM || process.env.SMTP_USER || env.SMTP_USER || '',
+                                thresholdBytes: Number(process.env.STORAGE_WARN_BYTES || env.STORAGE_WARN_BYTES || STORAGE_WARN_THRESHOLD_BYTES),
+                                limitBytes: Number(process.env.STORAGE_LIMIT_BYTES || env.STORAGE_LIMIT_BYTES || STORAGE_SOFT_LIMIT_BYTES),
+                            },
+                            new Date().toISOString(),
+                        );
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify(result));
+                    } catch (e: any) {
+                        console.error('storage-warning local error:', e?.message || e);
                         res.statusCode = 200;
                         return res.end(JSON.stringify({ success: false, reason: 'error' }));
                     }
