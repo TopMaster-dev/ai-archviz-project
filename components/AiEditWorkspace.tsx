@@ -614,7 +614,7 @@ export function AiEditWorkspace({
             <button
               type="button"
               disabled
-              className="pointer-events-auto shrink-0 flex items-center justify-center gap-2 px-4 sm:px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+              className="pointer-events-auto lg:absolute lg:top-0 lg:left-1/2 lg:-translate-x-1/2 shrink-0 flex items-center justify-center gap-2 px-4 sm:px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] transition-all disabled:opacity-35 disabled:cursor-not-allowed"
               title="履歴の仕上がり画像が必要です"
             >
               <Download className="w-4 h-4 shrink-0" />
@@ -669,7 +669,7 @@ export function AiEditWorkspace({
               ? '高解像は API 経由、プレビュー用は元画像をそのまま保存'
               : '履歴の仕上がり画像が必要です'
           }
-          className="pointer-events-auto shrink-0 flex items-center justify-center gap-2 px-4 sm:px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] hover:bg-emerald-900/80 transition-all disabled:opacity-35 disabled:cursor-not-allowed"
+          className="pointer-events-auto lg:absolute lg:top-0 lg:left-1/2 lg:-translate-x-1/2 shrink-0 flex items-center justify-center gap-2 px-4 sm:px-8 py-3 rounded-2xl bg-emerald-950/80 border border-emerald-500/40 text-emerald-100 shadow-[0_8px_24px_rgba(16,185,129,0.25)] hover:bg-emerald-900/80 transition-all disabled:opacity-35 disabled:cursor-not-allowed"
         >
           <Download className="w-4 h-4 shrink-0" />
           <span className="text-[11px] font-black uppercase tracking-widest">この画像を書き出し</span>
