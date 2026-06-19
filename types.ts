@@ -178,6 +178,26 @@ export interface AiEstimateItem {
   productUrl?: string;
 }
 
+/** AIエージェントへ渡す家具カタログ商品（推薦候補・Tier2 260620）。エージェントは番号(index)で参照する。 */
+export interface AgentCatalogEntry {
+  name: string;
+  type: string;
+  brand?: string;
+  modelNumber?: string;
+  price?: number;
+  productUrl?: string;
+}
+
+/** AIエージェントの家具推薦（カタログ実データ＋推薦理由・Tier2）。「見積に追加」で AiEstimateItem 化する。 */
+export interface AgentRecommendation {
+  name: string;
+  brand?: string;
+  modelNumber?: string;
+  price?: number;
+  productUrl?: string;
+  reason?: string;
+}
+
 /** 3D カメラプリセット。cameraMode 省略時は自由視点（Orbit） */
 export interface CameraPreset {
   id: string;

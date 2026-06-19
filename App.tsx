@@ -3,7 +3,7 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, Environment } from '@react-three/drei';
 import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download, ChevronLeft } from 'lucide-react';
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
-import { MaterialCategory, Product, RenderState, FurnitureItem, FurnitureCatalogItem, Opening, ToolMode, AddKind, CameraPreset, CameraBlendRequest, AiEstimateItem } from './types.js';
+import { MaterialCategory, Product, RenderState, FurnitureItem, FurnitureCatalogItem, Opening, ToolMode, AddKind, CameraPreset, CameraBlendRequest, AiEstimateItem, AgentRecommendation } from './types.js';
 import { NumericField } from './components/NumericField.js';
 import { RoomViewer } from './components/RoomViewer.js';
 import { ModelRoot } from './components/ModelRoot.js';
@@ -42,6 +42,7 @@ import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js'
 import { listUserUploads } from './lib/db/uploads.js';
 import { toStoredImage } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
+import { buildAgentCatalog } from './lib/agentCatalog.js';
 import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
@@ -2459,6 +2460,26 @@ const App: React.FC = () => {
     setAiEstimateItems((prev) => prev.filter((item) => item.id !== id));
   }, []);
 
+  // Tier2（260620）: AIエージェントの家具推薦を概算見積もりへ1クリック追加する。
+  // 価格/品番/URL はカタログ実データ（resolveAgentRecommendations 解決済み）を採用。
+  const handleAddAgentRecommendation = useCallback((rec: AgentRecommendation) => {
+    setAiEstimateItems((prev) => [
+      ...prev,
+      {
+        ...createAiEstimateItem(),
+        name: rec.name || '家具',
+        brand: rec.brand ?? '',
+        price: rec.price,
+        memo: rec.reason ?? '',
+        modelNumber: rec.modelNumber,
+        productUrl: rec.productUrl,
+      },
+    ]);
+  }, []);
+
+  // エージェントへ渡す家具カタログ（重複排除・価格付き）。furnitureCatalog 変化時のみ再計算。
+  const agentCatalog = useMemo(() => buildAgentCatalog(furnitureCatalog), [furnitureCatalog]);
+
   const renderEstimatePanel = useCallback(
     (forAiEdit = false) => {
       const aggregatedMaterials = Array.from(
@@ -4157,6 +4178,8 @@ const App: React.FC = () => {
                         onCommitPlacementRect={aiEditSession.commitPlacementRect}
                         onRemovePlacementAt={aiEditSession.removePlacementAt}
                         estimatePanel={activeKind === 'photo' ? null : renderEstimatePanel(true)}
+                        agentCatalog={agentCatalog}
+                        onAddEstimateItem={handleAddAgentRecommendation}
                         photoOnly={activeKind === 'photo'}
                         onExitToHome={shellNav?.goHome}
                         exitToHomeBusy={shellNav?.homeBusy}

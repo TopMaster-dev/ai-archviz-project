@@ -1,5 +1,6 @@
 import { generateAgentReply, resolveAgentModel, type AgentChatMessage } from '../lib/gemini.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
+import type { AgentCatalogEntry } from '../types.js';
 
 /**
  * AIエージェント相談エンドポイント（管理表 row 208/214・プランA）。
@@ -28,7 +29,7 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });
     }
 
-    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null };
+    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown };
     const messages: AgentChatMessage[] = Array.isArray(body.messages)
       ? body.messages
           .filter(
@@ -44,11 +45,19 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'メッセージが必要です。' });
     }
 
-    const { reply, usage } = await generateAgentReply(apiKey, {
+    // Tier2（260620）: クライアントが渡す家具カタログ（推薦候補・index 付き）。
+    const catalog: AgentCatalogEntry[] = Array.isArray(body.catalog)
+      ? (body.catalog as unknown[])
+          .filter((c): c is AgentCatalogEntry => !!c && typeof c === 'object' && typeof (c as { name?: unknown }).name === 'string')
+          .slice(0, 80)
+      : [];
+
+    const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
       messages,
       imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : null,
+      catalog,
     });
-    return res.status(200).json({ success: true, reply, usage, model: resolveAgentModel() });
+    return res.status(200).json({ success: true, reply, recommendations, usage, model: resolveAgentModel() });
   } catch (e: any) {
     console.error('agent error:', e);
     res.status(500).json({ success: false, error: e.message });

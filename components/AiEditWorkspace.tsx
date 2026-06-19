@@ -14,7 +14,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
+import type { AiEditObjectReference, AiEditVersion, NormalizedRect, AgentCatalogEntry, AgentRecommendation } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiFeedback, getLearnedHints } from '../lib/db/feedback.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
@@ -137,6 +137,10 @@ type Props = {
   exitToHomeBusy?: boolean;
   /** 写真専用の空状態で、アップロードした写真をベース画像(v0)として登録する。 */
   onUploadBaseImage?: (dataUrl: string) => void;
+  /** AIエージェントへ渡す家具カタログ（推薦候補・Tier2 260620）。 */
+  agentCatalog?: AgentCatalogEntry[];
+  /** エージェント推薦を概算見積もりへ追加する（Tier2）。 */
+  onAddEstimateItem?: (rec: AgentRecommendation) => void;
 };
 
 export function AiEditWorkspace({
@@ -172,6 +176,8 @@ export function AiEditWorkspace({
   onExitToHome,
   exitToHomeBusy = false,
   onUploadBaseImage,
+  agentCatalog,
+  onAddEstimateItem,
 }: Props) {
   const [highResExportOpen, setHighResExportOpen] = useState(false);
   // 右サイドバー（見積＋編集パネル）: xl未満はドロワー化（既定で隠す）。xl以上は固定カラム（この状態は無視）。
@@ -1249,6 +1255,8 @@ export function AiEditWorkspace({
         projectId={projectSession?.projectId ?? null}
         open={agentOpen}
         onOpenChange={setAgentOpen}
+        catalog={agentCatalog}
+        onAddEstimateItem={onAddEstimateItem}
       />
 
       {/* AI生成中の全面オーバーレイ（クライアント要望 260619: ボタンの小さなスピナーだけでは処理中か

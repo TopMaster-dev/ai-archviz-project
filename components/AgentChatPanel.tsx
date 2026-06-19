@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Loader2, MessageCircle, Send, X } from 'lucide-react';
+import { Check, Copy, Loader2, MessageCircle, Send, X, Plus } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import type { AgentChatMessage } from '../lib/gemini.js';
+import type { AgentCatalogEntry, AgentRecommendation } from '../types.js';
 
 /**
  * AIエージェント相談パネル（管理表 row 208/214・プランA）。
@@ -19,20 +20,29 @@ import type { AgentChatMessage } from '../lib/gemini.js';
 const CHAT_STORAGE_PREFIX = 'arise-agent-chat-';
 const MAX_STORED = 50;
 
+/** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）が付くことがある。 */
+type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[] };
+
 function chatKey(projectId: string | null | undefined): string {
   return CHAT_STORAGE_PREFIX + (projectId || 'guest');
 }
 
-function loadStoredChat(projectId: string | null | undefined): AgentChatMessage[] {
+function loadStoredChat(projectId: string | null | undefined): ChatMessage[] {
   try {
     const raw = localStorage.getItem(chatKey(projectId));
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter(
-      (m): m is AgentChatMessage =>
-        !!m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string',
-    );
+    return parsed
+      .filter(
+        (m): m is ChatMessage =>
+          !!m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string',
+      )
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        recommendations: Array.isArray(m.recommendations) ? m.recommendations : undefined,
+      }));
   } catch {
     return [];
   }
@@ -43,17 +53,25 @@ export function AgentChatPanel({
   projectId,
   open,
   onOpenChange,
+  catalog,
+  onAddEstimateItem,
 }: {
   imageDataUrl?: string | null;
   projectId?: string | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** エージェントへ渡す家具カタログ（推薦候補・Tier2 260620）。 */
+  catalog?: AgentCatalogEntry[];
+  /** 推薦を見積もりへ追加する（Tier2）。未指定なら「見積に追加」ボタンを出さない。 */
+  onAddEstimateItem?: (rec: AgentRecommendation) => void;
 }) {
-  const [messages, setMessages] = useState<AgentChatMessage[]>(() => loadStoredChat(projectId));
+  const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredChat(projectId));
   const [input, setInput] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
+  // 「見積に追加」済みの推薦キー（メッセージ番号-推薦番号）。二重追加を視覚的に抑止。
+  const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
   const scrollRef = useRef<HTMLDivElement>(null);
   // プロジェクト切替直後、まだ古い messages のまま保存 effect が走るのを防ぐ。
   const skipSave = useRef(false);
@@ -62,6 +80,7 @@ export function AgentChatPanel({
   useEffect(() => {
     skipSave.current = true;
     setMessages(loadStoredChat(projectId));
+    setAddedKeys(new Set());
   }, [projectId]);
 
   // 履歴を localStorage へ保存（メッセージ毎に即保存＝チャット直後のリロードでも残る）。
@@ -86,7 +105,7 @@ export function AgentChatPanel({
   const send = async () => {
     const text = input.trim();
     if (!text || sending) return;
-    const next: AgentChatMessage[] = [...messages, { role: 'user', content: text }];
+    const next: ChatMessage[] = [...messages, { role: 'user', content: text }];
     setMessages(next);
     setInput('');
     setError(null);
@@ -97,13 +116,27 @@ export function AgentChatPanel({
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify({ messages: next.slice(-12), imageDataUrl: grounding }),
+        body: JSON.stringify({
+          messages: next.slice(-12).map((m) => ({ role: m.role, content: m.content })),
+          imageDataUrl: grounding,
+          catalog,
+        }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '応答の取得に失敗しました');
       // トークン計測（row 58・無効時は no-op）。エージェントはテキスト（添付画像があれば 1）。
       void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: imageDataUrl ? 1 : 0 });
-      setMessages((prev) => [...prev, { role: 'assistant', content: String(data.reply ?? '') }]);
+      // Tier2: 推薦はサーバ側でカタログ実データへ解決済み（index ずれ・捏造防止）。型のみ軽く検証。
+      const recs: AgentRecommendation[] = Array.isArray(data.recommendations)
+        ? (data.recommendations as unknown[]).filter(
+            (r): r is AgentRecommendation =>
+              !!r && typeof r === 'object' && typeof (r as { name?: unknown }).name === 'string',
+          )
+        : [];
+      setMessages((prev) => [
+        ...prev,
+        { role: 'assistant', content: String(data.reply ?? ''), recommendations: recs.length ? recs : undefined },
+      ]);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');
     } finally {
@@ -190,6 +223,66 @@ export function AgentChatPanel({
                   )}
                 </button>
               ) : null}
+              {m.role === 'assistant' && m.recommendations && m.recommendations.length > 0 && (
+                <div className="mt-1.5 w-[88%] space-y-1.5">
+                  {m.recommendations.map((rec, ri) => {
+                    const key = `${i}-${ri}`;
+                    const added = addedKeys.has(key);
+                    const meta = [
+                      rec.brand,
+                      rec.modelNumber ? `品番 ${rec.modelNumber}` : '',
+                      rec.price !== undefined ? `¥${rec.price.toLocaleString()}` : '',
+                    ]
+                      .filter(Boolean)
+                      .join(' ・ ');
+                    return (
+                      <div key={key} className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-2">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="truncate text-[12px] font-bold text-neutral-100">{rec.name}</div>
+                            {meta && <div className="mt-0.5 text-[10px] text-neutral-400">{meta}</div>}
+                            {rec.reason && (
+                              <div className="mt-0.5 text-[10px] leading-relaxed text-neutral-500">{rec.reason}</div>
+                            )}
+                            {rec.productUrl && /^https?:\/\//i.test(rec.productUrl) && (
+                              <a
+                                href={rec.productUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
+                              >
+                                商品ページ ↗
+                              </a>
+                            )}
+                          </div>
+                          {onAddEstimateItem && (
+                            <button
+                              type="button"
+                              disabled={added}
+                              onClick={() => {
+                                onAddEstimateItem(rec);
+                                setAddedKeys((s) => new Set(s).add(key));
+                              }}
+                              className="tap inline-flex shrink-0 items-center gap-0.5 rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                              title="この商品を概算見積もりへ追加"
+                            >
+                              {added ? (
+                                <>
+                                  <Check className="h-3 w-3" /> 追加済み
+                                </>
+                              ) : (
+                                <>
+                                  <Plus className="h-3 w-3" /> 見積に追加
+                                </>
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           ))
         )}

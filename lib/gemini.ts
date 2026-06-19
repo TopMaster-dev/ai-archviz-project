@@ -1,5 +1,6 @@
-import type { AiEditObjectReference } from '../types.js';
+import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
 import { buildAiEditReferenceGuide, describeObjectPlacements } from './aiEditPrompt.js';
+import { resolveAgentRecommendations } from './agentCatalog.js';
 
 // ---------------------------------------------------------------------------
 // AI モデルの使い分け（管理表 row 209/258「AIAPIの最適化・選択」）。
@@ -186,18 +187,42 @@ export interface AgentChatMessage {
   content: string;
 }
 
+/** エージェントの家具推薦（index ベース・カタログ参照）。lib/agentCatalog で実データへ解決する（Tier2）。 */
+export interface AgentRecommendationPick {
+  index: number;
+  name?: string;
+  reason?: string;
+}
+
 /**
- * AIエージェント相談（建築・内装デザインのアドバイス）。Flash モデルでテキスト応答（管理表 row 208/214）。
+ * AIエージェント相談（建築・内装デザインのアドバイス）。Flash モデルで JSON 応答（管理表 row 208/214）。
  * 直近の会話履歴を contents に変換し、最新のユーザー発話にだけ現在の画像を参考添付する。
+ * Tier2（260620）: カタログを渡すと、家具/コーディネート提案時に該当商品を index で推薦する
+ * （reply=会話文、recommendations=index付き推薦）。失敗時は全文を reply 扱い（推薦なし）にフォールバック。
  */
 export async function generateAgentReply(
   apiKey: string,
-  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null }
-): Promise<{ reply: string; usage: TokenUsage | null }> {
+  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[] }
+): Promise<{ reply: string; recommendations: AgentRecommendation[]; usage: TokenUsage | null }> {
+  const catalog = params.catalog ?? [];
+  const catalogBlock = catalog.length
+    ? `\n\n【利用可能な家具カタログ（家具提案は必ずこの中から index で指定。ここに無い商品は提案しない）】\n` +
+      catalog
+        .map(
+          (c, i) =>
+            `${i}: ${c.name}（${c.type}）${c.brand ? ` / ${c.brand}` : ''}${c.modelNumber ? ` / 品番${c.modelNumber}` : ''}${
+              c.price !== undefined ? ` / ¥${c.price.toLocaleString()}` : ''
+            }`
+        )
+        .join('\n')
+    : '';
   const system = `あなたは建築・内装に精通したプロのAIデザインアドバイザーです。Arise（2D作図→3D→AIパース→概算見積もりの空間デザインツール）のユーザーを支援します。
 - 配色・素材・家具・照明・レイアウト・コーディネート、見積もりや進め方の相談に、日本語で具体的かつ実務的に助言する。
 - 不要な前置きは避け、要点は短い段落や箇条書きで簡潔に。
-- 画像が添付されている場合は、その空間を踏まえて助言する。`;
+- 画像が添付されている場合は、その空間を踏まえて助言する。
+- 家具やコーディネートを提案するときは、上記カタログから該当商品を index で挙げる（カタログに無いものは挙げない）。家具提案が不要な相談では空配列にする。
+- 出力は必ず次の形式の JSON のみ（前後に説明やマークダウンを付けない）:
+{"reply":"<会話的な日本語の助言。必須。recommendationsの有無に関わらず必ず入れる>","recommendations":[{"index":<カタログ番号(整数)>,"name":"<見積もりに載せる自然な日本語名>","reason":"<短い推薦理由>"}]}${catalogBlock}`;
 
   const lastIdx = params.messages.length - 1;
   const contents = params.messages.map((m, i) => {
@@ -214,7 +239,7 @@ export async function generateAgentReply(
   const payload = {
     systemInstruction: { parts: [{ text: system }] },
     contents,
-    generationConfig: { temperature: 0.6, responseModalities: ['TEXT'] },
+    generationConfig: { temperature: 0.6, responseMimeType: 'application/json' },
   };
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${resolveAgentModel()}:generateContent`;
   const response = await fetch(endpoint, {
@@ -229,7 +254,47 @@ export async function generateAgentReply(
   const result = await response.json();
   const text = result.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text)?.text;
   if (!text || typeof text !== 'string') throw new Error('エージェントの応答が空でした。');
-  return { reply: text.trim(), usage: readUsage(result) };
+
+  let reply = '';
+  let picks: AgentRecommendationPick[] = [];
+  let parsedOk = false;
+  try {
+    const parsed = JSON.parse(text) as unknown;
+    parsedOk = true;
+    if (typeof parsed === 'string') {
+      reply = parsed.trim();
+    } else if (parsed && typeof parsed === 'object') {
+      const r = (parsed as { reply?: unknown }).reply;
+      if (typeof r === 'string') reply = r.trim();
+      const recs = (parsed as { recommendations?: unknown }).recommendations;
+      if (Array.isArray(recs)) {
+        picks = recs
+          .map((x): AgentRecommendationPick | null => {
+            if (!x || typeof x !== 'object') return null;
+            const idx = (x as { index?: unknown }).index;
+            if (typeof idx !== 'number' || !Number.isInteger(idx) || idx < 0) return null;
+            const name = (x as { name?: unknown }).name;
+            const reason = (x as { reason?: unknown }).reason;
+            return {
+              index: idx,
+              name: typeof name === 'string' ? name : undefined,
+              reason: typeof reason === 'string' ? reason : undefined,
+            };
+          })
+          .filter((x): x is AgentRecommendationPick => x !== null)
+          .slice(0, 6);
+      }
+    }
+  } catch {
+    reply = text.trim(); // JSON でない稀なケースのみ全文表示
+  }
+  // 構造化はできたが reply キーが無い/想定外の形 → 生JSONをユーザーに見せない（汎用文へ）。
+  if (!reply) reply = parsedOk ? '回答を取得できませんでした。もう一度お試しください。' : text.trim();
+
+  // 推薦の index 解決は「モデルへ番号付きで提示したのと同じ配列(catalog)」に対して行う（index ずれ＝
+  // 別商品の実価格/品番が紛れ込む事故を防ぐ）。価格/品番/URL はカタログ由来を採用（捏造防止）。
+  const recommendations = resolveAgentRecommendations(catalog, picks);
+  return { reply, recommendations, usage: readUsage(result) };
 }
 
 /** マルチ参照対応のインテリア編集（ベース + スタイル0〜1 + オブジェクト複数） */
