@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import {
   PencilRuler,
   Box,
@@ -9,7 +8,6 @@ import {
   Ruler,
   LayoutGrid,
   Wand2,
-  Play,
   MousePointerClick,
   Layers,
   History,
@@ -53,13 +51,6 @@ const GALLERY = [
 ] as const;
 
 const SHOWCASE = [
-  {
-    eyebrow: 'WORKFLOW',
-    title: 'デザインから概算まで、思考・商談を途切れさせない',
-    desc: '2D作図から高精細パース、仕上げ材の自動見積もりまでをシームレスに連携。直感的な操作で設計者のひらめきを即座に視覚化し、日々の業務フローを圧倒的なスピードで変革します。',
-    img: '/lp/living-dusk.jpg',
-    alt: '2Dから生成した3D空間をAIでフォトリアルに仕上げたLDKのパース',
-  },
   {
     eyebrow: 'INFRASTRUCTURE',
     title: '直感と実務を繋ぐ、建築・内装の新たなインフラ',
@@ -105,8 +96,6 @@ export function LandingPage({
   onLogin: () => void;
   onShowLegal?: (kind: 'terms' | 'privacy') => void;
 }) {
-  const [playing, setPlaying] = useState(false);
-
   return (
     <div className="relative h-screen w-screen overflow-y-auto overflow-x-hidden bg-neutral-950 text-neutral-100">
       {/* 背景の装飾グラデーション（ゆっくり明滅） */}
@@ -178,45 +167,14 @@ export function LandingPage({
             {/* PR / 操作デモ動画 */}
             <div className="mt-12">
               <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
-                {playing ? (
-                  <iframe
-                    className="absolute inset-0 h-full w-full"
-                    src={`https://www.youtube-nocookie.com/embed/${YT_ID}?autoplay=1&rel=0&modestbranding=1`}
-                    title="Arise PR・操作デモ動画"
-                    loading="lazy"
-                    allow="autoplay; encrypted-media; picture-in-picture"
-                    allowFullScreen
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => setPlaying(true)}
-                    className="group absolute inset-0 h-full w-full"
-                    aria-label="PR・操作デモ動画を再生"
-                  >
-                    <img
-                      src={`https://i.ytimg.com/vi/${YT_ID}/maxresdefault.jpg`}
-                      alt="Arise の操作デモ動画"
-                      className="h-full w-full object-cover opacity-85 transition duration-300 group-hover:opacity-100"
-                      loading="lazy"
-                      onError={(e) => {
-                        const t = e.currentTarget;
-                        if (!t.dataset.fallback) {
-                          t.dataset.fallback = '1';
-                          t.src = `https://i.ytimg.com/vi/${YT_ID}/hqdefault.jpg`;
-                        }
-                      }}
-                    />
-                    <span className="absolute inset-0 flex items-center justify-center">
-                      <span className="inline-flex h-16 w-16 items-center justify-center rounded-full bg-emerald-600/90 text-white shadow-xl ring-4 ring-white/10 transition group-hover:scale-105 group-hover:bg-emerald-500">
-                        <Play className="h-7 w-7 translate-x-0.5" fill="currentColor" />
-                      </span>
-                    </span>
-                    <span className="absolute bottom-3 left-4 rounded-md bg-black/60 px-2.5 py-1 text-[11px] font-bold text-white backdrop-blur">
-                      PR・操作デモ動画
-                    </span>
-                  </button>
-                )}
+                {/* 自動再生（ブラウザ仕様上 muted 必須）＋ループ。コントロールは表示し、ユーザーが音声オン/全画面に切替可能。 */}
+                <iframe
+                  className="absolute inset-0 h-full w-full"
+                  src={`https://www.youtube-nocookie.com/embed/${YT_ID}?autoplay=1&mute=1&loop=1&playlist=${YT_ID}&controls=1&rel=0&modestbranding=1&playsinline=1`}
+                  title="Arise PR・操作デモ動画"
+                  allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
+                  allowFullScreen
+                />
               </div>
             </div>
 
@@ -235,9 +193,17 @@ export function LandingPage({
             </div>
           </section>
 
-          {/* 特長 */}
+          {/* リード（デザインから概算まで…）＋ 主な機能 */}
           <section id="features" className="scroll-mt-20 py-20">
-            <h2 className="mb-2 text-2xl font-black sm:text-3xl">主な機能</h2>
+            <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
+              デザインから概算まで、
+              <br className="hidden sm:block" />
+              思考・商談を途切れさせない
+            </h2>
+            <p className="mb-14 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              2D作図から高精細パース、仕上げ材の自動見積もりまでをシームレスに連携。直感的な操作で設計者のひらめきを即座に視覚化し、日々の業務フローを圧倒的なスピードで変革します。
+            </p>
+            <h3 className="mb-2 text-2xl font-black sm:text-3xl">主な機能</h3>
             <p className="mb-8 text-sm text-neutral-400">設計から提案までを、ひとつのツールで完結。</p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map((f, i) => {
