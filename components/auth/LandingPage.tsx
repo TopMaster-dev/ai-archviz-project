@@ -10,13 +10,18 @@ import {
   LayoutGrid,
   Wand2,
   Play,
+  MousePointerClick,
+  Layers,
+  History,
+  MessageCircle,
+  Lightbulb,
 } from 'lucide-react';
 
 /**
  * 未ログイン時のランディングページ（管理表 row 37/42/62/67）。
  * クライアント支給のLPデザイン（LPデザイン_キャッチコピー_1900.pdf）と原稿（_文字.txt）に基づく構成:
  * ヒーロー（キャッチコピー＋PR/操作デモ動画）→ ギャラリー → 主な機能 → 3ステップ（実例画像つき）→
- * 実績数値 → 4つの訴求バンド（キャッチコピー＋フォトリアル実例）→ クロージング（招待制）→ フッター。
+ * 実績数値 → AIデザイン編集 → AIエージェント（260619 クライアント追加要望）→ 4つの訴求バンド → クロージング（招待制）→ フッター。
  * 新規登録は招待制のため公開フォームは出さず、招待制である旨を案内し onLogin でログインへ。
  *
  * スクロール: #root が overflow:hidden（エディタの固定ビューポート用）のため、
@@ -76,6 +81,21 @@ const SHOWCASE = [
     img: '/lp/living-dusk.jpg',
     alt: 'AIが提案したコーディネートのフォトリアルなLDKパース',
   },
+] as const;
+
+/** 新機能①: AIデザイン編集（AI画像編集）の紹介カード（主な機能と同じスタイル。実画面は後日差し替え予定）。 */
+const AI_EDIT_FEATURES = [
+  { icon: MousePointerClick, title: 'エリア編集', desc: '画像の一部を範囲指定し、参照画像で家具・小物・素材を差し替え・追加。' },
+  { icon: Wand2, title: 'AIデザイン提案（おまかせ）', desc: '空間全体をAIが再コーディネート。家具・装飾・照明演出を一新。' },
+  { icon: Layers, title: '元画像を維持', desc: '指示した箇所以外は崩さず、寸法・開口・建具を保持して編集。' },
+  { icon: History, title: '履歴・比較', desc: '編集のたびにバージョンを保存。過去案へいつでも戻して比較。' },
+] as const;
+
+/** 新機能②: AIエージェント機能（相談）の紹介カード。 */
+const AI_AGENT_FEATURES = [
+  { icon: MessageCircle, title: '文脈を理解した助言', desc: '生成中・編集中の画像を文脈に、配色・素材・レイアウトを相談。' },
+  { icon: Lightbulb, title: '進め方まで相談', desc: 'デザインから概算見積もりの進め方まで、実務に踏み込んで提案。' },
+  { icon: History, title: '会話履歴を保持', desc: 'プロジェクト単位で相談履歴を保存。画面を移動しても消えません。' },
 ] as const;
 
 export function LandingPage({
@@ -286,6 +306,66 @@ export function LandingPage({
                   <div className="mt-1 text-[11px] text-neutral-400">{s.v}</div>
                 </div>
               ))}
+            </div>
+          </section>
+
+          {/* 新機能①: AIデザイン編集（主な機能と同じカードスタイルで紹介・260619 クライアント要望） */}
+          <section className="pb-16">
+            <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-purple-500/[0.08] to-emerald-500/5 p-7 sm:p-10">
+              <p className="mb-3 inline-block rounded-full border border-purple-400/30 bg-purple-500/10 px-3 py-1 text-[11px] font-bold tracking-wider text-purple-200">
+                NEW · AIデザイン編集
+              </p>
+              <h2 className="text-2xl font-black sm:text-3xl">生成したパースを、その場で自在に編集</h2>
+              <p className="mb-7 mt-2 max-w-2xl text-sm text-neutral-400">
+                範囲を指定したピンポイントの差し替えから、空間まるごとのおまかせコーディネートまで。完成イメージを目の前で更新します。
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                {AI_EDIT_FEATURES.map((f) => {
+                  const Icon = f.icon;
+                  return (
+                    <div
+                      key={f.title}
+                      className="rounded-2xl border border-white/10 bg-neutral-900/50 p-5 transition hover:border-purple-400/40 hover:bg-neutral-900"
+                    >
+                      <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-purple-500/15 text-purple-300">
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <h3 className="text-sm font-bold">{f.title}</h3>
+                      <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{f.desc}</p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </section>
+
+          {/* 新機能②: AIエージェント機能（紹介・260619 クライアント要望） */}
+          <section className="pb-20">
+            <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-emerald-500/[0.08] to-sky-500/5 p-7 sm:p-10">
+              <p className="mb-3 inline-block rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold tracking-wider text-emerald-200">
+                NEW · AIエージェント
+              </p>
+              <h2 className="text-2xl font-black sm:text-3xl">もう一人のデザインパートナーに相談</h2>
+              <p className="mb-7 mt-2 max-w-2xl text-sm text-neutral-400">
+                膨大な建材データと文脈を学習したAIが、あなたの設計プロセスに伴走。孤独なアイデアラッシュは、もう不要です。
+              </p>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                {AI_AGENT_FEATURES.map((f) => {
+                  const Icon = f.icon;
+                  return (
+                    <div
+                      key={f.title}
+                      className="rounded-2xl border border-white/10 bg-neutral-900/50 p-5 transition hover:border-emerald-400/40 hover:bg-neutral-900"
+                    >
+                      <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
+                        <Icon className="h-5 w-5" />
+                      </div>
+                      <h3 className="text-sm font-bold">{f.title}</h3>
+                      <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{f.desc}</p>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
           </section>
 
