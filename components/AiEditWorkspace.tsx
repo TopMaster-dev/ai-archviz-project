@@ -1222,6 +1222,22 @@ export function AiEditWorkspace({
 
       {/* AIエージェント相談パネル（管理表 row 208/214・プランA）。折り畳み式・現在画像を文脈に。 */}
       <AgentChatPanel imageDataUrl={activeVersion?.outputImageDataUrl ?? null} />
+
+      {/* AI生成中の全面オーバーレイ（クライアント要望 260619: ボタンの小さなスピナーだけでは処理中か
+          分かりにくいため、AIデザイン提案/編集実行の実行中をはっきり示す。3Dレンダのオーバーレイと同方針）。 */}
+      {isSubmitting && (
+        <div className="fixed inset-0 z-[10050] flex flex-col items-center justify-center bg-zinc-950/90 backdrop-blur-sm">
+          <div className="flex flex-col items-center gap-6 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-8 text-center shadow-2xl">
+            <Loader2 className="h-14 w-14 animate-spin text-purple-400" />
+            <div>
+              <h3 className="mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-xl font-bold text-transparent">
+                AIが画像を生成中…
+              </h3>
+              <p className="text-sm text-zinc-400">完了までしばらくお待ちください（数十秒かかる場合があります）</p>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
