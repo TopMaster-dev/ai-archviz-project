@@ -17,6 +17,7 @@ import {
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiFeedback, getLearnedHints } from '../lib/db/feedback.js';
+import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
 import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
@@ -395,19 +396,20 @@ export function AiEditWorkspace({
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      const baseScaled = await downscaleDataUrlIfNeeded(activeVersion.outputImageDataUrl);
+      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       const imageSize = '2K';
 
-      const styleScaled = styleImageDataUrl ? await downscaleDataUrlIfNeeded(styleImageDataUrl) : null;
+      const styleScaled = styleImageDataUrl ? await downscaleDataUrlIfNeeded(await ensureDataUrl(styleImageDataUrl)) : null;
       const objectsScaled = await Promise.all(
-        draftObjects.map(async (o) => ({
-          ...o,
-          imageDataUrl: normalizeImageDataUrl(o.imageDataUrl)
-            ? await downscaleDataUrlIfNeeded(normalizeImageDataUrl(o.imageDataUrl) as string)
-            : null,
-        }))
+        draftObjects.map(async (o) => {
+          const norm = normalizeImageDataUrl(o.imageDataUrl);
+          return {
+            ...o,
+            imageDataUrl: norm ? await downscaleDataUrlIfNeeded(await ensureDataUrl(norm)) : null,
+          };
+        })
       );
 
       // in-context反映（row 211/219）: 個人の高評価傾向＋全体共有プールを取得し、生成プロンプトへ参考添付（ベストエフォート）。
@@ -520,7 +522,7 @@ export function AiEditWorkspace({
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      const baseScaled = await downscaleDataUrlIfNeeded(activeVersion.outputImageDataUrl);
+      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       // in-context反映（row 211/219）: 過去に高評価した傾向をコーディネートにも参考添付（ベストエフォート）。

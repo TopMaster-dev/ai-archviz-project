@@ -40,6 +40,7 @@ import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
 import { listUserUploads } from './lib/db/uploads.js';
+import { toStoredImage } from './lib/db/aiRenderStorage.js';
 import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
@@ -1196,8 +1197,9 @@ const App: React.FC = () => {
   // 2a: 写真専用オーバーレイからホームへ戻るための goHome（ゲストでは null）。
   const shellNav = useShellNav();
 
-  // 写真プロジェクトはプロジェクトごとに DB 保存するため localStorage を使わない（混入防止・2a）。
-  const aiEditSession = useAiEditSession({ persistLocal: activeKind !== 'photo' });
+  // 履歴の永続化（260619）: ログイン中のプロジェクトはプロジェクトごとにクラウド保存するため localStorage を
+  // 使わない（混入防止）。プロジェクト未選択（ゲスト等）のときのみ localStorage に退避する。
+  const aiEditSession = useAiEditSession({ persistLocal: !projectSession?.projectId });
 
   const {
     renderState,
@@ -1213,8 +1215,10 @@ const App: React.FC = () => {
     onCanvasRenderSuccess: async (url) => {
       // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効（freePlanImage 参照）。
       const out = await maybeApplyFreePlanOutputLimits(url, projectSession?.plan === 'free');
+      // 生成画像をクラウド保存しURL化（履歴の永続化・260619）。失敗時は base64 のまま（従来動作にフォールバック）。
+      const stored = await toStoredImage(out, projectSession?.projectId ?? null);
       // 過去の生成履歴は消さず、新しいレンダーを履歴に「追加」する（見返せるように）。
-      aiEditSession.addVersionFromRender(out);
+      aiEditSession.addVersionFromRender(stored);
       // フリープランの生成クレジットを1消費（row 49/50）。無効/有料/ゲストでは何もしない。
       void projectSession?.consumeAiCredit();
       // レンダ完了後（ローディング解除後）に AI 編集へ遷移
@@ -1274,7 +1278,7 @@ const App: React.FC = () => {
     });
   }, [aiEditVersions]);
 
-  // === 2a: 写真AI編集プロジェクトの per-project 永続化 ===
+  // === aiEdit（AIレンダ/編集履歴）の per-project クラウド永続化（260619: photo 専用から全プロジェクトへ拡張） ===
   const photoProjectId = projectSession?.projectId ?? null;
   const persistAiEdit = projectSession?.persistAiEdit;
   const replaceAllAiEdit = aiEditSession.replaceAll;
@@ -1286,10 +1290,10 @@ const App: React.FC = () => {
     if (activeKind === 'photo') setAiEditOpen(true);
   }, [activeKind, photoProjectId]);
 
-  // プロジェクト切替時、そのプロジェクトに保存された aiEdit をセッションへ読み込む（photo のみ）。
+  // プロジェクト切替時、そのプロジェクトに保存された aiEdit をセッションへ読み込む（全プロジェクト・260619）。
   useEffect(() => {
-    if (activeKind !== 'photo' || !photoProjectId) {
-      lastSeededPhotoProjectRef.current = null; // 非photoへ移ったら再入時に再シードできるよう解除
+    if (!photoProjectId) {
+      lastSeededPhotoProjectRef.current = null; // プロジェクト未選択（ゲスト等）では再入時に再シードできるよう解除
       return;
     }
     if (lastSeededPhotoProjectRef.current === photoProjectId) return;
@@ -1297,11 +1301,11 @@ const App: React.FC = () => {
     skipNextAiEditPersistRef.current = true; // 読み込み直後の冗長保存を抑止
     replaceAllAiEdit(ae.versions ?? [], ae.activeVersionId ?? null);
     lastSeededPhotoProjectRef.current = photoProjectId;
-  }, [activeKind, photoProjectId, replaceAllAiEdit]);
+  }, [photoProjectId, replaceAllAiEdit]);
 
-  // photo の編集（versions/active 変更）をストアへ反映し、デバウンス保存する。
+  // 編集/レンダ（versions/active 変更）をストアへ反映し、プロジェクトへデバウンス保存する（全プロジェクト・260619）。
   useEffect(() => {
-    if (activeKind !== 'photo' || !photoProjectId) return;
+    if (!photoProjectId) return;
     if (skipNextAiEditPersistRef.current) {
       skipNextAiEditPersistRef.current = false;
       return;
@@ -1312,7 +1316,7 @@ const App: React.FC = () => {
       draftObjects: [],
     });
     persistAiEdit?.();
-  }, [activeKind, photoProjectId, aiEditVersions, aiEditActiveVersionId, persistAiEdit]);
+  }, [photoProjectId, aiEditVersions, aiEditActiveVersionId, persistAiEdit]);
 
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
@@ -4148,21 +4152,38 @@ const App: React.FC = () => {
                         photoOnly={activeKind === 'photo'}
                         onExitToHome={shellNav?.goHome}
                         exitToHomeBusy={shellNav?.homeBusy}
-                        onUploadBaseImage={(url) => aiEditSession.addVersionFromRender(url)}
-                        onEditSuccess={(p) => {
+                        onUploadBaseImage={async (url) => {
+                            const stored = await toStoredImage(url, projectSession?.projectId ?? null);
+                            aiEditSession.addVersionFromRender(stored);
+                        }}
+                        onEditSuccess={async (p) => {
+                            // 生成画像をクラウド保存しURL化（履歴の永続化・260619）。base は親の出力URLを再利用、
+                            // 失敗時は base64 のまま（従来動作にフォールバック）。
+                            const pid = projectSession?.projectId ?? null;
+                            const [output, base, style] = await Promise.all([
+                                toStoredImage(p.outputImageDataUrl, pid),
+                                toStoredImage(p.baseImageDataUrl, pid),
+                                p.styleRefDataUrl ? toStoredImage(p.styleRefDataUrl, pid) : Promise.resolve(null),
+                            ]);
+                            const objects = await Promise.all(
+                                p.objects.map(async (o) => ({
+                                    ...o,
+                                    imageDataUrl: o.imageDataUrl ? await toStoredImage(o.imageDataUrl, pid) : null,
+                                }))
+                            );
                             aiEditSession.appendVersionAfterEdit({
                                 parentId: p.parentId,
-                                baseImageDataUrl: p.baseImageDataUrl,
-                                outputImageDataUrl: p.outputImageDataUrl,
-                                styleRefDataUrl: p.styleRefDataUrl,
+                                baseImageDataUrl: base,
+                                outputImageDataUrl: output,
+                                styleRefDataUrl: style,
                                 styleMemo: p.styleMemo,
-                                objects: p.objects,
+                                objects,
                             });
                             // 編集/コーディネート成功で1クレジット消費（row 49/50）。無効/有料/ゲストでは何もしない。
                             void projectSession?.consumeAiCredit();
                             setRenderState((prev) => ({
                                 ...prev,
-                                resultImageUrl: p.outputImageDataUrl,
+                                resultImageUrl: output,
                             }));
                         }}
                     />

@@ -3,6 +3,7 @@ import { Loader2, X } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
+import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import {
   describePixelAspect,
   EXPORT_GEMINI_IMAGE_SIZE,
@@ -83,11 +84,13 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExpor
       return;
     }
     setError(null);
+    // 履歴がURL（クラウド保存）の場合に備え、書き出し前に base64 データURL化（DL/canvas 用）。失敗時は元の値。
+    const src = await ensureDataUrl(sourceImageDataUrl);
 
     if (isPreview) {
       try {
         const a = document.createElement('a');
-        a.href = sourceImageDataUrl;
+        a.href = src;
         const wh =
           sourceNatural && sourceNatural.w > 0 && sourceNatural.h > 0
             ? `${sourceNatural.w}x${sourceNatural.h}`
@@ -106,7 +109,7 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExpor
     setBusy(true);
     try {
       const inputImage = await downscaleDataUrlIfNeeded(
-        sourceImageDataUrl,
+        src,
         EXPORT_RENDER_INPUT_MAX_SIDE
       );
       const res = await fetch('/api/render', {

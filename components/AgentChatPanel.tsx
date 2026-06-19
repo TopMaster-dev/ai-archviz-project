@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Check, Copy, Loader2, MessageCircle, Send, X } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
+import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import type { AgentChatMessage } from '../lib/gemini.js';
 
 /**
@@ -91,10 +92,12 @@ export function AgentChatPanel({
     setError(null);
     setSending(true);
     try {
+      // 履歴がURL（クラウド保存）の場合に備え、サーバへ渡す前に base64 データURL化（画像グラウンディング維持・260619）。
+      const grounding = imageDataUrl ? await ensureDataUrl(imageDataUrl) : null;
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify({ messages: next.slice(-12), imageDataUrl: imageDataUrl ?? null }),
+        body: JSON.stringify({ messages: next.slice(-12), imageDataUrl: grounding }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '応答の取得に失敗しました');

@@ -12,9 +12,9 @@ function newVersionId() {
 
 const STORAGE_KEY = 'archviz-ai-edit-session-v2';
 
-// 履歴の最大保持件数（メモリ／DB／localStorage の肥大化防止）。各履歴は生成画像のデータURLを持つため、
-// 無制限に貯めると重くなる。古い順に間引いて「最新の N 件」を保持する（見返せる十分な深さ）。
-export const MAX_AI_EDIT_VERSIONS = 30;
+// 履歴の最大保持件数。260619: 生成画像はクラウド保存しURL化したため履歴メタは軽量になり、上限を大幅緩和
+// （クライアント要望「履歴を残したい」）。暴走防止の安全上限としてのみ機能する（実用上ほぼ無制限）。
+export const MAX_AI_EDIT_VERSIONS = 200;
 function capVersions(vers: AiEditVersion[]): AiEditVersion[] {
   return vers.length > MAX_AI_EDIT_VERSIONS ? vers.slice(vers.length - MAX_AI_EDIT_VERSIONS) : vers;
 }

@@ -171,6 +171,10 @@ export function useProjectSession(): ProjectSession {
     };
   }, [configured, userId]);
 
+  // aiEdit（AIレンダ/編集履歴）のデバウンス保存タイマー（下の persistAiEdit が設定）。ストア差し替え前に
+  // 必ず取り消し、古いタイマーが発火して「別プロジェクトの内容を旧 id の行へ書き込む」事故を防ぐ。
+  const aiEditSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 現在のストア内容を指定プロジェクトへ即時保存（切替・複製・削除前のフラッシュ）。
   // signal を渡すとタイムアウト等で中断でき、中断後に遅延書き込みが残らない。
   const flush = useCallback(async (id: string | null, signal?: AbortSignal) => {
@@ -180,6 +184,12 @@ export function useProjectSession(): ProjectSession {
 
   // ProjectState をエディタへ反映し、Undo 履歴を起点化する。
   const loadInto = useCallback((data: ProjectState) => {
+    // ストアを別プロジェクトへ差し替える前に、保留中の aiEdit 保存タイマーを取り消す（クロスプロジェクト汚染防止）。
+    // 切替・複製・削除はすべて本関数を経由するため、ここが唯一のチョークポイント。直前の flush が確定保存済み。
+    if (aiEditSaveTimer.current) {
+      clearTimeout(aiEditSaveTimer.current);
+      aiEditSaveTimer.current = null;
+    }
     useProjectStore.getState().loadProjectState(data);
     useProjectStore.temporal.getState().clear();
   }, []);
@@ -356,9 +366,9 @@ export function useProjectSession(): ProjectSession {
     [configured, userId, projectId],
   );
 
-  // 写真AI編集（2a）の保存。aiEdit は temporal（Undo）対象外のため通常 autosave されない。
+  // aiEdit（AIレンダ/編集履歴）の保存。aiEdit は temporal（Undo）対象外のため通常 autosave されない。
   // 変更が来るたびにデバウンスして data 全体（kind/aiEdit を含む）を保存する。失敗は握りつぶす。
-  const aiEditSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // （aiEditSaveTimer は上の flush/loadInto 付近で宣言済み。）
   const persistAiEdit = useCallback(() => {
     if (!configured || !userId || !projectId) return;
     const id = projectId;
