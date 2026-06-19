@@ -8,18 +8,14 @@ import {
   Ruler,
   LayoutGrid,
   Wand2,
-  MousePointerClick,
-  Layers,
-  History,
   MessageCircle,
-  Lightbulb,
 } from 'lucide-react';
 
 /**
  * 未ログイン時のランディングページ（管理表 row 37/42/62/67）。
  * クライアント支給のLPデザイン（LPデザイン_キャッチコピー_1900.pdf）と原稿（_文字.txt）に基づく構成:
  * ヒーロー（キャッチコピー＋PR/操作デモ動画）→ ギャラリー → 主な機能 → 3ステップ（実例画像つき）→
- * 実績数値 → AIデザイン編集 → AIエージェント（260619 クライアント追加要望）→ 4つの訴求バンド → クロージング（招待制）→ フッター。
+ * 実績数値 → AIデザイン編集 → AIエージェント（各リードコピー＋デモ枠・260619 クライアントデザイン）→ クロージング（招待制）→ フッター。
  * 新規登録は招待制のため公開フォームは出さず、招待制である旨を案内し onLogin でログインへ。
  *
  * スクロール: #root が overflow:hidden（エディタの固定ビューポート用）のため、
@@ -48,38 +44,6 @@ const GALLERY = [
   { src: '/lp/living-dusk.jpg', alt: '夕景のLDKをAIでフォトリアルに生成したパース' },
   { src: '/lp/living-green.jpg', alt: 'グリーンの折り上げ天井リビングのAIパース' },
   { src: '/lp/bedroom.jpg', alt: '間接照明のベッドルームのAIパース' },
-] as const;
-
-const SHOWCASE = [
-  {
-    eyebrow: 'PRESENTATION',
-    title: '「ここを変えたい」に、一瞬で応える。熱量を逃さないプレゼンツール',
-    desc: '「壁紙をこうしたい」「床の色を変えたい」。施主の思いつきをその場で形にし、目の前で完成イメージを共有。待ち時間をゼロにし、ワクワクした気持ちのまま意思決定へと導きます。',
-    img: '/lp/bedroom.jpg',
-    alt: '間接照明とアクセントウォールのベッドルームのAIパース',
-  },
-  {
-    eyebrow: 'AI PARTNER',
-    title: 'あなたの「思考の死角」を照らす、もう一人のデザインパートナー',
-    desc: '膨大な建材データと過去の文脈を学習したAIが、あなたの設計プロセスに伴走。孤独なアイデアラッシュはもう不要です。まるで優秀な右腕のように、最適なデザイン案を自動で提示します。',
-    img: '/lp/living-dusk.jpg',
-    alt: 'AIが提案したコーディネートのフォトリアルなLDKパース',
-  },
-] as const;
-
-/** 新機能①: AIデザイン編集（AI画像編集）の紹介カード（主な機能と同じスタイル。実画面は後日差し替え予定）。 */
-const AI_EDIT_FEATURES = [
-  { icon: MousePointerClick, title: 'エリア編集', desc: '画像の一部を範囲指定し、参照画像で家具・小物・素材を差し替え・追加。' },
-  { icon: Wand2, title: 'AIデザイン提案（おまかせ）', desc: '空間全体をAIが再コーディネート。家具・装飾・照明演出を一新。' },
-  { icon: Layers, title: '元画像を維持', desc: '指示した箇所以外は崩さず、寸法・開口・建具を保持して編集。' },
-  { icon: History, title: '履歴・比較', desc: '編集のたびにバージョンを保存。過去案へいつでも戻して比較。' },
-] as const;
-
-/** 新機能②: AIエージェント機能（相談）の紹介カード。 */
-const AI_AGENT_FEATURES = [
-  { icon: MessageCircle, title: '文脈を理解した助言', desc: '生成中・編集中の画像を文脈に、配色・素材・レイアウトを相談。' },
-  { icon: Lightbulb, title: '進め方まで相談', desc: 'デザインから概算見積もりの進め方まで、実務に踏み込んで提案。' },
-  { icon: History, title: '会話履歴を保持', desc: 'プロジェクト単位で相談履歴を保存。画面を移動しても消えません。' },
 ] as const;
 
 export function LandingPage({
@@ -290,85 +254,44 @@ export function LandingPage({
             </div>
           </section>
 
-          {/* 新機能①: AIデザイン編集（主な機能と同じカードスタイルで紹介・260619 クライアント要望） */}
-          <section className="pb-16">
-            <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-purple-500/[0.08] to-emerald-500/5 p-7 sm:p-10">
-              <p className="mb-3 inline-block rounded-full border border-purple-400/30 bg-purple-500/10 px-3 py-1 text-[11px] font-bold tracking-wider text-purple-200">
-                NEW · AIデザイン編集
-              </p>
-              <h2 className="text-2xl font-black sm:text-3xl">生成したパースを、その場で自在に編集</h2>
-              <p className="mb-7 mt-2 max-w-2xl text-sm text-neutral-400">
-                範囲を指定したピンポイントの差し替えから、空間まるごとのおまかせコーディネートまで。完成イメージを目の前で更新します。
-              </p>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                {AI_EDIT_FEATURES.map((f) => {
-                  const Icon = f.icon;
-                  return (
-                    <div
-                      key={f.title}
-                      className="rounded-2xl border border-white/10 bg-neutral-900/50 p-5 transition hover:border-purple-400/40 hover:bg-neutral-900"
-                    >
-                      <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-purple-500/15 text-purple-300">
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <h3 className="text-sm font-bold">{f.title}</h3>
-                      <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{f.desc}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </section>
-
-          {/* 新機能②: AIエージェント機能（紹介・260619 クライアント要望） */}
+          {/* AIデザイン編集（リード＝「ここを変えたい」…＋デモ枠・260619 クライアントデザイン） */}
           <section className="pb-20">
-            <div className="rounded-3xl border border-white/10 bg-gradient-to-br from-emerald-500/[0.08] to-sky-500/5 p-7 sm:p-10">
-              <p className="mb-3 inline-block rounded-full border border-emerald-400/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold tracking-wider text-emerald-200">
-                NEW · AIエージェント
-              </p>
-              <h2 className="text-2xl font-black sm:text-3xl">もう一人のデザインパートナーに相談</h2>
-              <p className="mb-7 mt-2 max-w-2xl text-sm text-neutral-400">
-                膨大な建材データと文脈を学習したAIが、あなたの設計プロセスに伴走。孤独なアイデアラッシュは、もう不要です。
-              </p>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                {AI_AGENT_FEATURES.map((f) => {
-                  const Icon = f.icon;
-                  return (
-                    <div
-                      key={f.title}
-                      className="rounded-2xl border border-white/10 bg-neutral-900/50 p-5 transition hover:border-emerald-400/40 hover:bg-neutral-900"
-                    >
-                      <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-300">
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <h3 className="text-sm font-bold">{f.title}</h3>
-                      <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{f.desc}</p>
-                    </div>
-                  );
-                })}
+            <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
+              「ここを変えたい」に、一瞬で応える。
+              <br className="hidden sm:block" />
+              熱量を逃さないプレゼンツール
+            </h2>
+            <p className="mb-10 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              「壁紙をこうしたい」「床の色を変えたい」。施主の思いつきをその場で形にし、目の前で完成イメージを共有。待ち時間をゼロにし、ワクワクした気持ちのまま意思決定へと導きます。
+            </p>
+            {/* AIデザイン・エリア編集のデモ枠（後日クライアント支給のキャプチャ／動画に差し替え予定） */}
+            <div className="flex aspect-[16/8] items-center justify-center rounded-3xl border border-dashed border-purple-300/20 bg-gradient-to-br from-purple-500/[0.06] to-neutral-900/40 text-center">
+              <div className="px-6 text-neutral-500">
+                <Wand2 className="mx-auto mb-3 h-9 w-9 text-purple-300/70" />
+                <p className="text-sm font-bold text-neutral-300">AIデザイン・エリア編集のデモ</p>
+                <p className="mt-1 text-[12px] text-neutral-500">画像生成のスピード感をご紹介（キャプチャ／動画を準備中）</p>
               </div>
             </div>
           </section>
 
-          {/* 訴求バンド（キャッチコピー＋フォトリアル実例・交互配置） */}
-          <section className="space-y-16 pb-20 sm:space-y-24">
-            {SHOWCASE.map((s, i) => (
-              <div key={s.title} className="grid items-center gap-6 sm:gap-10 lg:grid-cols-2">
-                <div className={i % 2 === 1 ? 'lg:order-2' : ''}>
-                  <img
-                    src={s.img}
-                    alt={s.alt}
-                    loading="lazy"
-                    className="w-full rounded-2xl border border-white/10 object-cover shadow-2xl"
-                  />
-                </div>
-                <div className={i % 2 === 1 ? 'lg:order-1' : ''}>
-                  <p className="mb-3 text-[11px] font-black uppercase tracking-[0.2em] text-emerald-400/80">{s.eyebrow}</p>
-                  <h3 className="text-xl font-black leading-snug sm:text-3xl">{s.title}</h3>
-                  <p className="mt-4 max-w-xl text-sm leading-relaxed text-neutral-400 sm:text-base">{s.desc}</p>
-                </div>
+          {/* AIエージェント（リード＝「思考の死角」…＋デモ枠・260619 クライアントデザイン） */}
+          <section className="pb-20">
+            <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
+              あなたの「思考の死角」を照らす、
+              <br className="hidden sm:block" />
+              もう一人のデザインパートナー
+            </h2>
+            <p className="mb-10 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              膨大な建材データと過去の文脈を学習したAIが、あなたの設計プロセスに伴走。孤独なアイデアラッシュはもう不要です。まるで優秀な右腕のように、最適なデザイン案を自動で提示します。
+            </p>
+            {/* AIエージェント機能の紹介デモ枠（後日クライアント支給のキャプチャ／動画に差し替え予定） */}
+            <div className="flex aspect-[16/8] items-center justify-center rounded-3xl border border-dashed border-emerald-300/20 bg-gradient-to-br from-emerald-500/[0.06] to-neutral-900/40 text-center">
+              <div className="px-6 text-neutral-500">
+                <MessageCircle className="mx-auto mb-3 h-9 w-9 text-emerald-300/70" />
+                <p className="text-sm font-bold text-neutral-300">AIエージェント機能の紹介</p>
+                <p className="mt-1 text-[12px] text-neutral-500">相談の様子をご紹介（キャプチャ／動画を準備中）</p>
               </div>
-            ))}
+            </div>
           </section>
 
           {/* クロージング CTA */}
