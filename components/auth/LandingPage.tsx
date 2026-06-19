@@ -25,19 +25,37 @@ import {
 /** 支給のPR/操作デモ動画（YouTube）。 */
 const YT_ID = 'vANsagUd29M';
 
+/**
+ * 日本語の改行を「文節」単位で行うためのヘルパー（260619 クライアント要望「改行を綺麗に」）。
+ * 各句を inline-block にすると、行末では句の途中（例「プラット/フォーム」）ではなく句の境界で折り返すため、
+ * 語の不自然な分断や孤立文字（例「拡張す/る」）が起きにくい。parts は読点・助詞など意味の切れ目で区切って渡す。
+ * 文字列は分割するだけで増減しない（原稿の文言は変えない）。狭い画面で1句が長すぎる場合のみ句内でも折り返す（破綻回避）。
+ */
+function Jp({ parts }: { parts: readonly string[] }) {
+  return (
+    <>
+      {parts.map((p, i) => (
+        <span key={i} className="inline-block">
+          {p}
+        </span>
+      ))}
+    </>
+  );
+}
+
 const FEATURES = [
-  { icon: PencilRuler, title: '2D作図 → 3D自動生成', desc: '平面を描くだけで床・壁・天井・建具を3D空間へ自動で立ち上げ。' },
-  { icon: Sparkles, title: 'AIフォトリアル レンダリング', desc: '3Dビューをキャプチャし、写実的な建築パースをワンクリックで生成。' },
-  { icon: Ruler, title: '実寸テクスチャ投影', desc: '建材の実寸メタデータから、壁・床に正しい寸法でリピート投影。' },
-  { icon: Calculator, title: '概算見積もり', desc: '建材・家具・巾木・梁を自動集計し、PDF / CSV で書き出し。' },
-  { icon: LayoutGrid, title: 'マテリアルボード', desc: 'A3レイアウトで素材一覧を出力。提案資料がそのまま整う。' },
-  { icon: Share2, title: 'クラウド保存・共有', desc: 'プロジェクトを安全に保存し、閲覧用URLでクライアントへ共有。' },
+  { icon: PencilRuler, title: '2D作図 → 3D自動生成', desc: ['平面を描くだけで', '床・壁・天井・建具を', '3D空間へ自動で立ち上げ。'] },
+  { icon: Sparkles, title: 'AIフォトリアル レンダリング', desc: ['3Dビューをキャプチャし、', '写実的な建築パースを', 'ワンクリックで生成。'] },
+  { icon: Ruler, title: '実寸テクスチャ投影', desc: ['建材の実寸メタデータから、', '壁・床に正しい寸法で', 'リピート投影。'] },
+  { icon: Calculator, title: '概算見積もり', desc: ['建材・家具・巾木・梁を自動集計し、', 'PDF / CSV で書き出し。'] },
+  { icon: LayoutGrid, title: 'マテリアルボード', desc: ['A3レイアウトで素材一覧を出力。', '提案資料がそのまま整う。'] },
+  { icon: Share2, title: 'クラウド保存・共有', desc: ['プロジェクトを安全に保存し、', '閲覧用URLでクライアントへ共有。'] },
 ] as const;
 
 const STEPS = [
-  { icon: PencilRuler, title: '描く', desc: '2Dビューで部屋の輪郭・建具・家具を配置。' },
-  { icon: Box, title: '立ち上げる', desc: '3Dへ自動生成し、素材・天井高・梁を設定。' },
-  { icon: Wand2, title: '仕上げる', desc: 'AIでパース化し、見積もりまで一気通貫。' },
+  { icon: PencilRuler, title: '描く', desc: ['2Dビューで部屋の輪郭・', '建具・家具を配置。'] },
+  { icon: Box, title: '立ち上げる', desc: ['3Dへ自動生成し、', '素材・天井高・梁を設定。'] },
+  { icon: Wand2, title: '仕上げる', desc: ['AIでパース化し、', '見積もりまで一気通貫。'] },
 ] as const;
 
 const GALLERY = [
@@ -95,12 +113,25 @@ export function LandingPage({
                 建築・内装プロのための AI 空間デザイン
               </p>
               <h1 className="text-4xl font-black leading-[1.12] tracking-tight sm:text-6xl lg:text-7xl">
-                あなたの思考を、全方位に拡張する
+                <Jp parts={['あなたの思考を、', '全方位に拡張する']} />
               </h1>
               <p className="mt-6 max-w-2xl text-sm leading-relaxed text-neutral-400 sm:text-base">
-                数日かかっていた提案準備を極限まで削ぎ落とす、クライアントを待たせない実務特化型プラットフォーム。
-                2D作図から3D空間の自動生成、AIによるフォトリアルなイメージを生成、実寸テクスチャ投影、建材の概算見積もりを自動生成。
-                設計・提案スピードを格段に高め、ブラウザ一つで高スペックPCがなくても商談から提案までを一貫してサポートします。
+                <Jp
+                  parts={[
+                    '数日かかっていた提案準備を',
+                    '極限まで削ぎ落とす、',
+                    'クライアントを待たせない',
+                    '実務特化型プラットフォーム。',
+                    '2D作図から3D空間の自動生成、',
+                    'AIによるフォトリアルなイメージを生成、',
+                    '実寸テクスチャ投影、',
+                    '建材の概算見積もりを自動生成。',
+                    '設計・提案スピードを格段に高め、',
+                    'ブラウザ一つで高スペックPCがなくても',
+                    '商談から提案までを',
+                    '一貫してサポートします。',
+                  ]}
+                />
               </p>
               <div className="mt-9 flex flex-wrap items-center gap-3">
                 <button
@@ -117,7 +148,9 @@ export function LandingPage({
                 >
                   機能を見る
                 </a>
-                <span className="text-[12px] text-neutral-500">招待制：招待メールをお持ちの方はログインへ</span>
+                <span className="text-[12px] text-neutral-500">
+                  <Jp parts={['招待制：', '招待メールをお持ちの方はログインへ']} />
+                </span>
               </div>
             </div>
 
@@ -153,15 +186,27 @@ export function LandingPage({
           {/* リード（デザインから概算まで…）＋ 主な機能 */}
           <section id="features" className="scroll-mt-20 py-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
-              デザインから概算まで、
+              <span className="inline-block">デザインから概算まで、</span>
               <br className="hidden sm:block" />
-              思考・商談を途切れさせない
+              <span className="inline-block">思考・商談を途切れさせない</span>
             </h2>
             <p className="mb-14 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
-              2D作図から高精細パース、仕上げ材の自動見積もりまでをシームレスに連携。直感的な操作で設計者のひらめきを即座に視覚化し、日々の業務フローを圧倒的なスピードで変革します。
+              <Jp
+                parts={[
+                  '2D作図から高精細パース、',
+                  '仕上げ材の自動見積もりまでを',
+                  'シームレスに連携。',
+                  '直感的な操作で',
+                  '設計者のひらめきを即座に視覚化し、',
+                  '日々の業務フローを',
+                  '圧倒的なスピードで変革します。',
+                ]}
+              />
             </p>
             <h3 className="mb-2 text-2xl font-black sm:text-3xl">主な機能</h3>
-            <p className="mb-8 text-sm text-neutral-400">設計から提案までを、ひとつのツールで完結。</p>
+            <p className="mb-8 text-sm text-neutral-400">
+              <Jp parts={['設計から提案までを、', 'ひとつのツールで完結。']} />
+            </p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {FEATURES.map((f, i) => {
                 const Icon = f.icon;
@@ -175,7 +220,9 @@ export function LandingPage({
                       <Icon className="h-5 w-5" />
                     </div>
                     <h3 className="text-sm font-bold">{f.title}</h3>
-                    <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{f.desc}</p>
+                    <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">
+                      <Jp parts={f.desc} />
+                    </p>
                   </div>
                 );
               })}
@@ -185,16 +232,29 @@ export function LandingPage({
           {/* リード（直感と実務を繋ぐ…）＋ 3ステップ＋画面キャプチャ */}
           <section className="pb-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
-              直感と実務を繋ぐ、
+              <span className="inline-block">直感と実務を繋ぐ、</span>
               <br className="hidden sm:block" />
-              建築・内装の新たなインフラ
+              <span className="inline-block">建築・内装の新たなインフラ</span>
             </h2>
             <p className="mb-14 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
-              直感的な操作と、寸法・原価を伴う実務的な正確さを両立。設計者、施主、建材メーカー、そして未来の才能までをシームレスに繋ぎ、建築業界の新たなスタンダードを創り出します。
+              <Jp
+                parts={[
+                  '直感的な操作と、',
+                  '寸法・原価を伴う',
+                  '実務的な正確さを両立。',
+                  '設計者、施主、建材メーカー、',
+                  'そして未来の才能までを',
+                  'シームレスに繋ぎ、',
+                  '建築業界の新たなスタンダードを',
+                  '創り出します。',
+                ]}
+              />
             </p>
 
             <h3 className="mb-2 text-2xl font-black sm:text-3xl">3ステップのワークフロー</h3>
-            <p className="mb-8 text-sm text-neutral-400">迷わず、最短距離で提案まで。</p>
+            <p className="mb-8 text-sm text-neutral-400">
+              <Jp parts={['迷わず、', '最短距離で提案まで。']} />
+            </p>
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {STEPS.map((s, i) => {
                 const Icon = s.icon;
@@ -205,7 +265,9 @@ export function LandingPage({
                       <Icon className="h-5 w-5" />
                     </div>
                     <h3 className="text-base font-bold">{s.title}</h3>
-                    <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{s.desc}</p>
+                    <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">
+                      <Jp parts={s.desc} />
+                    </p>
                   </div>
                 );
               })}
@@ -257,19 +319,31 @@ export function LandingPage({
           {/* AIデザイン編集（リード＝「ここを変えたい」…＋デモ枠・260619 クライアントデザイン） */}
           <section className="pb-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
-              「ここを変えたい」に、一瞬で応える。
+              <span className="inline-block">「ここを変えたい」に、一瞬で応える。</span>
               <br className="hidden sm:block" />
-              熱量を逃さないプレゼンツール
+              <span className="inline-block">熱量を逃さないプレゼンツール</span>
             </h2>
             <p className="mb-10 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
-              「壁紙をこうしたい」「床の色を変えたい」。施主の思いつきをその場で形にし、目の前で完成イメージを共有。待ち時間をゼロにし、ワクワクした気持ちのまま意思決定へと導きます。
+              <Jp
+                parts={[
+                  '「壁紙をこうしたい」',
+                  '「床の色を変えたい」。',
+                  '施主の思いつきをその場で形にし、',
+                  '目の前で完成イメージを共有。',
+                  '待ち時間をゼロにし、',
+                  'ワクワクした気持ちのまま',
+                  '意思決定へと導きます。',
+                ]}
+              />
             </p>
             {/* AIデザイン・エリア編集のデモ枠（後日クライアント支給のキャプチャ／動画に差し替え予定） */}
             <div className="flex aspect-[16/8] items-center justify-center rounded-3xl border border-dashed border-purple-300/20 bg-gradient-to-br from-purple-500/[0.06] to-neutral-900/40 text-center">
               <div className="px-6 text-neutral-500">
                 <Wand2 className="mx-auto mb-3 h-9 w-9 text-purple-300/70" />
                 <p className="text-sm font-bold text-neutral-300">AIデザイン・エリア編集のデモ</p>
-                <p className="mt-1 text-[12px] text-neutral-500">画像生成のスピード感をご紹介（キャプチャ／動画を準備中）</p>
+                <p className="mt-1 text-[12px] text-neutral-500">
+                  <Jp parts={['画像生成のスピード感をご紹介', '（キャプチャ／動画を準備中）']} />
+                </p>
               </div>
             </div>
           </section>
@@ -277,19 +351,30 @@ export function LandingPage({
           {/* AIエージェント（リード＝「思考の死角」…＋デモ枠・260619 クライアントデザイン） */}
           <section className="pb-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
-              あなたの「思考の死角」を照らす、
+              <span className="inline-block">あなたの「思考の死角」を照らす、</span>
               <br className="hidden sm:block" />
-              もう一人のデザインパートナー
+              <span className="inline-block">もう一人のデザインパートナー</span>
             </h2>
             <p className="mb-10 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
-              膨大な建材データと過去の文脈を学習したAIが、あなたの設計プロセスに伴走。孤独なアイデアラッシュはもう不要です。まるで優秀な右腕のように、最適なデザイン案を自動で提示します。
+              <Jp
+                parts={[
+                  '膨大な建材データと過去の文脈を',
+                  '学習したAIが、',
+                  'あなたの設計プロセスに伴走。',
+                  '孤独なアイデアラッシュはもう不要です。',
+                  'まるで優秀な右腕のように、',
+                  '最適なデザイン案を自動で提示します。',
+                ]}
+              />
             </p>
             {/* AIエージェント機能の紹介デモ枠（後日クライアント支給のキャプチャ／動画に差し替え予定） */}
             <div className="flex aspect-[16/8] items-center justify-center rounded-3xl border border-dashed border-emerald-300/20 bg-gradient-to-br from-emerald-500/[0.06] to-neutral-900/40 text-center">
               <div className="px-6 text-neutral-500">
                 <MessageCircle className="mx-auto mb-3 h-9 w-9 text-emerald-300/70" />
                 <p className="text-sm font-bold text-neutral-300">AIエージェント機能の紹介</p>
-                <p className="mt-1 text-[12px] text-neutral-500">相談の様子をご紹介（キャプチャ／動画を準備中）</p>
+                <p className="mt-1 text-[12px] text-neutral-500">
+                  <Jp parts={['相談の様子をご紹介', '（キャプチャ／動画を準備中）']} />
+                </p>
               </div>
             </div>
           </section>
@@ -298,12 +383,21 @@ export function LandingPage({
           <section className="pb-20">
             <div className="overflow-hidden rounded-3xl border border-emerald-500/20 bg-gradient-to-br from-emerald-500/10 to-sky-500/5 p-8 text-center sm:p-14">
               <h2 className="text-3xl font-black sm:text-5xl">
-                さあ、
-                <span className="bg-gradient-to-r from-emerald-400 to-sky-400 bg-clip-text text-transparent">起き上がれ</span>
+                <span className="inline-block">さあ、</span>
+                <span className="inline-block bg-gradient-to-r from-emerald-400 to-sky-400 bg-clip-text text-transparent">
+                  起き上がれ
+                </span>
               </h2>
               <p className="mx-auto mt-5 max-w-xl text-[13px] leading-relaxed text-neutral-300">
-                現在 Arise は招待制です。ご利用をご希望の方は運営からの招待メールをご確認ください。
-                招待をお持ちの方は、ログインからご利用を開始できます。
+                <Jp
+                  parts={[
+                    '現在 Arise は招待制です。',
+                    'ご利用をご希望の方は',
+                    '運営からの招待メールをご確認ください。',
+                    '招待をお持ちの方は、',
+                    'ログインからご利用を開始できます。',
+                  ]}
+                />
               </p>
               <button
                 type="button"
