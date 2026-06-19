@@ -144,24 +144,19 @@ export function LandingPage({
         <main className="mx-auto max-w-6xl px-6 sm:px-10">
           {/* ヒーロー */}
           <section className="animate-in fade-in slide-in-from-bottom-2 pt-16 sm:pt-24">
-            <div className="mx-auto max-w-3xl text-center">
+            <div>
               <p className="mb-5 inline-block rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold tracking-wider text-emerald-300">
                 建築・内装プロのための AI 空間デザイン
               </p>
-              <h1 className="text-4xl font-black leading-[1.18] sm:text-6xl">
-                あなたの思考を、
-                <br className="hidden sm:block" />
-                <span className="bg-gradient-to-r from-emerald-400 via-teal-300 to-sky-400 bg-clip-text text-transparent">
-                  全方位
-                </span>
-                に拡張する
+              <h1 className="text-4xl font-black leading-[1.12] tracking-tight sm:text-6xl lg:text-7xl">
+                あなたの思考を、全方位に拡張する
               </h1>
-              <p className="mx-auto mt-6 max-w-2xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              <p className="mt-6 max-w-2xl text-sm leading-relaxed text-neutral-400 sm:text-base">
                 数日かかっていた提案準備を極限まで削ぎ落とす、クライアントを待たせない実務特化型プラットフォーム。
                 2D作図から3D空間の自動生成、AIによるフォトリアルなイメージを生成、実寸テクスチャ投影、建材の概算見積もりを自動生成。
                 設計・提案スピードを格段に高め、ブラウザ一つで高スペックPCがなくても商談から提案までを一貫してサポートします。
               </p>
-              <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
+              <div className="mt-9 flex flex-wrap items-center gap-3">
                 <button
                   type="button"
                   onClick={onLogin}
@@ -176,12 +171,12 @@ export function LandingPage({
                 >
                   機能を見る
                 </a>
+                <span className="text-[12px] text-neutral-500">招待制：招待メールをお持ちの方はログインへ</span>
               </div>
-              <p className="mt-4 text-[12px] text-neutral-500">招待制：招待メールをお持ちの方はログインへ</p>
             </div>
 
             {/* PR / 操作デモ動画 */}
-            <div className="mx-auto mt-12 max-w-4xl">
+            <div className="mt-12">
               <div className="relative aspect-video w-full overflow-hidden rounded-2xl border border-white/10 bg-black shadow-2xl">
                 {playing ? (
                   <iframe
