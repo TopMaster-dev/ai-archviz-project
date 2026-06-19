@@ -6,6 +6,7 @@ import {
   Download,
   ImagePlus,
   Loader2,
+  MessageCircle,
   Plus,
   Sparkles,
   ThumbsDown,
@@ -182,6 +183,8 @@ export function AiEditWorkspace({
   const [compareSlider, setCompareSlider] = useState(50);
   const [objectImageTargetId, setObjectImageTargetId] = useState<string | null>(null);
   const [isSituationCardVisible, setIsSituationCardVisible] = useState(false);
+  // AIエージェント相談パネルの開閉（トリガは「エリア編集」横のタブへ移動。260619 クライアント要望）。
+  const [agentOpen, setAgentOpen] = useState(false);
 
   const styleInputRef = useRef<HTMLInputElement>(null);
   const objectInputRef = useRef<HTMLInputElement>(null);
@@ -938,6 +941,19 @@ export function AiEditWorkspace({
                   <ImagePlus className="w-4 h-4" />
                   エリア編集
                 </button>
+                <button
+                  type="button"
+                  onClick={() => setAgentOpen((o) => !o)}
+                  title="AIエージェントに相談（デザイン・素材・見積の相談）"
+                  className={`flex items-center gap-1 px-3 py-2 rounded-lg border text-xs font-bold transition ${
+                    agentOpen
+                      ? 'bg-emerald-700 border-emerald-500 text-white'
+                      : 'bg-zinc-800 border-white/10 hover:bg-zinc-700'
+                  }`}
+                >
+                  <MessageCircle className="w-4 h-4" />
+                  エージェントに相談
+                </button>
                 <input
                   ref={objectInputRef}
                   type="file"
@@ -1221,7 +1237,12 @@ export function AiEditWorkspace({
       />
 
       {/* AIエージェント相談パネル（管理表 row 208/214・プランA）。折り畳み式・現在画像を文脈に。 */}
-      <AgentChatPanel imageDataUrl={activeVersion?.outputImageDataUrl ?? null} />
+      <AgentChatPanel
+        imageDataUrl={activeVersion?.outputImageDataUrl ?? null}
+        projectId={projectSession?.projectId ?? null}
+        open={agentOpen}
+        onOpenChange={setAgentOpen}
+      />
 
       {/* AI生成中の全面オーバーレイ（クライアント要望 260619: ボタンの小さなスピナーだけでは処理中か
           分かりにくいため、AIデザイン提案/編集実行の実行中をはっきり示す。3Dレンダのオーバーレイと同方針）。 */}
