@@ -26,6 +26,7 @@ import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { resizeDataUrlToSize } from '../utils/resizeDataUrl.js';
+import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
@@ -399,7 +400,10 @@ export function AiEditWorkspace({
       const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
-      const imageSize = '2K';
+      // 生成サイズは動作実績のある AIレンダリングと同じプレビュー用(1K)に揃える。2K のままだと新しい画像
+      // モデル(gemini-3-pro-image-preview)で生成が途中劣化し「白っぽくぼやけた」出力になる事象があった
+      // （AIレンダリングは PREVIEW_GEMINI_IMAGE_SIZE=1K で正常、AIデザイン/編集だけ 2K で異常・260619報告対応）。
+      const imageSize = PREVIEW_GEMINI_IMAGE_SIZE;
 
       const styleScaled = styleImageDataUrl ? await downscaleDataUrlIfNeeded(await ensureDataUrl(styleImageDataUrl)) : null;
       const objectsScaled = await Promise.all(
@@ -530,7 +534,8 @@ export function AiEditWorkspace({
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify({ baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: '2K', learnedHints }),
+        // 生成サイズはAIレンダリングと同じ 1K に揃える（2K だと新画像モデルでぼやけ出力・260619報告対応）。
+        body: JSON.stringify({ baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: PREVIEW_GEMINI_IMAGE_SIZE, learnedHints }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
