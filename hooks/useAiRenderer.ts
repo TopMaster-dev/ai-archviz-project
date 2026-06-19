@@ -42,7 +42,16 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
 
     let successUrl: string | null = null;
     try {
-      const canvas = document.querySelector('canvas');
+      // メインの3Dルームキャンバスを確実に選ぶ（RoomViewer が onCreated で data-arise-room を付与）。
+      // 3Dビュー中は家具サムネイル生成用の隠しキャンバス(256x256)が一時的にマウントされ、DOM 上で
+      // ルームキャンバスより前に来るため、単純な querySelector('canvas') では真っ白/家具のミニ画像を
+      // 掴んでしまい「手前の壁だけ/真っ白」なレンダー結果になる不具合があった（その上で編集すると失敗）。
+      const canvas =
+        (document.querySelector('canvas[data-arise-room]') as HTMLCanvasElement | null) ||
+        Array.from(document.querySelectorAll('canvas'))
+          .filter((c) => c.width > 256 && c.height > 256)
+          .sort((a, b) => b.width * b.height - a.width * a.height)[0] ||
+        document.querySelector('canvas');
       if (!canvas) throw new Error("Canvas not found");
       
       const rawImage = canvas.toDataURL('image/png');

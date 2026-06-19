@@ -53,6 +53,44 @@ export function resolveAgentModel(): string {
   return resolveEnvModel('GEMINI_AGENT_MODEL') || resolvePlacementCaptionModel();
 }
 
+/**
+ * Gemini 画像応答から生成画像のデータURLを取り出す。画像が無い場合は、原因（finishReason・
+ * セーフティ等のブロック理由・モデルが返したテキスト）を含む日本語エラーを投げる。
+ * UI の「全く書き出されない」を、原因の分かる具体的なメッセージにするため（260619 クライアント報告対応）。
+ */
+function extractGeneratedImage(result: any): string {
+  const candidate = result?.candidates?.[0];
+  const parts = candidate?.content?.parts;
+  if (Array.isArray(parts)) {
+    for (const part of parts) {
+      if (part.inlineData?.data && part.inlineData?.mimeType) {
+        return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+      }
+      if (typeof part.text === 'string' && part.text.includes('data:image')) {
+        return part.text;
+      }
+    }
+  }
+  // 画像が無い: 可能な限り原因を具体的に伝える。
+  const finish = candidate?.finishReason;
+  const block = result?.promptFeedback?.blockReason;
+  const textNote = Array.isArray(parts)
+    ? parts.map((p: any) => (typeof p.text === 'string' ? p.text : '')).join(' ').trim().slice(0, 200)
+    : '';
+  const reasons: string[] = [];
+  if (block) reasons.push(`ブロック理由: ${block}`);
+  if (finish && finish !== 'STOP') reasons.push(`finishReason: ${finish}`);
+  if (!reasons.length && !candidate) reasons.push('候補なし（応答が空）');
+  const detail = reasons.join(' / ') || '原因不明';
+  const hint =
+    finish === 'IMAGE_SAFETY' || block
+      ? 'セーフティフィルタにより画像が生成されませんでした。別の画像や指示でお試しください。'
+      : finish === 'MAX_TOKENS'
+        ? '生成が途中で打ち切られました。画像サイズを下げて再試行してください。'
+        : '画像が生成されませんでした。少し時間をおいて再試行してください。';
+  throw new Error(`${hint}（${detail}）${textNote ? ` 応答: ${textNote}` : ''}`);
+}
+
 export function parseImageDataUrl(dataUrl: string): { mimeType: string; base64: string } {
   const m = dataUrl.match(/^data:(image\/[a-z0-9+.-]+);base64,(.+)$/i);
   if (m) {
@@ -283,27 +321,7 @@ export async function generateGeminiImageEdit(
   }
 
   const result = await response.json();
-  const candidate = result.candidates?.[0];
-  if (!candidate?.content?.parts?.length) {
-    throw new Error('No candidates returned from Gemini API');
-  }
-
-  let dataUrl = '';
-  for (const part of candidate.content.parts) {
-    if (part.inlineData?.data && part.inlineData?.mimeType) {
-      dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-      break;
-    }
-    if (part.text?.includes('data:image')) {
-      dataUrl = part.text;
-      break;
-    }
-  }
-
-  if (!dataUrl) {
-    throw new Error('Could not extract image data from response.');
-  }
-  return { url: dataUrl, usage: readUsage(result) };
+  return { url: extractGeneratedImage(result), usage: readUsage(result) };
 }
 
 export type GeminiClayRenderOptions = {
@@ -396,23 +414,5 @@ ${userInstruction}
   }
 
   const result = await response.json();
-  const candidate = result.candidates?.[0];
-  if (!candidate?.content?.parts?.length) {
-    throw new Error('No candidates returned from Gemini API');
-  }
-
-  let dataUrl = '';
-  for (const part of candidate.content.parts) {
-    if (part.inlineData?.data && part.inlineData?.mimeType) {
-      dataUrl = `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-      break;
-    }
-    if (part.text?.includes('data:image')) {
-      dataUrl = part.text;
-      break;
-    }
-  }
-
-  if (!dataUrl) throw new Error('Could not extract image data from response.');
-  return { url: dataUrl, usage: readUsage(result) };
+  return { url: extractGeneratedImage(result), usage: readUsage(result) };
 }

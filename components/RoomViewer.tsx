@@ -3098,6 +3098,11 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
           toneMapping: THREE.ACESFilmicToneMapping,
           toneMappingExposure: 0.85
         }}
+        onCreated={({ gl }) => {
+          // AIレンダリングのスナップショットが、隠しサムネイル生成用キャンバス等ではなく
+          // このメイン3Dルームキャンバスを確実に選べるよう目印を付ける（useAiRenderer 参照）。
+          gl.domElement.dataset.ariseRoom = '1';
+        }}
         onPointerMissed={(e) => {
             if (isInteractionSuppressed()) return;
             if (e.type === 'click') {
