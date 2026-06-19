@@ -39,9 +39,9 @@ const FEATURES = [
 ] as const;
 
 const STEPS = [
-  { icon: PencilRuler, title: '描く', desc: '2Dビューで部屋の輪郭・建具・家具を配置。', img: '/lp/living-dusk-thumb.jpg', alt: '2Dで作図したプランから生成したLDKの3Dパース' },
-  { icon: Box, title: '立ち上げる', desc: '3Dへ自動生成し、素材・天井高・梁を設定。', img: '/lp/living-green-thumb.jpg', alt: '折り上げ天井のリビングを3Dで立ち上げた様子' },
-  { icon: Wand2, title: '仕上げる', desc: 'AIでパース化し、見積もりまで一気通貫。', img: '/lp/bedroom-thumb.jpg', alt: 'AIでフォトリアルに仕上げたベッドルームのパース' },
+  { icon: PencilRuler, title: '描く', desc: '2Dビューで部屋の輪郭・建具・家具を配置。' },
+  { icon: Box, title: '立ち上げる', desc: '3Dへ自動生成し、素材・天井高・梁を設定。' },
+  { icon: Wand2, title: '仕上げる', desc: 'AIでパース化し、見積もりまで一気通貫。' },
 ] as const;
 
 const GALLERY = [
@@ -51,13 +51,6 @@ const GALLERY = [
 ] as const;
 
 const SHOWCASE = [
-  {
-    eyebrow: 'INFRASTRUCTURE',
-    title: '直感と実務を繋ぐ、建築・内装の新たなインフラ',
-    desc: '直感的な操作と、寸法・原価を伴う実務的な正確さを両立。設計者、施主、建材メーカー、そして未来の才能までをシームレスに繋ぎ、建築業界の新たなスタンダードを創り出します。',
-    img: '/lp/living-green.jpg',
-    alt: 'グリーンの折り上げ天井リビングの精緻なAIパース',
-  },
   {
     eyebrow: 'PRESENTATION',
     title: '「ここを変えたい」に、一瞬で応える。熱量を逃さないプレゼンツール',
@@ -225,25 +218,52 @@ export function LandingPage({
             </div>
           </section>
 
-          {/* ワークフロー（3ステップ＋実例画像） */}
+          {/* リード（直感と実務を繋ぐ…）＋ 3ステップ＋画面キャプチャ */}
           <section className="pb-20">
-            <h2 className="mb-2 text-2xl font-black sm:text-3xl">3ステップのワークフロー</h2>
+            <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
+              直感と実務を繋ぐ、
+              <br className="hidden sm:block" />
+              建築・内装の新たなインフラ
+            </h2>
+            <p className="mb-14 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              直感的な操作と、寸法・原価を伴う実務的な正確さを両立。設計者、施主、建材メーカー、そして未来の才能までをシームレスに繋ぎ、建築業界の新たなスタンダードを創り出します。
+            </p>
+
+            <h3 className="mb-2 text-2xl font-black sm:text-3xl">3ステップのワークフロー</h3>
             <p className="mb-8 text-sm text-neutral-400">迷わず、最短距離で提案まで。</p>
-            <div className="grid grid-cols-1 gap-5 sm:grid-cols-3">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
               {STEPS.map((s, i) => {
                 const Icon = s.icon;
                 return (
-                  <div key={s.title} className="overflow-hidden rounded-2xl border border-white/10 bg-neutral-900/40">
-                    <div className="relative">
-                      <img src={s.img} alt={s.alt} loading="lazy" className="aspect-video w-full object-cover" />
-                      <span className="absolute right-3 top-2 text-4xl font-black text-white/20">{i + 1}</span>
+                  <div key={s.title} className="relative rounded-2xl border border-white/10 bg-neutral-900/40 p-6">
+                    <span className="absolute right-5 top-4 text-5xl font-black text-white/5">{i + 1}</span>
+                    <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-white/5 text-emerald-300">
+                      <Icon className="h-5 w-5" />
                     </div>
-                    <div className="p-5">
-                      <div className="mb-2 inline-flex h-10 w-10 items-center justify-center rounded-xl bg-white/5 text-emerald-300">
-                        <Icon className="h-5 w-5" />
-                      </div>
-                      <h3 className="text-base font-bold">{s.title}</h3>
-                      <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{s.desc}</p>
+                    <h3 className="text-base font-bold">{s.title}</h3>
+                    <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">{s.desc}</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* 2D / 3D / AI画像編集 の画面キャプチャ枠（後日クライアント支給のスクリーンショットに差し替え予定） */}
+            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
+              {[
+                { label: '2Dビュー', icon: PencilRuler },
+                { label: '3Dビュー', icon: Box },
+                { label: 'AI画像編集', icon: Wand2 },
+              ].map((s) => {
+                const Icon = s.icon;
+                return (
+                  <div
+                    key={s.label}
+                    className="flex aspect-video items-center justify-center rounded-2xl border border-dashed border-white/15 bg-neutral-900/40 text-center"
+                  >
+                    <div className="text-neutral-500">
+                      <Icon className="mx-auto mb-2 h-7 w-7" />
+                      <p className="text-[12px] font-bold text-neutral-400">{s.label}</p>
+                      <p className="mt-0.5 text-[10px] text-neutral-600">画面キャプチャを準備中</p>
                     </div>
                   </div>
                 );
