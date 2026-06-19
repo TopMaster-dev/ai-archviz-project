@@ -43,10 +43,20 @@ const BY_NAME: Record<string, FurnitureProductMeta> = {
   floor_lamp_2: { brand: 'サンプル照明', modelNumber: 'SMPL-LP-002', price: 18800, productUrl: 'https://example.com/products/floor-lamp-2' },
 };
 
-/** カテゴリ（type）単位の既定。個別（id/name）が無いときのフォールバック。品番/URLは商品固有のため通常は入れない。 */
+/**
+ * カテゴリ（type）単位の既定。個別（id/name）が無いときのフォールバック。
+ * 本番では家具カタログは Cloudinary 由来のため、ローカル同梱モデル(BY_NAME)は表示されない。そこで
+ * 「どの家具を置いても見積もりに自動反映される」動作確認用として、主要カテゴリにダミー値を入れてある。
+ * カテゴリ共通のためブランド/品番/URLはあくまで雛形——実運用では各商品を BY_NAME/BY_ID に登録して上書きするか、
+ * 本番投入前にこの BY_TYPE を削除/実データ化する。type は api/furniture（Cloudinary）の推定カテゴリ名に準拠。
+ */
 const BY_TYPE: Record<string, FurnitureProductMeta> = {
-  // 例: 個別データが揃うまでの暫定単価。必要なら有効化してください。
-  // Sofa: { price: 98000 },
+  Sofa: { brand: '（例）サンプル・ファニチャー', modelNumber: 'SAMPLE-SOFA', price: 128000, productUrl: 'https://example.com/products/sofa' },
+  Chair: { brand: '（例）サンプル・ファニチャー', modelNumber: 'SAMPLE-CHAIR', price: 24800, productUrl: 'https://example.com/products/chair' },
+  Table: { brand: '（例）サンプル・ファニチャー', modelNumber: 'SAMPLE-TABLE', price: 58000, productUrl: 'https://example.com/products/table' },
+  Bed: { brand: '（例）サンプル・ファニチャー', modelNumber: 'SAMPLE-BED', price: 98000, productUrl: 'https://example.com/products/bed' },
+  Lamp: { brand: '（例）サンプル照明', modelNumber: 'SAMPLE-LAMP', price: 15800, productUrl: 'https://example.com/products/lamp' },
+  Storage: { brand: '（例）サンプル・ファニチャー', modelNumber: 'SAMPLE-STRG', price: 45000, productUrl: 'https://example.com/products/storage' },
 };
 
 function mergePreferringFirst(metas: (FurnitureProductMeta | undefined)[]): FurnitureProductMeta {
