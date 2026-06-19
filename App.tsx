@@ -41,6 +41,7 @@ import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
 import { listUserUploads } from './lib/db/uploads.js';
 import { toStoredImage } from './lib/db/aiRenderStorage.js';
+import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
@@ -2074,6 +2075,9 @@ const App: React.FC = () => {
       // 天伏図で配置した家具は天井オブジェクト（ceilingMount）として扱い、天井高さに配置する。
       // ただし 3D ビューでの配置は常に「床」をデフォルトにする（天伏図モードは 2D 専用の判定）。
       const placeOnCeiling = viewMode === '3D' ? false : isCeilingView;
+      // Tier1（260620）: 配置時に商品メタ（メーカー/品番/単価/商品URL）を見積もりへ自動反映する。
+      // カタログ item 自身の値を優先し、無ければ furnitureProductMeta の対応表から補完（id→name→type）。
+      const productMeta = getFurnitureProductMeta(catalogItem);
       const newItem: FurnitureItem = {
           id,
           type: catalogItem.type,
@@ -2087,7 +2091,11 @@ const App: React.FC = () => {
             depth: Number.isFinite(meta.depthMm ?? NaN) ? (meta.depthMm as number) : 700
           },
           modelForwardYawDeg: meta.forwardYawDeg ?? 0,
-          ceilingMount: placeOnCeiling
+          ceilingMount: placeOnCeiling,
+          customBrand: catalogItem.brand ?? productMeta.brand,
+          customPrice: catalogItem.price ?? productMeta.price,
+          modelNumber: catalogItem.modelNumber ?? productMeta.modelNumber,
+          productUrl: catalogItem.productUrl ?? productMeta.productUrl,
       };
       setFurnitureItems(prev => [...prev, newItem]);
       setActiveFurnitureId(id);

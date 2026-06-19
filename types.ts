@@ -46,6 +46,14 @@ export interface FurnitureCatalogItem {
   defaultScale?: number;
   footprint2d?: { widthMm: number; depthMm: number };
   forwardYawDeg?: number;
+  /** 見積もり連携用の商品メタ（任意・260620 Tier1）。未設定時は配置時に furnitureProductMeta から補完する。 */
+  brand?: string;
+  /** 品番/型番。 */
+  modelNumber?: string;
+  /** 単価（円）。見積もりの「単価 × 数量」に使う。 */
+  price?: number;
+  /** 商品ページURL。 */
+  productUrl?: string;
 }
 
 export interface Product {
