@@ -667,6 +667,29 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     placeholder="メモ（任意）"
                     className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
                   />
+                  <input
+                    value={f.modelNumber ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setFurnitureItems((prev) => prev.map((item) => (item.id === f.id ? { ...item, modelNumber: v } : item)));
+                    }}
+                    placeholder="品番（任意）"
+                    className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                  />
+                  <div className="mt-1.5 flex items-center gap-1">
+                    <input
+                      value={f.productUrl ?? ''}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setFurnitureItems((prev) => prev.map((item) => (item.id === f.id ? { ...item, productUrl: v } : item)));
+                      }}
+                      placeholder="商品URL（任意）"
+                      className="flex-1 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                    />
+                    {f.productUrl && /^https?:\/\//i.test(f.productUrl) ? (
+                      <a href={f.productUrl} target="_blank" rel="noopener noreferrer" title="商品ページを開く" className="shrink-0 rounded px-1.5 py-1 text-[11px] text-emerald-400 hover:bg-white/10">↗</a>
+                    ) : null}
+                  </div>
                   {!(f.customPrice && f.customPrice > 0) && (
                     <div className="mt-1 text-[10px] font-black text-amber-300">価格未入力</div>
                   )}
@@ -733,6 +756,25 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     placeholder="メモ（任意）"
                     className="mt-2 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
                   />
+                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+                    <input
+                      value={item.modelNumber ?? ''}
+                      onChange={(e) => handleUpdateAiEstimateItem(item.id, { modelNumber: e.target.value })}
+                      placeholder="品番（任意）"
+                      className="rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                    />
+                    <div className="flex items-center gap-1">
+                      <input
+                        value={item.productUrl ?? ''}
+                        onChange={(e) => handleUpdateAiEstimateItem(item.id, { productUrl: e.target.value })}
+                        placeholder="商品URL（任意）"
+                        className="flex-1 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                      />
+                      {item.productUrl && /^https?:\/\//i.test(item.productUrl) ? (
+                        <a href={item.productUrl} target="_blank" rel="noopener noreferrer" title="商品ページを開く" className="shrink-0 rounded px-1.5 py-1 text-[11px] text-emerald-400 hover:bg-white/10">↗</a>
+                      ) : null}
+                    </div>
+                  </div>
                   {missing && <div className="mt-1 text-[10px] font-black text-amber-300">名称・ブランド・金額の入力で完了になります</div>}
                 </div>
               );

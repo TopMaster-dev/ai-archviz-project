@@ -29,6 +29,10 @@ export interface FurnitureItem {
   customPrice?: number;
   /** 見積もりの備考メモ（4c）。scene.furniture に含まれ永続化される。 */
   customMemo?: string;
+  /** 商品の品番/型番（見積用・任意・260619 クライアント要望）。scene.furniture に含まれ永続化される。 */
+  modelNumber?: string;
+  /** 商品ページの URL（見積用・任意・260619）。 */
+  productUrl?: string;
   /** 天井オブジェクトとして天井高に配置するか（true のとき position[1] を天井高に置く） */
   ceilingMount?: boolean;
 }
@@ -160,6 +164,10 @@ export interface AiEstimateItem {
   brand: string;
   price?: number;
   memo?: string;
+  /** 品番/型番（任意・260619 クライアント要望）。 */
+  modelNumber?: string;
+  /** 商品ページの URL（任意・260619）。 */
+  productUrl?: string;
 }
 
 /** 3D カメラプリセット。cameraMode 省略時は自由視点（Orbit） */

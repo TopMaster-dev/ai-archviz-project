@@ -305,7 +305,10 @@ export function buildEstimateExportPayload(
       quantity: 1,
       unitPrice: roundYen(price),
       amount: roundYen(price),
-      remark: (f.customMemo ?? '').trim(),
+      remark: [f.customMemo, f.modelNumber ? `品番:${f.modelNumber}` : '', f.productUrl ? `URL:${f.productUrl}` : '']
+        .map((s) => (s ?? '').trim())
+        .filter(Boolean)
+        .join(' / '),
       sectionType: '3D確定',
       inputStatus: price > 0 ? '完了' : '未入力',
     });
@@ -322,7 +325,10 @@ export function buildEstimateExportPayload(
       quantity: 1,
       unitPrice: roundYen(price),
       amount: roundYen(price),
-      remark: (item.memo ?? '').trim(),
+      remark: [item.memo, item.modelNumber ? `品番:${item.modelNumber}` : '', item.productUrl ? `URL:${item.productUrl}` : '']
+        .map((s) => (s ?? '').trim())
+        .filter(Boolean)
+        .join(' / '),
       sectionType: 'AI追加',
       inputStatus: price > 0 ? '完了' : '未入力',
     });
