@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { temporal } from 'zundo';
 import { immer } from 'zustand/middleware/immer';
-import type { FurnitureItem, Point, Opening } from '../../types.js';
+import type { FurnitureItem, Point, Opening, AiEstimateItem } from '../../types.js';
 import {
   createEmptyProjectState,
   PROJECT_SCHEMA_VERSION,
@@ -26,6 +26,8 @@ export interface ProjectStoreState {
   sketch: ProjectState['sketch'];
   scene: ProjectState['scene'];
   materials: ProjectState['materials'];
+  /** 概算見積の手動AI追加アイテム（Undo 対象・autosave 連動。260619）。 */
+  estimate: ProjectState['estimate'];
   // --- Undo 対象外 ---
   aiEdit: ProjectState['aiEdit'];
   camera: ProjectState['camera'];
@@ -51,6 +53,9 @@ export interface ProjectStoreState {
   // materials（App.tsx の setState 互換ブリッジ用に、配列ならぬマップを丸ごと置き換える）
   setSelections(selections: ProjectState['materials']['selections']): void;
   setMaterialSettings(materialSettings: ProjectState['materials']['materialSettings']): void;
+
+  // estimate（手動「AI追加アイテム」・260619。永続化＝toProjectState/loadProjectState 経由）
+  setAiEstimateItems(items: ProjectState['estimate']['aiItems']): void;
 
   // selection (transient)
   select(ids: string[]): void;
@@ -79,6 +84,7 @@ export const useProjectStore = create<ProjectStoreState>()(
       sketch: initial.sketch,
       scene: initial.scene,
       materials: initial.materials,
+      estimate: initial.estimate,
       aiEdit: initial.aiEdit,
       camera: initial.camera,
       selectedIds: [],
@@ -141,6 +147,11 @@ export const useProjectStore = create<ProjectStoreState>()(
       setMaterialSettings: (materialSettings) =>
         set((s) => {
           s.materials.materialSettings = materialSettings;
+        }),
+
+      setAiEstimateItems: (items) =>
+        set((s) => {
+          s.estimate.aiItems = items;
         }),
 
       select: (ids) =>
@@ -221,6 +232,9 @@ export const useProjectStore = create<ProjectStoreState>()(
           s.camera = {
             presets: src.camera?.presets ?? d.camera.presets,
           };
+          s.estimate = {
+            aiItems: src.estimate?.aiItems ?? d.estimate.aiItems,
+          };
           s.selectedIds = [];
         }),
       reset: () =>
@@ -232,6 +246,7 @@ export const useProjectStore = create<ProjectStoreState>()(
           s.materials = e.materials;
           s.aiEdit = e.aiEdit;
           s.camera = e.camera;
+          s.estimate = e.estimate;
           s.selectedIds = [];
         }),
       toProjectState: () => {
@@ -244,15 +259,17 @@ export const useProjectStore = create<ProjectStoreState>()(
           materials: s.materials,
           aiEdit: s.aiEdit,
           camera: s.camera,
+          estimate: s.estimate,
         };
       },
     })),
     {
       limit: 100,
       // 履歴に乗せるのはドキュメントのみ（選択・aiEdit・camera は除外）。
-      partialize: (s) => ({ sketch: s.sketch, scene: s.scene, materials: s.materials }),
+      partialize: (s) => ({ sketch: s.sketch, scene: s.scene, materials: s.materials, estimate: s.estimate }),
       // immer は不変更新時に参照を保つため、参照比較で no-op / 選択のみ変更を履歴から除外。
-      equality: (a, b) => a.sketch === b.sketch && a.scene === b.scene && a.materials === b.materials,
+      equality: (a, b) =>
+        a.sketch === b.sketch && a.scene === b.scene && a.materials === b.materials && a.estimate === b.estimate,
     },
   ),
 );

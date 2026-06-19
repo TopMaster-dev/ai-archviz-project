@@ -6,6 +6,7 @@ import type {
   CameraPreset,
   AiEditVersion,
   AiEditObjectReference,
+  AiEstimateItem,
 } from '../../types.js';
 
 // プロジェクトの統合状態（projects.data jsonb に永続化する「正」の形）。
@@ -107,6 +108,10 @@ export interface ProjectState {
   camera: {
     presets: CameraPreset[];
   };
+  /** 概算見積の手動「AI追加アイテム」（3D未配置の見積行）。永続化対象（260619 クライアント要望）。 */
+  estimate: {
+    aiItems: AiEstimateItem[];
+  };
 }
 
 export function createEmptyProjectState(): ProjectState {
@@ -118,5 +123,6 @@ export function createEmptyProjectState(): ProjectState {
     materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },
     camera: { presets: [] },
+    estimate: { aiItems: [] },
   };
 }

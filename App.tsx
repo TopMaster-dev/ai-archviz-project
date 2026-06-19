@@ -943,7 +943,19 @@ const App: React.FC = () => {
   // 右サイドバー（見積＋カタログ）の開閉。xl 未満では画面を覆うドロワー（既定は閉=キャンバス全幅）、
   // xl 以上では常時表示の固定カラム（CSS で制御）。狭い画面でパネルがキャンバスを潰す問題（row 13）の解消。
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [aiEstimateItems, setAiEstimateItems] = useState<AiEstimateItem[]>([]);
+  // 手動「AI追加アイテム」はプロジェクトに永続化（260619）。useState からストア連動へ橋渡し。
+  const aiEstimateItems = useProjectStore((s) => s.estimate.aiItems);
+  const setAiEstimateItems = useCallback<React.Dispatch<React.SetStateAction<AiEstimateItem[]>>>(
+    (action) => {
+      const current = useProjectStore.getState().estimate.aiItems;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: AiEstimateItem[]) => AiEstimateItem[])(current)
+          : action;
+      useProjectStore.getState().setAiEstimateItems(next);
+    },
+    []
+  );
   const [materialUnitPriceOverrides, setMaterialUnitPriceOverrides] = useState<Record<string, number>>({});
   // 建材ラインのメモ（productId キー、セッション内のみ）（4c）。
   const [materialMemoOverrides, setMaterialMemoOverrides] = useState<Record<string, string>>({});
