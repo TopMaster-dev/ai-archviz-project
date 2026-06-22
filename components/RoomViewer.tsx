@@ -3264,13 +3264,21 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             centerMm={sketchFloorPolygon?.centerMm}
                             polygonMm={sketchFloorPolygon?.polygonMm}
                             onFurniturePatch={(id, position, rotation) => {
-                              onFurnitureUpdate((prev) =>
-                                prev.map((f) =>
-                                  f.id === id
-                                    ? { ...f, position, ...(rotation ? { rotation } : {}) }
-                                    : f
-                                )
-                              );
+                              const moveSet = new Set(useProjectStore.getState().selectedIds);
+                              onFurnitureUpdate((prev) => {
+                                const target = prev.find((f) => f.id === id);
+                                // 移動（rotation 無し）かつ複数選択中は、選択メンバー全員を同じ差分で動かす（260623・Cフェーズ3）。
+                                const groupMove = !!target && !rotation && moveSet.size > 1 && moveSet.has(id);
+                                const dx = target ? position[0] - target.position[0] : 0;
+                                const dz = target ? position[2] - target.position[2] : 0;
+                                return prev.map((f) => {
+                                  if (f.id === id) return { ...f, position, ...(rotation ? { rotation } : {}) };
+                                  if (groupMove && moveSet.has(f.id)) {
+                                    return { ...f, position: [f.position[0] + dx, f.position[1], f.position[2] + dz] as [number, number, number] };
+                                  }
+                                  return f;
+                                });
+                              });
                             }}
                             onFurnitureDragStart={beginDragInteraction}
                             onFurnitureDragEnd={endDragInteraction}

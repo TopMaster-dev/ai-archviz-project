@@ -1520,13 +1520,23 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const pv = furnitureInteractionPreviewRef.current;
     furnitureInteractionPreviewRef.current = null;
     if (pv?.kind === 'move') {
-      onFurnitureUpdate((prev) =>
-        prev.map((f) => {
-          if (f.id !== pv.id) return f;
-          const nextPosition = mmToFurniturePosition(pv.centerMm, f.position[1], centerMm);
-          return { ...f, position: nextPosition };
-        })
-      );
+      const moveSet = new Set(useProjectStore.getState().selectedIds);
+      onFurnitureUpdate((prev) => {
+        const dragged = prev.find((f) => f.id === pv.id);
+        if (!dragged) return prev;
+        const nextPosition = mmToFurniturePosition(pv.centerMm, dragged.position[1], centerMm);
+        const dx = nextPosition[0] - dragged.position[0];
+        const dz = nextPosition[2] - dragged.position[2];
+        // 複数選択（グループ含む）中は、選択メンバー全員を同じ差分で動かす（260623・Cフェーズ3）。
+        const groupMove = moveSet.size > 1 && moveSet.has(pv.id);
+        return prev.map((f) => {
+          if (f.id === pv.id) return { ...f, position: nextPosition };
+          if (groupMove && moveSet.has(f.id)) {
+            return { ...f, position: [f.position[0] + dx, f.position[1], f.position[2] + dz] as [number, number, number] };
+          }
+          return f;
+        });
+      });
     } else if (pv?.kind === 'rotate') {
       onFurnitureUpdate((prev) =>
         prev.map((f) =>

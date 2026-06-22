@@ -2054,7 +2054,13 @@ const App: React.FC = () => {
       const sel = useProjectStore.getState().selectedIds;
       setActiveFurnitureId(sel.includes(id) ? id : sel.length ? sel[sel.length - 1] : null);
     } else {
-      store.select([id]);
+      // グループに属していればグループ全体を選択（クリックでグループ単位選択・260623・Cフェーズ3）。
+      const group = store.scene.groups.find((g) => g.memberIds.includes(id));
+      if (group && group.memberIds.length > 1) {
+        store.select(group.memberIds);
+      } else {
+        store.select([id]);
+      }
       setActiveFurnitureId(id);
     }
   };
@@ -3972,6 +3978,14 @@ const App: React.FC = () => {
                       <li className="flex items-center gap-3">
                           <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+V</div>
                           <span className="text-neutral-300 text-[11px]"><strong className="text-white">ペースト</strong></span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+G</div>
+                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">グループ化</strong></span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                          <div className="bg-white/10 px-2 py-1.5 rounded-xl border border-white/10 text-[9px] font-mono text-neutral-300">Ctrl+⇧+G</div>
+                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">グループ解除</strong></span>
                       </li>
               </ul>
           </div>
