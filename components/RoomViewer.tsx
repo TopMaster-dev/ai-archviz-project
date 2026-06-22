@@ -7,6 +7,8 @@ import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ModelRoot } from './ModelRoot.js';
 import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
+import { useStore } from 'zustand';
+import { useProjectStore } from '../lib/store/projectStore.js';
 import { EffectComposer as ThreeEffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
@@ -1263,7 +1265,7 @@ const FurnitureRingAnchor: React.FC<{
 const GLTFFurniture: React.FC<{
     item: FurnitureItem;
     isSelected: boolean;
-    onSelect?: () => void;
+    onSelect?: (additive?: boolean) => void;
     isDraggingRef: React.MutableRefObject<boolean>;
     snapshotMode: boolean;
     maskMode?: boolean;
@@ -1501,8 +1503,14 @@ const GLTFFurniture: React.FC<{
     const onBodyPointerDown = (e: ThreeEvent<PointerEvent>) => {
         if (captureStep === 'mask' || maskMode || snapshotMode) return;
         e.stopPropagation();
+        // shift / ctrl / cmd: 複数選択トグル（移動は開始しない）。260623・Cフェーズ2b
+        const additive = e.nativeEvent.shiftKey || e.nativeEvent.ctrlKey || e.nativeEvent.metaKey;
+        if (additive) {
+            onSelect?.(true);
+            return;
+        }
         if (!isSelected) {
-            onSelect?.();
+            onSelect?.(false);
             return;
         }
         if (!showTc) return;
@@ -3077,14 +3085,19 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   const controlsGloballyLocked =
     snapshotMode || maskMode || !!isRendering || captureStep === 'mask';
 
+  // 複数選択(store.selectedIds)を 3D アウトラインへ反映するため購読（260623・Cフェーズ2b）。
+  const selectedIds = useStore(useProjectStore, (s) => s.selectedIds);
+
   const selectedNames = useMemo(() => {
     const names = [...activeMeshes];
     if (activeFurnitureId) names.push(`${FURNITURE_NAME_PREFIX}${activeFurnitureId}`);
+    // 複数選択（selectedIds）も全てアウトライン。activeFurnitureId と重複しても OutlinePass 側で Set 化される。
+    for (const id of selectedIds) names.push(`${FURNITURE_NAME_PREFIX}${id}`);
     if (selectedOpeningId) names.push(`${OPENING_NAME_PREFIX}${selectedOpeningId}`);
     // 2d: 選択中の梁も他オブジェクトと同じ OutlinePass で強調する。
     if (selectedBeam3DId) names.push(`Beam_${selectedBeam3DId}`);
     return names;
-  }, [activeMeshes, activeFurnitureId, selectedOpeningId, selectedBeam3DId]);
+  }, [activeMeshes, activeFurnitureId, selectedIds, selectedOpeningId, selectedBeam3DId]);
 
   return (
     <div className="w-full h-full bg-[#0a0a0a] relative">
@@ -3242,7 +3255,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                     {hideFurniture ? null : furnitureItems.map((item) => (
                         <GLTFFurniture
                             key={item.id} item={item} isSelected={activeFurnitureId === item.id}
-                            onSelect={() => { setSelectedBeam3DId(null); onBeamSelect3D?.(null); onFurnitureSelect(item.id); }}
+                            onSelect={(additive) => { setSelectedBeam3DId(null); onBeamSelect3D?.(null); onFurnitureSelect(item.id, additive); }}
                             isDraggingRef={isDraggingRef}
                             snapshotMode={snapshotMode || false}
                             maskMode={maskMode}
