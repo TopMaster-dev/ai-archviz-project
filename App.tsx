@@ -12,7 +12,6 @@ import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { FurnitureAssetStrip, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
-import { UploadPanel } from './components/UploadPanel.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
 import { lookDirection } from './utils/walkthrough.js';
@@ -41,11 +40,11 @@ import { useShellNav } from './lib/shell/shellNavContext.js';
 import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
-import { listUserUploads } from './lib/db/uploads.js';
+import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/uploads.js';
 import { toStoredImage } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
-import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -1139,6 +1138,8 @@ const App: React.FC = () => {
   // URLのファイル名からカテゴリを自動判定し、日本語化する
   const processedCatalog = useMemo(() => {
         return furnitureCatalog.map(item => {
+            // アップロード資産はファイル名に依らず「アップロード」カテゴリへ固定（「＋」で追加した場所に集約・260623）。
+            if (item.type === UPLOAD_FURNITURE_TYPE) return { ...item };
             const urlParts = item.url.split('/');
             const fileNameWithExt = decodeURIComponent(urlParts[urlParts.length - 1]);
             const fileName = fileNameWithExt.split('.')[0]; 
@@ -1165,7 +1166,9 @@ const App: React.FC = () => {
     }, [furnitureCatalog]);
 
   const assetCategories = useMemo(() => {
-    return Array.from(new Set(processedCatalog.map(item => item.type)));
+    // 「アップロード」は常に最後に表示する（0件でも「＋3Dモデル追加」を出せるように・260623）。
+    const types = Array.from(new Set(processedCatalog.map(item => item.type))).filter((t) => t !== UPLOAD_FURNITURE_TYPE);
+    return [...types, UPLOAD_FURNITURE_TYPE];
   }, [processedCatalog]);
 
   const [hideFurniture, setHideFurniture] = useState(false);
@@ -1696,31 +1699,30 @@ const App: React.FC = () => {
     })();
   }, []);
 
-  // マイ素材（アップロード済みテクスチャ）をエディタの素材一覧へ再同期する。2Dの「マイ素材」モーダルで
-  // アップロード/削除/カテゴリ変更した結果を即座に反映する（新規は前置、削除済みの upload-tex は除去）。
-  const refreshTextureUploads = useCallback(async () => {
+  // 3Dモデルのアップロード（260623: 旧「マイ素材」モーダルを廃止し、家具ストリップの「アップロード」内の
+  // 「＋」から3Dモデルを追加できるようにする）。アップロード成功で即座にカタログへ反映する。
+  const modelUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const handleUploadModelClick = useCallback(() => {
+    modelUploadInputRef.current?.click();
+  }, []);
+  const handleModelFileUpload = useCallback(async (file: File | undefined) => {
+    if (modelUploadInputRef.current) modelUploadInputRef.current.value = '';
+    if (!file) return;
     try {
-      const uploads = await listUserUploads('texture');
-      const items = uploads.map(uploadToProduct);
-      const validIds = new Set(items.map((i) => i.id));
-      setProducts((prev) => {
-        const kept = prev.filter((p) => !p.id.startsWith('upload-tex-') || validIds.has(p.id));
-        const seen = new Set(kept.map((p) => p.id));
-        const add = items.filter((i) => !seen.has(i.id));
-        return add.length ? [...add, ...kept] : kept;
-      });
+      // 容量のソフト上限チェック（ホームのアップロードパネルと同じ挙動で迂回を防ぐ）。
+      const [models, textures] = await Promise.all([listUserUploads('model'), listUserUploads('texture')]);
+      const currentTotal = [...models, ...textures].reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+      const capMsg = checkStorageCapacity(currentTotal, file.size);
+      if (capMsg) { alert(capMsg); return; }
+      const row = await uploadUserFile(file, 'model');
+      const item = uploadToFurnitureItem(row);
+      setFurnitureCatalog((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]));
+      setFurnitureCatalogFetchStatus('ready');
     } catch (e) {
-      console.warn('マイ素材の同期に失敗:', e);
+      console.warn('3Dモデルのアップロードに失敗:', e);
+      alert(e instanceof Error ? e.message : '3Dモデルのアップロードに失敗しました。');
     }
   }, []);
-  // 2Dビューの「マイ素材（テクスチャ）」アップロードモーダルの開閉。
-  const [texturePanelOpen, setTexturePanelOpen] = useState(false);
-  useEffect(() => {
-    if (!texturePanelOpen) return;
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setTexturePanelOpen(false); };
-    document.addEventListener('keydown', onKey);
-    return () => document.removeEventListener('keydown', onKey);
-  }, [texturePanelOpen]);
 
   // Fetch Furniture dynamically from API（本番=Cloudinary）。
   // Cloudinary 未構成/空/失敗時は、同梱の静的カタログ public/models/catalog.json に
@@ -2725,6 +2727,15 @@ const App: React.FC = () => {
       {/* 使い方ガイド（エディタ上部の「?」から見返せる・260623） */}
       <OnboardingGuide open={editorOnboardingOpen} onClose={() => setEditorOnboardingOpen(false)} />
 
+      {/* 3Dモデルのアップロード用 input（家具ストリップの「アップロード」内「＋」から起動・260623） */}
+      <input
+        ref={modelUploadInputRef}
+        type="file"
+        accept=".glb,.gltf,.fbx,.obj"
+        className="hidden"
+        onChange={(e) => void handleModelFileUpload(e.target.files?.[0])}
+      />
+
       <input 
         type="file" 
         id="file-upload" 
@@ -2885,15 +2896,6 @@ const App: React.FC = () => {
                      
                      {!renderState.isRendering && (
                         <div className="absolute bottom-6 right-6 z-40 pointer-events-auto flex flex-col items-end gap-3">
-                            <button
-                                type="button"
-                                onClick={() => setTexturePanelOpen(true)}
-                                className="tap focus-ring inline-flex items-center gap-2 rounded-xl border border-white/10 bg-[#111]/90 px-4 py-2.5 text-[11px] font-bold text-neutral-200 shadow-lg backdrop-blur transition-colors hover:border-emerald-500/60 hover:text-white"
-                                title="独自のテクスチャをアップロードして素材一覧に追加（割り当ては3Dビューで）"
-                            >
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/></svg>
-                                マイ素材
-                            </button>
                             <FurnitureAssetStrip
                                 processedCatalog={processedCatalog}
                                 assetCategories={assetCategories}
@@ -2903,32 +2905,8 @@ const App: React.FC = () => {
                                 renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} />}
                                 fetchStatus={furnitureCatalogFetchStatus}
                                 fetchErrorMessage={furnitureCatalogErrorText}
+                                onUploadModel={handleUploadModelClick}
                             />
-                        </div>
-                     )}
-
-                     {texturePanelOpen && (
-                        <div
-                           className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4"
-                           onClick={() => setTexturePanelOpen(false)}
-                           role="dialog"
-                           aria-modal="true"
-                        >
-                           <div
-                              className="relative flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-[#0c0c0c] shadow-2xl"
-                              onClick={(e) => e.stopPropagation()}
-                           >
-                              <div className="flex items-center justify-between border-b border-white/10 px-5 py-3">
-                                 <h2 className="text-sm font-semibold text-white">マイアップロード（素材）</h2>
-                                 <button type="button" onClick={() => setTexturePanelOpen(false)} className="tap rounded-lg px-2 py-1 text-neutral-400 hover:text-white" aria-label="閉じる">✕</button>
-                              </div>
-                              <div className="scroll-dark overflow-y-auto p-4">
-                                 <p className="mb-3 text-[11px] leading-snug text-neutral-400">
-                                    アップロードしたテクスチャは素材一覧へ自動追加され、3Dビューで壁・床・天井に割り当てできます。
-                                 </p>
-                                 <UploadPanel onUploadsChanged={refreshTextureUploads} />
-                              </div>
-                           </div>
                         </div>
                      )}
                 </div>
@@ -3889,6 +3867,7 @@ const App: React.FC = () => {
                                         renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} />}
                                         fetchStatus={furnitureCatalogFetchStatus}
                                         fetchErrorMessage={furnitureCatalogErrorText}
+                                        onUploadModel={handleUploadModelClick}
                                     />
                                 </div>
                             </div>
@@ -3913,8 +3892,16 @@ const App: React.FC = () => {
                           <span className="text-neutral-300 text-[11px]"><strong className="text-white">右ドラッグ:</strong> キャンセル / 画面移動</span>
                       </li>
                       <li className="flex items-center gap-3">
-                          <div className="bg-white/10 p-2 rounded-xl border border-white/10"><MouseWheel /></div> 
+                          <div className="bg-white/10 p-2 rounded-xl border border-white/10"><MouseWheel /></div>
                           <span className="text-neutral-300 text-[11px]"><strong className="text-white">ホイール:</strong> ズーム</span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+Z</div>
+                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">一つ戻る</strong></span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+Y</div>
+                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">やり直す</strong></span>
                       </li>
               </ul>
           </div>

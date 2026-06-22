@@ -17,6 +17,8 @@ export type FurnitureAssetStripProps = {
   fetchStatus: FurnitureCatalogFetchStatus;
   /** fetchStatus が error のとき表示する短いメッセージ */
   fetchErrorMessage?: string | null;
+  /** 「アップロード」カテゴリのパネル内「＋」から3Dモデルを追加する（260623）。 */
+  onUploadModel?: () => void;
 };
 
 export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
@@ -28,6 +30,7 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   renderThumbnail,
   fetchStatus,
   fetchErrorMessage,
+  onUploadModel,
 }) => {
   const barClass =
     'glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-1.5 bg-black/40 backdrop-blur-xl shadow-2xl h-[72px]';
@@ -84,6 +87,17 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
             </button>
           </div>
           <div className="grid grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pr-1 scroll-dark">
+            {selectedAssetCategory === 'アップロード' && onUploadModel && (
+              <button
+                type="button"
+                onClick={onUploadModel}
+                className="aspect-square rounded-2xl bg-emerald-600/90 border border-emerald-500 text-white hover:bg-emerald-500 transition-all flex flex-col items-center justify-center gap-0.5"
+                title="3Dモデルを追加（.glb / .gltf / .fbx / .obj）"
+              >
+                <span className="text-2xl font-black leading-none">＋</span>
+                <span className="text-[8px] font-bold leading-none">3D追加</span>
+              </button>
+            )}
             {processedCatalog
               .filter((item) => item.type === selectedAssetCategory)
               .map((item) => (
@@ -115,10 +129,14 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
             key={cat}
             type="button"
             onClick={() => onSelectedAssetCategoryChange(selectedAssetCategory === cat ? null : cat)}
+            // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。
+            onMouseEnter={() => onSelectedAssetCategoryChange(cat)}
             className={`h-full w-[60px] rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
               selectedAssetCategory === cat
                 ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
-                : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
+                : cat === 'アップロード'
+                  ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
+                  : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
             }`}
           >
             <span className="text-[10px] font-black uppercase tracking-widest">{cat}</span>
