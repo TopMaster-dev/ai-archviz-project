@@ -456,7 +456,7 @@ interface RoomViewerProps {
   /** 3Dで梁を選択/解除したことを App へ通知（右パネル表示・素材割当のため）（4a）。 */
   onBeamSelect3D?: (id: string | null) => void;
   activeFurnitureId: string | null;
-  onFurnitureSelect: (id: string | null) => void;
+  onFurnitureSelect: (id: string | null, additive?: boolean) => void;
   hideFurniture?: boolean; // New Prop for empty room capture
   maskMode?: boolean; // New Prop for mask generation (Black background, white furniture)
   materialSettings: Record<string, { roughness: number, metalness: number, textureScale?: number, baseboardEnabled?: boolean, baseboardHeight?: number, baseboardColor?: string, wainscotHeight?: number, doorColor?: string, doorFrameColor?: string, windowFrameColor?: string }>;

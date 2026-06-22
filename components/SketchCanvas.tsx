@@ -206,7 +206,7 @@ interface SketchCanvasProps {
   furnitureItems: FurnitureItem[];
   onFurnitureUpdate: React.Dispatch<React.SetStateAction<FurnitureItem[]>>;
   activeFurnitureId: string | null;
-  onFurnitureSelect: (id: string | null) => void;
+  onFurnitureSelect: (id: string | null, additive?: boolean) => void;
   /** 下絵（2D背景画像）。null で非挿入。 */
   underlay?: UnderlaySettings | null;
   onUnderlayChange?: (underlay: UnderlaySettings | null) => void;
@@ -285,6 +285,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const canvas2dCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const pointsMmRef = useRef<Point[]>([]);
   const furnitureItemsRef = useRef<FurnitureItem[]>(furnitureItems);
+  // 複数選択（store.selectedIds）を RAF 描画ループから読むための購読＋ref（260623・Cフェーズ2）。
+  const selectedIds = useStore(useProjectStore, (s) => s.selectedIds);
+  const selectedIdsRef = useRef<string[]>(selectedIds);
+  selectedIdsRef.current = selectedIds;
 
   /** 家具ドラッグ／回転は ref のみ更新し pointerup で React へ1回コミット（pointermove 毎の setState を避ける） */
   type FurnitureInteractionPreview =
@@ -1082,7 +1086,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     // --- SELECT MODE ---
     if (isSelectMode || isAddFurniture) {
       if (furnitureHit) {
-        onFurnitureSelect(furnitureHit.id);
+        // shift / ctrl / cmd 押下時は複数選択（トグル）。それ以外は単一選択（260623・Cフェーズ2）。
+        onFurnitureSelect(furnitureHit.id, e.shiftKey || e.ctrlKey || e.metaKey);
         onOpeningSelect(null);
         setSelectedPointIndex(null);
         setSelectedEdgeIndex(null);
@@ -2091,6 +2096,36 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.restore();
           }
         });
+
+        // 複数選択（selectedIds）のハイライト。primary(activeFurnitureId)は既存のギズモで示すため除外し、
+        // それ以外の選択家具を緑の点線枠で囲う（260623・Cフェーズ2）。
+        {
+          const sel = selectedIdsRef.current;
+          if (sel.length > 0) {
+            const set = new Set(sel);
+            ctx.save();
+            ctx.filter = 'none';
+            ctx.strokeStyle = 'rgba(52, 211, 153, 0.95)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            furnitureItemsRef.current.forEach((item) => {
+              if (!set.has(item.id) || item.id === activeFurnitureId) return;
+              const pose = getFurniturePoseMmForDraw(item);
+              const { width, depth } = getFurnitureFootprintMm(item);
+              const centerPx = worldToScreen(pose.center);
+              if (!isSafeFurniture2DDraw(width, depth, centerPx)) return;
+              const halfW = (width * currentZoom) / 2 + 3;
+              const halfD = (depth * currentZoom) / 2 + 3;
+              ctx.save();
+              ctx.translate(centerPx.x, centerPx.y);
+              ctx.rotate(yawToSketchRotation(pose.yaw));
+              ctx.strokeRect(-halfW, -halfD, halfW * 2, halfD * 2);
+              ctx.restore();
+            });
+            ctx.setLineDash([]);
+            ctx.restore();
+          }
+        }
 
         // Draw Opening Preview (Hover & Snap)
         if (hoveredOpeningRef.current) {

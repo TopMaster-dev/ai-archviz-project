@@ -1127,9 +1127,12 @@ const App: React.FC = () => {
         e.preventDefault();
         setOpenings((prev) => prev.filter((o) => o.id !== selectedOpeningId));
         setSelectedOpeningId(null);
-      } else if (activeFurnitureId) {
+      } else if (activeFurnitureId || useProjectStore.getState().selectedIds.length > 0) {
         e.preventDefault();
-        setFurnitureItems((prev) => prev.filter((item) => item.id !== activeFurnitureId));
+        // 複数選択があれば一括削除、無ければ単一選択を削除（260623・Cフェーズ2）。
+        const selIds = useProjectStore.getState().selectedIds;
+        const ids = new Set(selIds.length > 0 ? selIds : activeFurnitureId ? [activeFurnitureId] : []);
+        setFurnitureItems((prev) => prev.filter((item) => !ids.has(item.id)));
         setActiveFurnitureId(null);
       } else if (selectedBeam3DId) {
         e.preventDefault();
@@ -2034,13 +2037,25 @@ const App: React.FC = () => {
     setSelectedOpeningId(null);
   };
 
-  // 家具選択時に壁/床・建具の選択を解除するハンドラー（完全排他）
-  const handleFurnitureSelect = (id: string | null) => {
-    setActiveFurnitureId(id);
-    if (id) {
-      setActiveMeshes([]);
-      setActiveCategory(null);
-      setSelectedOpeningId(null);
+  // 家具選択時に壁/床・建具の選択を解除するハンドラー（完全排他）。
+  // additive(shift/ctrl) のときは store.selectedIds をトグルして複数選択（260623・Cフェーズ2）。
+  const handleFurnitureSelect = (id: string | null, additive = false) => {
+    const store = useProjectStore.getState();
+    if (id === null) {
+      store.clearSelection();
+      setActiveFurnitureId(null);
+      return;
+    }
+    setActiveMeshes([]);
+    setActiveCategory(null);
+    setSelectedOpeningId(null);
+    if (additive) {
+      store.toggleSelect(id);
+      const sel = useProjectStore.getState().selectedIds;
+      setActiveFurnitureId(sel.includes(id) ? id : sel.length ? sel[sel.length - 1] : null);
+    } else {
+      store.select([id]);
+      setActiveFurnitureId(id);
     }
   };
 
@@ -2067,6 +2082,18 @@ const App: React.FC = () => {
       setActiveMeshes((prev) => prev.filter((m) => !m.startsWith('Beam_')));
     }
   };
+
+  // activeFurnitureId（単一プライマリ）と store.selectedIds（複数選択集合）を整合させる（260623・Cフェーズ2）。
+  // shift/ctrl クリックは handleFurnitureSelect が先に selectedIds を更新してから集合内の要素を
+  // activeFurnitureId にするため、ここでは「集合外の id に変わった＝単一/プログラム選択」のときだけ作り直す。
+  useEffect(() => {
+    const store = useProjectStore.getState();
+    if (activeFurnitureId === null) {
+      if (store.selectedIds.length) store.clearSelection();
+    } else if (!store.selectedIds.includes(activeFurnitureId)) {
+      store.select([activeFurnitureId]);
+    }
+  }, [activeFurnitureId]);
 
   const handleMaterialUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target) return;
