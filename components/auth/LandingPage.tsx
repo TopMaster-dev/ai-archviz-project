@@ -59,7 +59,7 @@ const STEPS = [
 
 const GALLERY = [
   { src: '/lp/living-dusk.jpg', alt: '夕景のLDKをAIでフォトリアルに生成したパース' },
-  { src: '/lp/living-green.jpg', alt: 'グリーンの折り上げ天井リビングのAIパース' },
+  { src: '/lp/living-green.webp', alt: 'グリーンの折り上げ天井リビングのAIパース' },
   { src: '/lp/bedroom.jpg', alt: '間接照明のベッドルームのAIパース' },
 ] as const;
 
@@ -339,7 +339,7 @@ export function LandingPage({
             {/* AIエージェントの紹介（クライアント支給・260623） */}
             <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
               <img
-                src="/lp/lp-ai-agent.jpg"
+                src="/lp/lp-ai-agent.webp"
                 alt="AIエージェント：和室を執務室に再提案している様子"
                 loading="lazy"
                 className="w-full"
