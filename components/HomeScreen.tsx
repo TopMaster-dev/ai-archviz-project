@@ -521,26 +521,32 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               <button
                 type="button"
                 onClick={() => setNewKind('full')}
-                className={`rounded-lg border p-3 text-left transition ${
+                className={`overflow-hidden rounded-lg border text-left transition ${
                   newKind === 'full'
                     ? 'border-emerald-500/60 bg-emerald-500/10'
                     : 'border-neutral-700 bg-neutral-950 hover:border-neutral-600'
                 }`}
               >
-                <span className="block text-sm font-semibold">空間デザイン</span>
-                <span className="mt-0.5 block text-[11px] text-neutral-400">2D作図 → 3D → AIレンダリング</span>
+                <img src="/lp/lp-step-2d-3d-ai.jpg" alt="" loading="lazy" className="aspect-video w-full object-cover" />
+                <span className="block p-3">
+                  <span className="block text-sm font-semibold">空間デザイン</span>
+                  <span className="mt-0.5 block text-[11px] text-neutral-400">2D作図 → 3D → AIレンダリング</span>
+                </span>
               </button>
               <button
                 type="button"
                 onClick={() => setNewKind('photo')}
-                className={`rounded-lg border p-3 text-left transition ${
+                className={`overflow-hidden rounded-lg border text-left transition ${
                   newKind === 'photo'
                     ? 'border-emerald-500/60 bg-emerald-500/10'
                     : 'border-neutral-700 bg-neutral-950 hover:border-neutral-600'
                 }`}
               >
-                <span className="block text-sm font-semibold">写真をAI編集</span>
-                <span className="mt-0.5 block text-[11px] text-neutral-400">写真をアップロードしてAI画像編集</span>
+                <img src="/lp/lp-ai-edit.jpg" alt="" loading="lazy" className="aspect-video w-full object-cover" />
+                <span className="block p-3">
+                  <span className="block text-sm font-semibold">写真をAI編集</span>
+                  <span className="mt-0.5 block text-[11px] text-neutral-400">写真をアップロードしてAI画像編集</span>
+                </span>
               </button>
             </div>
 
