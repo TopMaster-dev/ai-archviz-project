@@ -905,6 +905,8 @@ const App: React.FC = () => {
   const furnitureFootprintAttemptedRef = useRef<Set<string>>(new Set());
   const furnitureItemsRef = useRef<FurnitureItem[]>(furnitureItems);
   furnitureItemsRef.current = furnitureItems;
+  // コピー/ペースト用クリップボード（260623・C フェーズ1: 家具を複製。家具は2D/3D共有データのため自動同期）。
+  const furnitureClipboardRef = useRef<FurnitureItem[]>([]);
 
   /** 足跡未設定・modelUrl 等が変わったときだけ GLTF スキャン用 effect を走らせる（位置更新のたびに forEach しない） */
   const furnitureItemsFootprintScanKey = useMemo(
@@ -1086,8 +1088,41 @@ const App: React.FC = () => {
       return !!el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
     };
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       if (isTypingTarget()) return;
+      const mod = e.ctrlKey || e.metaKey;
+      // コピー（Ctrl/Cmd+C）: 選択中の家具をクリップボードへ。テキスト選択中はブラウザのコピーを優先する。
+      if (mod && (e.key === 'c' || e.key === 'C')) {
+        // テキスト選択中はブラウザのコピーを優先（家具はコピーしない）。
+        if (window.getSelection()?.toString()) return;
+        // 複数選択(selectedIds)があればそれを、無ければ単一選択(activeFurnitureId)をコピー対象にする。
+        const selIds = useProjectStore.getState().selectedIds;
+        const ids = selIds.length > 0 ? selIds : activeFurnitureId ? [activeFurnitureId] : [];
+        if (ids.length > 0) {
+          const items = furnitureItemsRef.current.filter((f) => ids.includes(f.id));
+          if (items.length > 0) {
+            furnitureClipboardRef.current = items.map((it) => ({ ...it }));
+            e.preventDefault();
+          }
+        }
+        return;
+      }
+      // ペースト（Ctrl/Cmd+V）: クリップボードの家具を複製（新規ID＋少しオフセット）し、最後を選択状態にする。
+      if (mod && (e.key === 'v' || e.key === 'V')) {
+        const clip = furnitureClipboardRef.current;
+        if (clip.length > 0) {
+          e.preventDefault();
+          const baseTs = Date.now();
+          const clones: FurnitureItem[] = clip.map((item, idx) => ({
+            ...item,
+            id: `furniture-${baseTs}-${idx}`,
+            position: [item.position[0] + 0.3, item.position[1], item.position[2] + 0.3] as [number, number, number],
+          }));
+          setFurnitureItems((prev) => [...prev, ...clones]);
+          setActiveFurnitureId(clones[clones.length - 1].id);
+        }
+        return;
+      }
+      if (e.key !== 'Delete' && e.key !== 'Backspace') return;
       if (selectedOpeningId) {
         e.preventDefault();
         setOpenings((prev) => prev.filter((o) => o.id !== selectedOpeningId));
@@ -3902,6 +3937,14 @@ const App: React.FC = () => {
                       <li className="flex items-center gap-3">
                           <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+Y</div>
                           <span className="text-neutral-300 text-[11px]"><strong className="text-white">やり直す</strong></span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+C</div>
+                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">コピー</strong></span>
+                      </li>
+                      <li className="flex items-center gap-3">
+                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+V</div>
+                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">ペースト</strong></span>
                       </li>
               </ul>
           </div>

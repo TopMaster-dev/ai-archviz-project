@@ -267,6 +267,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const requestRef = useRef<number | null>(null);
   const mousePosRef = useRef<Point>({ x: 0, y: 0 });
   const hoveredOpeningRef = useRef<{ wallIndex: number; ratioPosition: number; type: OpeningType } | null>(null);
+  // 壁の予測位置（次の停止点）。draw モードのホバー中のみ set し、render で「窓/ドアと同様の」ハイライトを描く（260623）。
+  const predictedWallPointRef = useRef<Point | null>(null);
 
   const BASE_SCALE = SKETCH_BASE_SCALE;
   const rulerSize = 34; // pixels
@@ -366,6 +368,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const isAddWindow = toolMode === 'add' && addKind === 'window';
   const isAddFurniture = toolMode === 'add' && addKind === 'furniture';
   const isBeamMode = toolMode === 'beam';
+  // draw モードを抜けたら予測位置マーカーを消す（モード切替直後にホバーが残らないように・260623）。
+  useEffect(() => {
+    if (toolMode !== 'draw') predictedWallPointRef.current = null;
+  }, [toolMode]);
 
   // キャンバスは利用可能領域いっぱいにレスポンシブ表示する。getCanvasMousePos は表示矩形を
   // そのまま座標に使うため、属性サイズ(=canvasSize)を実表示サイズ（コンテナ）に一致させる。
@@ -1341,6 +1347,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       hoveredOpeningRef.current = null;
     }
 
+    // 壁の予測位置（次の停止点）を更新。draw モードのホバー位置をスナップして ref に保存し、
+    // render 側で「窓/ドアと同様の」ハイライトを表示する（hoveredOpeningRef と同じ仕組み）。
+    if (isDrawMode && !isClosed) {
+      const originMm = pointsMm.length > 0 ? pointsMm[pointsMm.length - 1] : undefined;
+      predictedWallPointRef.current = getSnappedMm(mm, originMm);
+    } else {
+      predictedWallPointRef.current = null;
+    }
+
     if (rotatingFurnitureId) {
       const item = furnitureItems.find((f) => f.id === rotatingFurnitureId);
       if (item) {
@@ -1484,6 +1499,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   };
 
   const handlePointerUp = () => {
+    // ホバー予測マーカーは消す（キャンバス外へ出たとき／確定後に残らないように）。
+    predictedWallPointRef.current = null;
     if (draggingUnderlayRef.current) {
       draggingUnderlayRef.current = false;
       underlayDragStartRef.current = null;
@@ -2131,6 +2148,29 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             const angle = Math.round(Math.atan2(snappedMm.y - lastMm.y, snappedMm.x - lastMm.x) * 180 / Math.PI);
             ctx.fillStyle = '#60a5fa'; ctx.font = 'bold 12px "Inter"'; ctx.fillText(`${angle}°`, sPx.x + 10, sPx.y - 10);
           }
+        }
+
+        // 予測位置（次の停止点）のハイライト。窓/ドアのプレビューと同様に半透明＋輪郭で「ここに置かれる」を明示する。
+        // draw モードのホバー中のみ predictedWallPointRef が set される（確定前でも最初の点の位置を表示）。
+        const predMm = predictedWallPointRef.current;
+        if (predMm && !isClosed) {
+          const ppx = predMm.x * currentZoom + currentOffset.x;
+          const ppy = predMm.y * currentZoom + currentOffset.y;
+          ctx.save();
+          ctx.beginPath();
+          ctx.arc(ppx, ppy, 9, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.22)';
+          ctx.fill();
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.95)';
+          ctx.stroke();
+          ctx.beginPath();
+          ctx.moveTo(ppx - 5, ppy); ctx.lineTo(ppx + 5, ppy);
+          ctx.moveTo(ppx, ppy - 5); ctx.lineTo(ppx, ppy + 5);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.lineWidth = 1;
+          ctx.stroke();
+          ctx.restore();
         }
 
         // Draw Points
