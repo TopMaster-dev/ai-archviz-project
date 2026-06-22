@@ -2947,6 +2947,7 @@ const App: React.FC = () => {
                         setAddKind={setAddKind}
                         furnitureItems={furnitureItems}
                         onFurnitureUpdate={setFurnitureItems}
+                        roomHeight={roomHeight}
                         activeFurnitureId={activeFurnitureId}
                         onFurnitureSelect={handleFurnitureSelect}
                         underlay={isCeilingView ? underlayCeiling : underlayPlan}

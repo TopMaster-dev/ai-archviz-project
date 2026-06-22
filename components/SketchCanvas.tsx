@@ -207,6 +207,8 @@ interface SketchCanvasProps {
   onFurnitureUpdate: React.Dispatch<React.SetStateAction<FurnitureItem[]>>;
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null, additive?: boolean) => void;
+  /** 部屋の天井高（mm）。2Dパネルでの家具/建具の高さ編集に使用（260623）。 */
+  roomHeight: number;
   /** 下絵（2D背景画像）。null で非挿入。 */
   underlay?: UnderlaySettings | null;
   onUnderlayChange?: (underlay: UnderlaySettings | null) => void;
@@ -252,6 +254,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   onFurnitureUpdate,
   activeFurnitureId,
   onFurnitureSelect,
+  roomHeight,
   underlay = null,
   onUnderlayChange,
   beams = [],
@@ -2751,6 +2754,65 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             );
           })()}
         </div>
+
+        {/* 選択中の家具の属性編集（260623・3Dと同様に2Dでも調整可能に）。 */}
+        {(() => {
+          const f = furnitureItems.find((x) => x.id === activeFurnitureId);
+          if (!f) return null;
+          const ceilingY = roomHeight / 1000;
+          const heightMm = f.ceilingMount
+            ? Math.max(0, Math.round((ceilingY - f.position[1]) * 1000))
+            : Math.max(0, Math.round(f.position[1] * 1000));
+          const setHeight = (mm: number) => {
+            const c = Math.max(0, Math.round(Number.isFinite(mm) ? mm : 0));
+            onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : {
+              ...it,
+              position: [it.position[0], it.ceilingMount ? Math.max(0, ceilingY - c / 1000) : c / 1000, it.position[2]] as [number, number, number],
+            })));
+          };
+          const yawDeg = Math.round(((f.rotation[1] || 0) * 180) / Math.PI);
+          const setYaw = (deg: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : {
+            ...it, rotation: [it.rotation[0], (deg * Math.PI) / 180, it.rotation[2]] as [number, number, number],
+          })));
+          const scalePct = Math.round((f.scale[0] || 1) * 100);
+          const setScalePct = (pct: number) => {
+            const s = Math.max(10, Math.round(pct)) / 100;
+            onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, scale: [s, s, s] as [number, number, number] })));
+          };
+          const priceVal = Number.isFinite(f.customPrice as number) ? (f.customPrice as number) : 0;
+          const setPrice = (v: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, customPrice: v })));
+          const labelCls = 'flex items-center justify-between gap-2 text-[10px] text-neutral-300';
+          return (
+            <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
+              <div className="truncate text-[10px] font-black text-emerald-400">{f.customName ?? f.name ?? '家具'}</div>
+              <label className={labelCls}>{f.ceilingMount ? '天井からの高さ' : '床からの高さ'}<span className="flex items-center gap-1 text-neutral-400"><NumericField value={heightMm} onChange={setHeight} dragSensitivity={2} className="w-16" />mm</span></label>
+              <label className={labelCls}>回転<span className="flex items-center gap-1 text-neutral-400"><NumericField value={yawDeg} onChange={setYaw} dragSensitivity={1} className="w-14" />°</span></label>
+              <label className={labelCls}>大きさ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={scalePct} onChange={setScalePct} dragSensitivity={2} className="w-14" />%</span></label>
+              <label className={labelCls}>単価<span className="flex items-center gap-1 text-neutral-400">¥<NumericField value={priceVal} onChange={setPrice} dragSensitivity={50} className="w-20" /></span></label>
+            </div>
+          );
+        })()}
+
+        {/* 選択中の建具（ドア/窓）の属性編集（260623）。重なり防止の厳密制約は3D側に集約、ここは簡易編集。 */}
+        {(() => {
+          const o = openings.find((x) => x.id === selectedOpeningId);
+          if (!o) return null;
+          const isDoor = o.type.startsWith('door');
+          const update = (patch: Partial<Opening>) => setOpenings((prev) => prev.map((x) => (x.id !== o.id ? x : { ...x, ...patch })));
+          const labelCls = 'flex items-center justify-between gap-2 text-[10px] text-neutral-300';
+          return (
+            <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
+              <div className="text-[10px] font-black text-emerald-400">{isDoor ? 'ドア' : '窓'}</div>
+              <label className={labelCls}>幅<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.width)} onChange={(n) => update({ width: Math.max(100, Math.round(n)) })} dragSensitivity={5} className="w-16" />mm</span></label>
+              <label className={labelCls}>高さ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.height)} onChange={(n) => update({ height: Math.max(100, Math.min(roomHeight, Math.round(n))) })} dragSensitivity={5} className="w-16" />mm</span></label>
+              <label className={labelCls}>位置<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round((o.ratioPosition ?? 0.5) * 100)} onChange={(n) => update({ ratioPosition: Math.max(0, Math.min(100, n)) / 100 })} dragSensitivity={1} className="w-14" />%</span></label>
+              {!isDoor && (
+                <label className={labelCls}>床からの高さ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.bottomOffset ?? 0)} onChange={(n) => update({ bottomOffset: Math.max(0, Math.min(roomHeight - o.height, Math.round(n))) })} dragSensitivity={5} className="w-16" />mm</span></label>
+              )}
+            </div>
+          );
+        })()}
+
         {(() => {
           const b = beams.find((x) => x.id === selectedBeamId);
           if (!b) return null;
