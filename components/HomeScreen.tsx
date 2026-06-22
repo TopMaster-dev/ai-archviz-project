@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Settings, Image as ImageIcon } from 'lucide-react';
+import { Settings, Image as ImageIcon, HelpCircle } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 import { createShareLink, getDeletedProjects } from '../lib/db/projects.js';
-import type { DeletedProjectSummary } from '../lib/db/types.js';
+import type { DeletedProjectSummary, ProjectSummary } from '../lib/db/types.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
-import { OnboardingGuide } from './OnboardingGuide.js';
+import { OnboardingGuide, ONBOARDING_SEEN_KEY } from './OnboardingGuide.js';
 import { useConfirm } from './ConfirmDialog.js';
 
 /**
@@ -65,6 +65,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const [newName, setNewName] = useState('マイプロジェクト');
   const [newKind, setNewKind] = useState<'full' | 'photo'>('full');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 操作ガイド（オンボーディング）。初回のみ自動表示し、以降は右上の「?」から見返せる（260623）。
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
   // 共有（2b）: 閲覧用URLの発行・クリップボードコピーの結果通知。
   const [sharingId, setSharingId] = useState<string | null>(null);
   const [shareNotice, setShareNotice] = useState<string | null>(null);
@@ -79,6 +81,18 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
+
+  // 初回訪問時だけガイドを自動で開く（以降は右上の「?」ボタンから見返せる・260623）。
+  useEffect(() => {
+    try {
+      if (!localStorage.getItem(ONBOARDING_SEEN_KEY)) {
+        setOnboardingOpen(true);
+        localStorage.setItem(ONBOARDING_SEEN_KEY, '1');
+      }
+    } catch {
+      setOnboardingOpen(true);
+    }
+  }, []);
 
   const loadDeleted = useCallback(async () => {
     setDeletedLoading(true);
@@ -160,6 +174,121 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     }
   };
 
+  // プロジェクトカード（260623: カテゴリ別に2回マップするため関数化）。
+  const renderCard = (p: ProjectSummary) => {
+    const active = p.id === projectId;
+    return (
+      <li
+        key={p.id}
+        className={`flex flex-col overflow-hidden rounded-xl border transition ${
+          active
+            ? 'border-emerald-500/60 bg-emerald-500/5'
+            : 'border-white/10 bg-neutral-900/40 hover:border-white/25'
+        }`}
+      >
+        {/* サムネイル（クリックで選択） */}
+        <button
+          type="button"
+          onClick={() => void switchProject(p.id)}
+          onDoubleClick={() => void openProject(p.id)}
+          disabled={busy}
+          title="クリックで選択 / ダブルクリックで開く"
+          className="block aspect-video w-full overflow-hidden bg-neutral-800 disabled:opacity-60"
+        >
+          <ProjectThumb url={p.thumbnail_url} name={p.name} />
+        </button>
+
+        {/* 情報 + 操作 */}
+        <div className="flex flex-1 flex-col gap-2 p-3">
+          {active && renaming ? (
+            <input
+              autoFocus
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onBlur={() => {
+                setRenaming(false);
+                void renameCurrentProject(nameDraft);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm outline-none focus:border-emerald-500"
+            />
+          ) : (
+            <span className="block truncate text-sm font-semibold" title={p.name}>
+              {p.name}
+            </span>
+          )}
+          <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
+
+          <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+            {active && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft(projectName);
+                    setRenaming(true);
+                  }}
+                  disabled={busy}
+                  className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
+                >
+                  名前を変更
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void duplicateCurrentProject()}
+                  disabled={busy}
+                  className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
+                >
+                  複製
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleShare(p.id)}
+                  disabled={busy || sharingId === p.id}
+                  title="閲覧用URLを発行してコピー"
+                  className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
+                >
+                  {sharingId === p.id ? '発行中…' : '共有'}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (
+                      await confirm({
+                        message: 'このプロジェクトを削除しますか？（14日間は復元可能）',
+                        confirmLabel: '削除',
+                        danger: true,
+                      })
+                    ) {
+                      void deleteCurrentProject();
+                    }
+                  }}
+                  disabled={busy || projects.length <= 1}
+                  className="rounded px-2 py-1 text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
+                >
+                  削除
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={() => void openProject(p.id)}
+              disabled={busy}
+              className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+            >
+              開く →
+            </button>
+          </div>
+        </div>
+      </li>
+    );
+  };
+  // カテゴリ分け（260623）: 種別 'photo'=写真をAI編集 / それ以外=空間デザイン。
+  const spaceProjects = filteredProjects.filter((p) => p.kind !== 'photo');
+  const photoProjects = filteredProjects.filter((p) => p.kind === 'photo');
+
   return (
     <div className="h-screen w-screen overflow-y-auto bg-neutral-950 text-neutral-100">
       <header className="flex items-center justify-between border-b border-white/10 px-6 py-4">
@@ -171,6 +300,15 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           <span className="hidden text-neutral-400 sm:inline" title={email ?? ''}>
             {email}
           </span>
+          <button
+            type="button"
+            onClick={() => setOnboardingOpen(true)}
+            title="使い方ガイド"
+            aria-label="使い方ガイド"
+            className="flex h-8 w-8 items-center justify-center rounded-md bg-neutral-800 text-neutral-300 transition hover:bg-neutral-700 hover:text-white"
+          >
+            <HelpCircle className="h-4 w-4" />
+          </button>
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
@@ -237,118 +375,30 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           ) : filteredProjects.length === 0 ? (
             <p className="text-sm text-neutral-500">「{query.trim()}」に一致するプロジェクトはありません。</p>
           ) : (
-            <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {filteredProjects.map((p) => {
-                const active = p.id === projectId;
-                return (
-                  <li
-                    key={p.id}
-                    className={`flex flex-col overflow-hidden rounded-xl border transition ${
-                      active
-                        ? 'border-emerald-500/60 bg-emerald-500/5'
-                        : 'border-white/10 bg-neutral-900/40 hover:border-white/25'
-                    }`}
-                  >
-                    {/* サムネイル（クリックで選択） */}
-                    <button
-                      type="button"
-                      onClick={() => void switchProject(p.id)}
-                      onDoubleClick={() => void openProject(p.id)}
-                      disabled={busy}
-                      title="クリックで選択 / ダブルクリックで開く"
-                      className="block aspect-video w-full overflow-hidden bg-neutral-800 disabled:opacity-60"
-                    >
-                      <ProjectThumb url={p.thumbnail_url} name={p.name} />
-                    </button>
-
-                    {/* 情報 + 操作 */}
-                    <div className="flex flex-1 flex-col gap-2 p-3">
-                      {active && renaming ? (
-                        <input
-                          autoFocus
-                          value={nameDraft}
-                          onChange={(e) => setNameDraft(e.target.value)}
-                          onBlur={() => {
-                            setRenaming(false);
-                            void renameCurrentProject(nameDraft);
-                          }}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                          }}
-                          className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm outline-none focus:border-emerald-500"
-                        />
-                      ) : (
-                        <span className="block truncate text-sm font-semibold" title={p.name}>
-                          {p.name}
-                        </span>
-                      )}
-                      <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
-
-                      <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1 text-xs">
-                        {active && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setNameDraft(projectName);
-                                setRenaming(true);
-                              }}
-                              disabled={busy}
-                              className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
-                            >
-                              名前を変更
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void duplicateCurrentProject()}
-                              disabled={busy}
-                              className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
-                            >
-                              複製
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => void handleShare(p.id)}
-                              disabled={busy || sharingId === p.id}
-                              title="閲覧用URLを発行してコピー"
-                              className="rounded px-2 py-1 text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
-                            >
-                              {sharingId === p.id ? '発行中…' : '共有'}
-                            </button>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                if (
-                                  await confirm({
-                                    message: 'このプロジェクトを削除しますか？（14日間は復元可能）',
-                                    confirmLabel: '削除',
-                                    danger: true,
-                                  })
-                                ) {
-                                  void deleteCurrentProject();
-                                }
-                              }}
-                              disabled={busy || projects.length <= 1}
-                              className="rounded px-2 py-1 text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
-                            >
-                              削除
-                            </button>
-                          </>
-                        )}
-                        <button
-                          type="button"
-                          onClick={() => void openProject(p.id)}
-                          disabled={busy}
-                          className="ml-auto rounded-lg bg-emerald-600 px-3 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-                        >
-                          開く →
-                        </button>
-                      </div>
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+            <div className="space-y-8">
+              {spaceProjects.length > 0 && (
+                <div>
+                  <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-neutral-300">
+                    空間デザイン
+                    <span className="text-xs font-normal text-neutral-500">{spaceProjects.length}</span>
+                  </h3>
+                  <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {spaceProjects.map(renderCard)}
+                  </ul>
+                </div>
+              )}
+              {photoProjects.length > 0 && (
+                <div>
+                  <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-neutral-300">
+                    写真をAI編集
+                    <span className="text-xs font-normal text-neutral-500">{photoProjects.length}</span>
+                  </h3>
+                  <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    {photoProjects.map(renderCard)}
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
         </section>
 
@@ -541,7 +591,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
 
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 
-      <OnboardingGuide />
+      <OnboardingGuide open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
     </div>
   );
 }

@@ -30,6 +30,7 @@ import { useAiRenderer } from './hooks/useAiRenderer.js';
 import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
+import { useStore } from 'zustand';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
 import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
@@ -1319,6 +1320,30 @@ const App: React.FC = () => {
     });
     persistAiEdit?.();
   }, [photoProjectId, aiEditVersions, aiEditActiveVersionId, persistAiEdit]);
+
+  // 一覧サムネ（260623 クライアント要望）: 優先度 AI生成画像 > 3Dプレビュー > 2Dプレビュー。
+  // AI生成画像があるプロジェクトは AIレンダ時のサムネを優先（上書きしない）。無い場合のみ、編集が落ち着いた
+  // 3秒後に現在のビュー（3D=ルームキャンバス / 2D=スケッチキャンバス）を縮小して一覧サムネにする（ベストエフォート）。
+  const docEditCount = useStore(useProjectStore.temporal, (t) => t.pastStates.length);
+  useEffect(() => {
+    if (!projectSession?.projectId) return;
+    if (useProjectStore.getState().aiEdit.versions.length > 0) return; // AI画像を優先
+    const timer = setTimeout(() => {
+      try {
+        const sel = viewMode === '3D' ? 'canvas[data-arise-room]' : 'canvas[data-arise-sketch]';
+        const c = document.querySelector(sel) as HTMLCanvasElement | null;
+        if (!c || c.width < 8 || c.height < 8) return;
+        const url = c.toDataURL('image/jpeg', 0.7);
+        void makeThumbnailDataUrl(url)
+          .then((thumb) => projectSession?.setProjectThumbnail(thumb))
+          .catch(() => {});
+      } catch {
+        /* best-effort（取得できなくても害はない） */
+      }
+    }, 3000);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [docEditCount, viewMode, projectSession?.projectId]);
 
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);

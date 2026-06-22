@@ -2836,6 +2836,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         <div className="absolute inset-0 bg-emerald-500/5 blur-3xl opacity-0 group-hover:opacity-100 transition-opacity duration-1000"></div>
         <canvas
           ref={canvasRef} width={canvasSize.width} height={canvasSize.height}
+          data-arise-sketch="1"
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerLeave={handlePointerUp}

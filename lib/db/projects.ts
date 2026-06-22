@@ -38,7 +38,8 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   const sb = requireClient();
   const { data, error } = await sb
     .from('projects')
-    .select('id, name, thumbnail_url, updated_at')
+    // kind は data(jsonb) 内に保持しているため、軽量に種別だけ抽出する（260623 カテゴリ分け）。
+    .select('id, name, thumbnail_url, updated_at, kind:data->>kind')
     .is('deleted_at', null)
     .order('updated_at', { ascending: false });
   if (error) throw error;

@@ -51,6 +51,8 @@ export interface ProjectSummary {
   name: string;
   thumbnail_url: string | null;
   updated_at: string;
+  /** プロジェクト種別（data.kind 由来・260623 カテゴリ分け用）。'full'=空間デザイン / 'photo'=写真をAI編集。 */
+  kind?: string | null;
 }
 
 /** 論理削除済み（猶予期間内）プロジェクトのサマリ。復元メニュー用（管理表 row 109/110）。 */
