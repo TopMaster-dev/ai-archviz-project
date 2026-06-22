@@ -254,23 +254,6 @@ export function LandingPage({
             <p className="mb-8 text-sm text-neutral-400">
               <Jp parts={['迷わず、', '最短距離で提案まで。']} />
             </p>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              {STEPS.map((s, i) => {
-                const Icon = s.icon;
-                return (
-                  <div key={s.title} className="relative rounded-2xl border border-white/10 bg-neutral-900/40 p-6">
-                    <span className="absolute right-5 top-4 text-5xl font-black text-white/5">{i + 1}</span>
-                    <div className="mb-3 inline-flex h-11 w-11 items-center justify-center rounded-xl bg-white/5 text-emerald-300">
-                      <Icon className="h-5 w-5" />
-                    </div>
-                    <h3 className="text-base font-bold">{s.title}</h3>
-                    <p className="mt-1.5 text-[12px] leading-relaxed text-neutral-400">
-                      <Jp parts={s.desc} />
-                    </p>
-                  </div>
-                );
-              })}
-            </div>
 
             {/* 2D作図 → 3D生成 → AIパースの実例（クライアント支給・260623） */}
             <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
