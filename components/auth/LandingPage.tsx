@@ -8,7 +8,6 @@ import {
   Ruler,
   LayoutGrid,
   Wand2,
-  MessageCircle,
 } from 'lucide-react';
 
 /**
@@ -108,22 +107,22 @@ export function LandingPage({
         <main className="mx-auto max-w-6xl px-6 sm:px-10">
           {/* ヒーロー */}
           <section className="animate-in fade-in slide-in-from-bottom-2 pt-16 sm:pt-24">
-            <div>
+            <div className="text-center">
               <p className="mb-5 inline-block rounded-full border border-emerald-500/30 bg-emerald-500/10 px-3 py-1 text-[11px] font-bold tracking-wider text-emerald-300">
                 建築・内装プロのための AI 空間デザイン
               </p>
               <h1 className="text-4xl font-black leading-[1.12] tracking-tight sm:text-6xl lg:text-7xl">
                 <Jp parts={['あなたの思考を、', '全方位に拡張する']} />
               </h1>
-              <p className="mt-6 max-w-2xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              <p className="mt-6 max-w-2xl mx-auto text-sm leading-relaxed text-neutral-400 sm:text-base">
                 <Jp
                   parts={[
                     '数日かかっていた提案準備を',
                     '極限まで削ぎ落とす、',
                     'クライアントを待たせない',
                     '実務特化型プラットフォーム。',
-                    '2D作図から3D空間の自動生成、',
-                    'AIによるフォトリアルなイメージを生成、',
+                    '2D作図からAIパース生成や',
+                    'イメージ編集、',
                     '実寸テクスチャ投影、',
                     '建材の概算見積もりを自動生成。',
                     '設計・提案スピードを格段に高め、',
@@ -133,7 +132,7 @@ export function LandingPage({
                   ]}
                 />
               </p>
-              <div className="mt-9 flex flex-wrap items-center gap-3">
+              <div className="mt-9 flex flex-wrap items-center justify-center gap-3">
                 <button
                   type="button"
                   onClick={onLogin}
@@ -193,7 +192,7 @@ export function LandingPage({
             <p className="mb-14 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
               <Jp
                 parts={[
-                  '2D作図から高精細パース、',
+                  '2D作図からAIパース、',
                   '仕上げ材の自動見積もりまでを',
                   'シームレスに連携。',
                   '直感的な操作で',
@@ -273,27 +272,14 @@ export function LandingPage({
               })}
             </div>
 
-            {/* 2D / 3D / AI画像編集 の画面キャプチャ枠（後日クライアント支給のスクリーンショットに差し替え予定） */}
-            <div className="mt-5 grid grid-cols-1 gap-4 sm:grid-cols-3">
-              {[
-                { label: '2Dビュー', icon: PencilRuler },
-                { label: '3Dビュー', icon: Box },
-                { label: 'AI画像編集', icon: Wand2 },
-              ].map((s) => {
-                const Icon = s.icon;
-                return (
-                  <div
-                    key={s.label}
-                    className="flex aspect-video items-center justify-center rounded-2xl border border-dashed border-white/15 bg-neutral-900/40 text-center"
-                  >
-                    <div className="text-neutral-500">
-                      <Icon className="mx-auto mb-2 h-7 w-7" />
-                      <p className="text-[12px] font-bold text-neutral-400">{s.label}</p>
-                      <p className="mt-0.5 text-[10px] text-neutral-600">画面キャプチャを準備中</p>
-                    </div>
-                  </div>
-                );
-              })}
+            {/* 2D作図 → 3D生成 → AIパースの実例（クライアント支給・260623） */}
+            <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
+              <img
+                src="/lp/lp-step-2d-3d-ai.jpg"
+                alt="2D作図から3D自動生成、AIパースまでの3ステップの実例"
+                loading="lazy"
+                className="w-full"
+              />
             </div>
           </section>
 
@@ -321,7 +307,7 @@ export function LandingPage({
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
               <span className="inline-block">「ここを変えたい」に、一瞬で応える。</span>
               <br className="hidden sm:block" />
-              <span className="inline-block">熱量を逃さないプレゼンツール</span>
+              <span className="inline-block">AIイメージ編集機能</span>
             </h2>
             <p className="mb-10 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
               <Jp
@@ -336,15 +322,14 @@ export function LandingPage({
                 ]}
               />
             </p>
-            {/* AIデザイン・エリア編集のデモ枠（後日クライアント支給のキャプチャ／動画に差し替え予定） */}
-            <div className="flex aspect-[16/8] items-center justify-center rounded-3xl border border-dashed border-purple-300/20 bg-gradient-to-br from-purple-500/[0.06] to-neutral-900/40 text-center">
-              <div className="px-6 text-neutral-500">
-                <Wand2 className="mx-auto mb-3 h-9 w-9 text-purple-300/70" />
-                <p className="text-sm font-bold text-neutral-300">AIデザイン・エリア編集のデモ</p>
-                <p className="mt-1 text-[12px] text-neutral-500">
-                  <Jp parts={['画像生成のスピード感をご紹介', '（キャプチャ／動画を準備中）']} />
-                </p>
-              </div>
+            {/* AIイメージ編集の実例（写真→AI生成・クライアント支給・260623） */}
+            <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
+              <img
+                src="/lp/lp-ai-edit.jpg"
+                alt="AIイメージ編集：コンクリート空間をその場でカフェ内装に変換した例"
+                loading="lazy"
+                className="w-full"
+              />
             </div>
           </section>
 
@@ -362,20 +347,20 @@ export function LandingPage({
                   '学習したAIが、',
                   'あなたの設計プロセスに伴走。',
                   '孤独なアイデアラッシュはもう不要です。',
-                  'まるで優秀な右腕のように、',
-                  '最適なデザイン案を自動で提示します。',
+                  '外部のAIツールも不要、',
+                  'まるで優秀な右腕のように',
+                  '最適なデザイン案の構築をサポートいたします。',
                 ]}
               />
             </p>
-            {/* AIエージェント機能の紹介デモ枠（後日クライアント支給のキャプチャ／動画に差し替え予定） */}
-            <div className="flex aspect-[16/8] items-center justify-center rounded-3xl border border-dashed border-emerald-300/20 bg-gradient-to-br from-emerald-500/[0.06] to-neutral-900/40 text-center">
-              <div className="px-6 text-neutral-500">
-                <MessageCircle className="mx-auto mb-3 h-9 w-9 text-emerald-300/70" />
-                <p className="text-sm font-bold text-neutral-300">AIエージェント機能の紹介</p>
-                <p className="mt-1 text-[12px] text-neutral-500">
-                  <Jp parts={['相談の様子をご紹介', '（キャプチャ／動画を準備中）']} />
-                </p>
-              </div>
+            {/* AIエージェントの紹介（クライアント支給・260623） */}
+            <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
+              <img
+                src="/lp/lp-ai-agent.jpg"
+                alt="AIエージェント：和室を執務室に再提案している様子"
+                loading="lazy"
+                className="w-full"
+              />
             </div>
           </section>
 
@@ -385,7 +370,7 @@ export function LandingPage({
               <h2 className="text-3xl font-black sm:text-5xl">
                 <span className="inline-block">さあ、</span>
                 <span className="inline-block bg-gradient-to-r from-emerald-400 to-sky-400 bg-clip-text text-transparent">
-                  起き上がれ
+                  はじめよう
                 </span>
               </h2>
               <p className="mx-auto mt-5 max-w-xl text-[13px] leading-relaxed text-neutral-300">

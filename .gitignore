@@ -17,3 +17,5 @@ _clickceiling.mjs
 # DB バックアップのダンプ（個人情報を含むためコミット禁止・row 29）
 backups/
 *.dump
+
+機能テスト結果_LP-HOME-2D-3D_260620.txt
