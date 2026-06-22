@@ -297,9 +297,6 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           <p className="text-[11px] text-neutral-400">建築・内装向け AI 空間デザイン</p>
         </div>
         <div className="flex items-center gap-3 text-xs">
-          <span className="hidden text-neutral-400 sm:inline" title={email ?? ''}>
-            {email}
-          </span>
           <button
             type="button"
             onClick={() => setOnboardingOpen(true)}
@@ -318,6 +315,9 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           >
             <Settings className="h-4 w-4" />
           </button>
+          <span className="hidden text-neutral-400 sm:inline" title={email ?? ''}>
+            {email}
+          </span>
           <button
             type="button"
             onClick={() => void signOut()}

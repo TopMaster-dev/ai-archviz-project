@@ -50,12 +50,14 @@ function scrubDeletedTextureFromProject(upload: UserUpload): void {
 
 /**
  * 「マイアップロード」管理パネル（ホーム画面）。
- * ユーザーが独自の 3D モデル / テクスチャを Supabase Storage へアップロードし、
+ * ユーザーが独自の 3D モデル / 建材画像（テクスチャ）を Supabase Storage へアップロードし、
  * 一覧・削除できる。実体は Storage、所在/メタは user_uploads 台帳に記録され、
  * 管理画面（service_role）から全件把握できる（クライアント要望 #6）。
  *
- * ホーム画面に加え、2Dビューの「マイ素材」モーダルからも開く（onUploadsChanged で素材一覧へ即時反映）。
- * テクスチャは uploadToProduct でエディタの素材パレットに取り込まれ、3Dビューで壁/床/天井へ割り当て可能。
+ * 260623 クライアント要望:
+ *  - 「＋ 建材を追加（画像）」を押す → ファイル選択 → 選んだ画像のカテゴリ（共通/壁/床/天井）を
+ *    ポップアップで選ばせてから追加する（事前のカテゴリタブ選択をやめる）。
+ *  - 過去のマイアップロード一覧は既定で折りたたみ、「▶ 過去のマイアップロードデータの表示」で開く。
  */
 
 function fmtBytes(bytes: number | null): string {
@@ -90,8 +92,11 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  // テクスチャ追加時に割り当てるカテゴリ（null=共通=全カテゴリに表示）。
-  const [texCategory, setTexCategory] = useState<MaterialCategory | null>(null);
+  // 過去のマイアップロード一覧は既定で折りたたみ（260623）。
+  const [uploadsExpanded, setUploadsExpanded] = useState(false);
+  // 建材画像（テクスチャ）追加: ファイル選択後にカテゴリ選択ポップアップで使う一時状態。
+  const [pendingTexture, setPendingTexture] = useState<{ file: File; previewUrl: string } | null>(null);
+  const [pendingCategory, setPendingCategory] = useState<MaterialCategory | null>(null);
 
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const textureInputRef = useRef<HTMLInputElement | null>(null);
@@ -113,39 +118,70 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [configured]);
 
+  // ポップアップを閉じる/差し替える/アンマウント時にプレビュー用 ObjectURL を解放する。
+  useEffect(() => {
+    if (!pendingTexture) return;
+    return () => URL.revokeObjectURL(pendingTexture.previewUrl);
+  }, [pendingTexture]);
+
   const handlePick = (kind: UploadKind) => {
     setMsg(null);
     (kind === 'model' ? modelInputRef : textureInputRef).current?.click();
   };
 
-  const handleFile = async (kind: UploadKind, file: File | undefined) => {
-    if (!file) return;
+  // 実アップロード（モデルは即時、テクスチャはポップアップ確定後）。
+  const doUpload = async (file: File, kind: UploadKind, category: MaterialCategory | null) => {
     // 容量警告プロセス（管理表 row 31）: 本人の総容量がソフト上限に達する/超える追加はブロックする。
     const currentTotal = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
     const capacityMsg = checkStorageCapacity(currentTotal, file.size);
     if (capacityMsg) {
       setMsg(capacityMsg);
-      if (modelInputRef.current) modelInputRef.current.value = '';
-      if (textureInputRef.current) textureInputRef.current.value = '';
       return;
     }
     setBusyKind(kind);
     setMsg(null);
     try {
-      // テクスチャは選択中のカテゴリを metadata.category に保存（共通=未設定）。
-      const metadata = kind === 'texture' && texCategory ? { category: texCategory } : undefined;
+      // テクスチャは選択したカテゴリを metadata.category に保存（共通=未設定）。
+      const metadata = kind === 'texture' && category ? { category } : undefined;
       const row = await uploadUserFile(file, kind, { metadata });
       setUploads((prev) => [row, ...prev]);
-      const catNote = kind === 'texture' ? `（${textureCategoryLabel(texCategory)}）` : '';
+      const catNote = kind === 'texture' ? `（${textureCategoryLabel(category)}）` : '';
       setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
       if (kind === 'texture') onUploadsChanged?.(); // エディタの素材一覧へ即時反映
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'アップロードに失敗しました。');
     } finally {
       setBusyKind(null);
-      if (modelInputRef.current) modelInputRef.current.value = '';
-      if (textureInputRef.current) textureInputRef.current.value = '';
     }
+  };
+
+  // 3Dモデルは選択後すぐにアップロード。
+  const onModelPicked = (file: File | undefined) => {
+    if (modelInputRef.current) modelInputRef.current.value = '';
+    if (file) void doUpload(file, 'model', null);
+  };
+
+  // 建材画像（テクスチャ）は選択後、カテゴリ選択ポップアップを開く（260623）。
+  const onTexturePicked = (file: File | undefined) => {
+    if (textureInputRef.current) textureInputRef.current.value = '';
+    if (!file) return;
+    const currentTotal = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+    const capacityMsg = checkStorageCapacity(currentTotal, file.size);
+    if (capacityMsg) {
+      setMsg(capacityMsg);
+      return;
+    }
+    setMsg(null);
+    setPendingCategory(null); // 既定=共通
+    setPendingTexture({ file, previewUrl: URL.createObjectURL(file) });
+  };
+
+  const cancelPendingTexture = () => setPendingTexture(null);
+  const confirmPendingTexture = async () => {
+    const pending = pendingTexture;
+    if (!pending) return;
+    setPendingTexture(null); // ポップアップを閉じる（ObjectURL は effect が解放）
+    await doUpload(pending.file, 'texture', pendingCategory);
   };
 
   // テクスチャのカテゴリ割当を変更（既存 metadata にマージして保存）。
@@ -193,7 +229,6 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
 
   const busy = busyKind != null;
   // 容量警告（管理表 row 31）: 本人のアップロード合計と上限しきい値。接近で警告し、超過する追加はブロックする。
-  // しきい値（STORAGE_SOFT_LIMIT_BYTES）は lib/db/uploads.ts と共有し、表示・追加ブロックで同一値を使う。
   const totalBytes = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
   const usagePct = Math.min(100, Math.round((totalBytes / STORAGE_SOFT_LIMIT_BYTES) * 100));
   const overLimit = totalBytes >= STORAGE_SOFT_LIMIT_BYTES;
@@ -204,7 +239,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
     <div className="rounded-lg bg-neutral-900/60 p-3 text-xs text-neutral-200">
       <p className="mb-1 font-semibold text-neutral-300">マイアップロード</p>
       <p className="mb-2 text-[11px] leading-snug text-neutral-500">
-        独自の 3D モデル（{ACCEPTED_EXT.model.join(' / ')}）やテクスチャ（
+        独自の 3D モデル（{ACCEPTED_EXT.model.join(' / ')}）や建材画像（
         {ACCEPTED_EXT.texture.join(' / ')}）を保存できます。
       </p>
 
@@ -231,29 +266,6 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
         )}
       </div>
 
-      {/* テクスチャに割り当てるカテゴリ。「＋テクスチャ」で追加する素材の表示カテゴリを決める
-          （壁/床/天井のいずれか、または共通＝全カテゴリに表示）。一覧から後で変更も可能。 */}
-      <div className="mb-2">
-        <p className="mb-1 text-[11px] text-neutral-400">テクスチャのカテゴリ（追加先）</p>
-        <div className="flex gap-1">
-          {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
-            <button
-              key={opt.label}
-              type="button"
-              disabled={busy}
-              onClick={() => setTexCategory(opt.value)}
-              className={`flex-1 rounded py-1 text-[11px] font-semibold transition disabled:opacity-50 ${
-                texCategory === opt.value
-                  ? 'bg-sky-600 text-white'
-                  : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
-              }`}
-            >
-              {opt.label}
-            </button>
-          ))}
-        </div>
-      </div>
-
       <div className="mb-3 flex gap-1.5">
         <button
           type="button"
@@ -269,7 +281,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
           onClick={() => handlePick('texture')}
           className="flex-1 rounded bg-neutral-700 py-1.5 font-semibold text-white transition hover:bg-neutral-600 disabled:opacity-50"
         >
-          {busyKind === 'texture' ? 'アップロード中…' : `＋ テクスチャ（${textureCategoryLabel(texCategory)}）`}
+          {busyKind === 'texture' ? 'アップロード中…' : '＋ 建材を追加（画像）'}
         </button>
       </div>
 
@@ -278,77 +290,153 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
         type="file"
         accept={ACCEPTED_EXT.model.join(',')}
         className="hidden"
-        onChange={(e) => void handleFile('model', e.target.files?.[0])}
+        onChange={(e) => onModelPicked(e.target.files?.[0])}
       />
       <input
         ref={textureInputRef}
         type="file"
         accept={ACCEPTED_EXT.texture.join(',')}
         className="hidden"
-        onChange={(e) => void handleFile('texture', e.target.files?.[0])}
+        onChange={(e) => onTexturePicked(e.target.files?.[0])}
       />
 
       {msg && <p className="mb-2 text-[11px] text-neutral-400">{msg}</p>}
 
+      {/* 過去のマイアップロード一覧（既定で折りたたみ・260623） */}
       {loading && uploads.length === 0 ? (
         <p className="text-[11px] text-neutral-500">読み込み中…</p>
       ) : uploads.length === 0 ? (
         <p className="text-[11px] text-neutral-500">まだアップロードはありません。</p>
       ) : (
-        <ul className="space-y-1.5">
-          {uploads.map((u) => (
-            <li
-              key={u.id}
-              className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-neutral-950/50 px-2.5 py-1.5"
-            >
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
-                      u.kind === 'model' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-sky-500/15 text-sky-300'
-                    }`}
-                  >
-                    {KIND_LABEL[u.kind]}
-                  </span>
-                  <span className="truncate text-[11px] text-neutral-200" title={u.originalName ?? ''}>
-                    {u.originalName ?? '(無題)'}
-                  </span>
-                </div>
-                <span className="text-[10px] text-neutral-500">
-                  {fmtBytes(u.bytes)}
-                  {u.bytes != null ? ' · ' : ''}
-                  {fmtDate(u.createdAt)}
-                </span>
-              </div>
-              {u.kind === 'texture' && (
-                <select
-                  value={normalizeTextureCategory(u.metadata.category) ?? ''}
-                  disabled={updatingId === u.id}
-                  onChange={(e) =>
-                    void handleChangeCategory(u, (e.target.value || null) as MaterialCategory | null)
-                  }
-                  title="表示カテゴリ"
-                  aria-label="表示カテゴリ"
-                  className="shrink-0 rounded border border-white/10 bg-neutral-800 px-1.5 py-1 text-[11px] text-neutral-200 disabled:opacity-50"
+        <div>
+          <button
+            type="button"
+            onClick={() => setUploadsExpanded((v) => !v)}
+            className="flex items-center gap-1.5 text-[12px] font-semibold text-neutral-400 transition hover:text-neutral-200"
+          >
+            {uploadsExpanded ? '▾' : '▶'} 過去のマイアップロードデータの表示
+            <span className="text-[11px] font-normal text-neutral-500">{uploads.length}</span>
+          </button>
+          {uploadsExpanded && (
+            <ul className="mt-2 space-y-1.5">
+              {uploads.map((u) => (
+                <li
+                  key={u.id}
+                  className="flex items-center justify-between gap-2 rounded-md border border-white/10 bg-neutral-950/50 px-2.5 py-1.5"
                 >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-1.5">
+                      <span
+                        className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold ${
+                          u.kind === 'model' ? 'bg-emerald-500/15 text-emerald-300' : 'bg-sky-500/15 text-sky-300'
+                        }`}
+                      >
+                        {KIND_LABEL[u.kind]}
+                      </span>
+                      <span className="truncate text-[11px] text-neutral-200" title={u.originalName ?? ''}>
+                        {u.originalName ?? '(無題)'}
+                      </span>
+                    </div>
+                    <span className="text-[10px] text-neutral-500">
+                      {fmtBytes(u.bytes)}
+                      {u.bytes != null ? ' · ' : ''}
+                      {fmtDate(u.createdAt)}
+                    </span>
+                  </div>
+                  {u.kind === 'texture' && (
+                    <select
+                      value={normalizeTextureCategory(u.metadata.category) ?? ''}
+                      disabled={updatingId === u.id}
+                      onChange={(e) =>
+                        void handleChangeCategory(u, (e.target.value || null) as MaterialCategory | null)
+                      }
+                      title="表示カテゴリ"
+                      aria-label="表示カテゴリ"
+                      className="shrink-0 rounded border border-white/10 bg-neutral-800 px-1.5 py-1 text-[11px] text-neutral-200 disabled:opacity-50"
+                    >
+                      {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
+                        <option key={opt.label} value={opt.value ?? ''}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                  <button
+                    type="button"
+                    disabled={deletingId === u.id}
+                    onClick={() => void handleDelete(u)}
+                    className="shrink-0 rounded px-2 py-1 text-[11px] text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
+                  >
+                    {deletingId === u.id ? '削除中…' : '削除'}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+
+      {/* 建材画像のカテゴリ選択ポップアップ（260623）。ファイル選択後にカテゴリを決めて追加する。 */}
+      {pendingTexture && (
+        <div
+          className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4"
+          onClick={cancelPendingTexture}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-label="建材画像のカテゴリ選択"
+          >
+            <h3 className="text-base font-bold text-neutral-100">追加した建材画像のカテゴリを選択してください。</h3>
+            <p className="mt-1 text-[11px] text-neutral-400">
+              ※複数のカテゴリに属する場合は共通を選択してください。
+            </p>
+
+            <div className="mt-4 flex gap-4">
+              <div className="h-32 w-32 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
+                <img src={pendingTexture.previewUrl} alt="選択された建材画像" className="h-full w-full object-cover" />
+              </div>
+              <div className="flex-1">
+                <div className="grid grid-cols-2 gap-2">
                   {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
-                    <option key={opt.label} value={opt.value ?? ''}>
+                    <button
+                      key={opt.label}
+                      type="button"
+                      onClick={() => setPendingCategory(opt.value)}
+                      className={`rounded-lg py-2.5 text-sm font-semibold transition ${
+                        pendingCategory === opt.value
+                          ? 'bg-sky-600 text-white'
+                          : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
+                      }`}
+                    >
                       {opt.label}
-                    </option>
+                    </button>
                   ))}
-                </select>
-              )}
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-5 flex justify-end gap-2">
               <button
                 type="button"
-                disabled={deletingId === u.id}
-                onClick={() => void handleDelete(u)}
-                className="shrink-0 rounded px-2 py-1 text-[11px] text-red-300 transition hover:bg-red-500/20 disabled:opacity-50"
+                onClick={cancelPendingTexture}
+                className="rounded-lg bg-neutral-800 px-4 py-2 text-sm transition hover:bg-neutral-700"
               >
-                {deletingId === u.id ? '削除中…' : '削除'}
+                キャンセル
               </button>
-            </li>
-          ))}
-        </ul>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => void confirmPendingTexture()}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+              >
+                選択したカテゴリに追加
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
