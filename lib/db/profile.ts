@@ -31,11 +31,23 @@ export async function updateProfile(patch: ProfilePatch): Promise<void> {
   if (error) throw error;
 }
 
-/** メールアドレスの変更を要求（新アドレスへ確認リンクが届くまで反映されない）。 */
+/**
+ * メールアドレスの変更を要求（確認リンクをクリックするまで反映されない）。
+ * 確認リンクのリダイレクト先をアプリ自身に明示する（Supabase の Site URL 任せにしない）。
+ * Supabase の検証はリダイレクト先が許可リスト（URL Configuration の Redirect URLs）に
+ * 含まれないと失敗し、リンクを踏んでも反映されないため、現在のアプリ URL を渡す。
+ * ※ Supabase 側「Secure email change」が有効な場合は、現在のアドレスと新しいアドレスの
+ *   両方に確認メールが届き、両方をクリックするまで反映されない（260623 不具合の主因はここの可能性）。
+ */
 export async function updateEmail(email: string): Promise<void> {
   const sb = getSupabase();
   if (!sb) throw new Error('Supabase が未構成のため、メールを変更できません。');
-  const { error } = await sb.auth.updateUser({ email });
+  const emailRedirectTo =
+    typeof window !== 'undefined' ? `${window.location.origin}${window.location.pathname}` : undefined;
+  const { error } = await sb.auth.updateUser(
+    { email },
+    emailRedirectTo ? { emailRedirectTo } : undefined,
+  );
   if (error) throw error;
 }
 

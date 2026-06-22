@@ -55,7 +55,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
       setErr('新しいメールアドレスを入力してください。');
       return;
     }
-    void run(() => updateEmail(e), '確認メールを送信しました。新しいアドレスのリンクをクリックすると変更が反映されます。');
+    void run(() => updateEmail(e), '確認メールを送信しました。届いた確認リンクをクリックすると反映されます。（設定により、現在のアドレスと新しいアドレスの両方に届く場合は、両方のリンクをクリックしてください。）');
   };
 
   const savePassword = () => {
@@ -114,7 +114,7 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               <button type="button" disabled={busy} onClick={saveEmail} className={primaryBtn}>
                 メールを変更
               </button>
-              <p className="text-[10px] text-neutral-500">変更後、新しいアドレスに届く確認リンクをクリックすると反映されます。</p>
+              <p className="text-[10px] text-neutral-500">変更後、届いた確認リンクをクリックすると反映されます。両方のアドレスにメールが届いた場合は、両方のリンクをクリックしてください。</p>
             </section>
 
             <section className="space-y-2 border-t border-white/10 pt-4">

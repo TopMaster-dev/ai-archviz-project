@@ -529,7 +529,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               >
                 <img src="/lp/lp-step-2d-3d-ai.jpg" alt="" loading="lazy" className="aspect-video w-full object-cover" />
                 <span className="block p-3">
-                  <span className="block text-sm font-semibold">空間デザイン</span>
+                  <span className="block text-sm font-semibold">図面からパース作成</span>
                   <span className="mt-0.5 block text-[11px] text-neutral-400">2D作図 → 3D → AIレンダリング</span>
                 </span>
               </button>
@@ -544,7 +544,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               >
                 <img src="/lp/lp-ai-edit.jpg" alt="" loading="lazy" className="aspect-video w-full object-cover" />
                 <span className="block p-3">
-                  <span className="block text-sm font-semibold">写真をAI編集</span>
+                  <span className="block text-sm font-semibold">AI で写真編集</span>
                   <span className="mt-0.5 block text-[11px] text-neutral-400">写真をアップロードしてAI画像編集</span>
                 </span>
               </button>
