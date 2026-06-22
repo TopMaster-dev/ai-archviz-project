@@ -19,7 +19,9 @@ export function UndoRedoBar() {
   const sketchToolbarBottom = useRenderOverlayStore((s) => s.sketchToolbarBottom);
   const topPx = sketchToolbarBottom > 0 ? sketchToolbarBottom + 10 : headerBottom > 0 ? headerBottom + 10 : 92;
 
-  if (overlayActive) return null;
+  // 2D（作図ツールバーが上段にあるとき）はツールバー内に「一つ戻る/やり直し」を統合したため、
+  // フローティングのバーは隠す（260623・重複回避）。3Dビューでは従来どおり表示する。
+  if (overlayActive || sketchToolbarBottom > 0) return null;
 
   const btn =
     'flex h-8 w-8 items-center justify-center rounded-lg text-neutral-200 transition hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent';

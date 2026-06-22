@@ -30,6 +30,7 @@ import { useAiRenderer } from './hooks/useAiRenderer.js';
 import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
+import { OnboardingGuide } from './components/OnboardingGuide.js';
 import { useStore } from 'zustand';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
@@ -1192,6 +1193,8 @@ const App: React.FC = () => {
 
   const [maskMode, setMaskMode] = useState(false);
   const [aiEditOpen, setAiEditOpen] = useState(false);
+  // エディタ上部の「?」から見返せる操作ガイド（260623）。
+  const [editorOnboardingOpen, setEditorOnboardingOpen] = useState(false);
 
   // ログイン時のみ存在するプロジェクトセッション（ゲストでは null）。一覧サムネ保存に使う（2c-i）。
   const projectSession = useOptionalProjectSession();
@@ -2192,6 +2195,7 @@ const App: React.FC = () => {
       canSwitchTo3D={canNavigateTo3D}
       canSwitchToAi={!!renderState.resultImageUrl}
       aiDisabledTitle="AIレンダリング完了後に利用できます"
+      onHelp={() => setEditorOnboardingOpen(true)}
     />
   );
 
@@ -2717,6 +2721,9 @@ const App: React.FC = () => {
       <ThumbnailGeneratorQueue
         enabled={(viewMode === '3D' || generationQueue.length > 0) && cacheTrigger >= 0}
       />
+
+      {/* 使い方ガイド（エディタ上部の「?」から見返せる・260623） */}
+      <OnboardingGuide open={editorOnboardingOpen} onClose={() => setEditorOnboardingOpen(false)} />
 
       <input 
         type="file" 

@@ -1,4 +1,5 @@
 import React from 'react';
+import { HelpCircle } from 'lucide-react';
 
 type ModeId = 'sketch' | '3D' | 'ai';
 
@@ -11,6 +12,8 @@ type Props = {
   canSwitchToAi?: boolean;
   aiDisabledTitle?: string;
   className?: string;
+  /** 使い方ガイドを開く（260623: 上部に ? を置いて、一度きりでなく見返せるように）。 */
+  onHelp?: () => void;
 };
 
 const shellClassName =
@@ -29,6 +32,7 @@ export function ModeToggleBar({
   canSwitchToAi = true,
   aiDisabledTitle,
   className,
+  onHelp,
 }: Props) {
   return (
     <div className={`${shellClassName}${className ? ` ${className}` : ''}`}>
@@ -62,6 +66,17 @@ export function ModeToggleBar({
       >
         AI画像編集
       </button>
+      {onHelp && (
+        <button
+          type="button"
+          onClick={onHelp}
+          title="使い方ガイド"
+          aria-label="使い方ガイド"
+          className="inline-flex h-[34px] w-[34px] items-center justify-center rounded-xl text-white/55 transition-all hover:text-white/95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+        >
+          <HelpCircle className="h-[18px] w-[18px]" />
+        </button>
+      )}
     </div>
   );
 }

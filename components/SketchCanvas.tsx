@@ -4,6 +4,9 @@ import { NumericField } from './NumericField.js';
 import { Point, Opening, OpeningType, ToolMode, AddKind, FurnitureItem } from '../types.js';
 import type { UnderlaySettings, Beam } from '../lib/project/projectState.js';
 import { useRenderOverlayStore } from '../lib/store/renderOverlayStore.js';
+import { useProjectStore } from '../lib/store/projectStore.js';
+import { useStore } from 'zustand';
+import { Undo2, Redo2 } from 'lucide-react';
 import { useConfirm } from './ConfirmDialog.js';
 import {
   SKETCH_BASE_SCALE,
@@ -2351,6 +2354,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
   }, [pointsMm, isDrawing, isClosed, gridSize, lengthSnapSize, isLengthSnapEnabled, angleSnap, isAngleSnapEnabled, draggingPointIndex, selectedPointIndex, selectedEdgeIndex, openings, selectedOpeningId, isGridSnapEnabled, activeFurnitureId, rotatingFurnitureId]);
 
+  // 元に戻す/やり直し（260623: 上部フローティングバーから作図ツールバーへ統合）。Ctrl+Z/Y と同じ temporal を駆動。
+  const canUndo = useStore(useProjectStore.temporal, (t) => t.pastStates.length > 0);
+  const canRedo = useStore(useProjectStore.temporal, (t) => t.futureStates.length > 0);
+
   const getDeleteLabel = () => {
     if (activeFurnitureId) return '選択した家具を削除';
     if (selectedPointIndex !== null) return '選択した点を削除';
@@ -2440,7 +2447,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           </div>
         </div>
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold text-neutral-400" title="既存の頂点・整列にスナップ">頂点スナップ</span>
+          <span className="text-[10px] font-bold text-neutral-400" title="ON で、新しい点を既存の頂点や、既存頂点と同じX/Y位置（整列）に自動で吸着させます">頂点スナップ</span>
           <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
         </div>
       </div>
@@ -2780,15 +2787,32 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               {/* Editing Controls（狭幅では折り返す） */}
               <div className="flex flex-wrap items-center gap-2">
                   <button
-                      onClick={handleDeleteSelected}
-                      className={`h-11 px-6 rounded-xl text-xs font-black uppercase tracking-wider transition-all border flex items-center justify-center min-w-[120px]
-                      ${activeFurnitureId || selectedPointIndex !== null || selectedEdgeIndex !== null 
-                          ? 'bg-amber-500/10 text-amber-400 border-amber-500/30 hover:bg-amber-500/20' 
-                          : 'bg-white/5 text-neutral-400 border-white/5 hover:bg-white/10 hover:text-white'
-                      }`}
+                      type="button"
+                      onClick={() => useProjectStore.temporal.getState().undo()}
+                      disabled={!canUndo}
+                      title="元に戻す (Ctrl+Z)"
+                      className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
                   >
-                      {getDeleteLabel()}
+                      <Undo2 className="h-4 w-4" /> 一つ戻る
                   </button>
+                  <button
+                      type="button"
+                      onClick={() => useProjectStore.temporal.getState().redo()}
+                      disabled={!canRedo}
+                      title="やり直す (Ctrl+Y)"
+                      className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
+                  >
+                      <Redo2 className="h-4 w-4" /> やり直し
+                  </button>
+                  {(activeFurnitureId || selectedPointIndex !== null || selectedEdgeIndex !== null) && (
+                    <button
+                        type="button"
+                        onClick={handleDeleteSelected}
+                        className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 flex items-center justify-center"
+                    >
+                        {getDeleteLabel()}
+                    </button>
+                  )}
                   
                   <button
                       onClick={async () => {
