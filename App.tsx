@@ -1327,20 +1327,33 @@ const App: React.FC = () => {
   const docEditCount = useStore(useProjectStore.temporal, (t) => t.pastStates.length);
   useEffect(() => {
     if (!projectSession?.projectId) return;
-    if (useProjectStore.getState().aiEdit.versions.length > 0) return; // AI画像を優先
+    if (useProjectStore.getState().aiEdit.versions.length > 0) return; // 早期スキップ（最終判定は発火時に再確認）
     const timer = setTimeout(() => {
       try {
+        // 発火時にも AI 画像の有無を再確認（3秒の間に AIレンダが完了して AIサムネを上書きしないように）。
+        if (useProjectStore.getState().aiEdit.versions.length > 0) return;
         const sel = viewMode === '3D' ? 'canvas[data-arise-room]' : 'canvas[data-arise-sketch]';
         const c = document.querySelector(sel) as HTMLCanvasElement | null;
         if (!c || c.width < 8 || c.height < 8) return;
-        const url = c.toDataURL('image/jpeg', 0.7);
-        void makeThumbnailDataUrl(url)
-          .then((thumb) => projectSession?.setProjectThumbnail(thumb))
-          .catch(() => {});
+        // 一覧サムネは小さいので、フルサイズ JPEG を経由せず 320px へ直接縮小する
+        // （高DPRの3Dキャンバスを丸ごと toDataURL するメインスレッド負荷を避ける）。
+        const scale = Math.min(1, 320 / c.width);
+        const tw = Math.max(1, Math.round(c.width * scale));
+        const th = Math.max(1, Math.round(c.height * scale));
+        const tmp = document.createElement('canvas');
+        tmp.width = tw;
+        tmp.height = th;
+        const tctx = tmp.getContext('2d');
+        if (!tctx) return;
+        // 2Dスケッチは透明背景のため、JPEG化で黒落ちしないよう画面と同じ背景色を敷く。
+        tctx.fillStyle = '#0b0b0b';
+        tctx.fillRect(0, 0, tw, th);
+        tctx.drawImage(c, 0, 0, tw, th);
+        projectSession?.setProjectThumbnail(tmp.toDataURL('image/jpeg', 0.7));
       } catch {
         /* best-effort（取得できなくても害はない） */
       }
-    }, 3000);
+    }, 4000);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docEditCount, viewMode, projectSession?.projectId]);
