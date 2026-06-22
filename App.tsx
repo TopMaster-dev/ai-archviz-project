@@ -3963,7 +3963,10 @@ const App: React.FC = () => {
                           <div className="bg-white/10 p-2 rounded-xl border border-white/10"><MouseWheel /></div>
                           <span className="text-neutral-300 text-[11px]"><strong className="text-white">ホイール:</strong> ズーム</span>
                       </li>
-                      <li className="flex items-center gap-3">
+              </ul>
+              {/* キーボードショートカットは2列グリッドで整列（260623・赤枠指摘=横2つ並びの行に） */}
+              <ul className="grid grid-cols-2 gap-x-3 gap-y-2 mt-3 text-xs font-bold text-neutral-200">
+                      <li className="flex items-center gap-2">
                           <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+Z</div>
                           <span className="text-neutral-300 text-[11px]"><strong className="text-white">一つ戻る</strong></span>
                       </li>
