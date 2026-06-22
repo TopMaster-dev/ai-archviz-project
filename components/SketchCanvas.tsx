@@ -2660,14 +2660,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         />
       </div>
 
-      {/* 梁 */}
+      {/* オブジェクト管理（平面=ドア/窓・床家具／天伏=梁・天井家具）＋非アクティブ濃度・260623 */}
       <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
-        {beams.length > 0 && (
-          <div className="flex items-center gap-2">
-            <span className="text-neutral-500">梁 {beams.length}本</span>
-          </div>
-        )}
-        <div className="mt-1.5 flex items-center gap-2 text-[10px] text-neutral-400">
+        <div className="flex items-center gap-2 text-[10px] text-neutral-400">
           <span title="非アクティブな図面（平面/天伏）の表示濃度">非アクティブ濃度</span>
           <input
             type="range"
@@ -2679,24 +2674,83 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             className="w-24"
           />
         </div>
-        {beams.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap gap-1">
-            {beams.map((b, i) => (
-              <button
-                key={b.id}
-                type="button"
-                onClick={() => setSelectedBeamId(b.id)}
-                className={`px-2 py-0.5 rounded text-[10px] transition ${
-                  selectedBeamId === b.id
-                    ? 'bg-amber-500/30 text-amber-200'
-                    : 'bg-neutral-700/50 hover:bg-neutral-700'
-                }`}
-              >
-                梁{i + 1}
-              </button>
-            ))}
+
+        <div className="mt-2 border-t border-white/5 pt-2">
+          <div className="mb-1 text-[10px] font-bold text-neutral-500">
+            {isCeilingView ? '天伏オブジェクト' : '平面オブジェクト'}
           </div>
-        )}
+          {(() => {
+            const chipCls = (active: boolean) =>
+              `px-2 py-0.5 rounded text-[10px] transition ${active ? 'bg-emerald-500/30 text-emerald-200' : 'bg-neutral-700/50 hover:bg-neutral-700'}`;
+            const furnLabel = (f: FurnitureItem) => f.customName ?? f.name ?? '家具';
+            if (!isCeilingView) {
+              // 平面図: ドア・窓 と 床に配置した家具（!ceilingMount）。
+              const floor = furnitureItems.filter((f) => !f.ceilingMount);
+              if (openings.length === 0 && floor.length === 0)
+                return <span className="text-[10px] text-neutral-600">平面に配置されたオブジェクトはありません</span>;
+              return (
+                <div className="space-y-1.5">
+                  {openings.length > 0 && (
+                    <div>
+                      <div className="mb-0.5 text-[9px] text-neutral-500">ドア・窓</div>
+                      <div className="flex flex-wrap gap-1">
+                        {openings.map((o, i) => (
+                          <button key={o.id} type="button" onClick={() => onOpeningSelect(o.id)} className={chipCls(selectedOpeningId === o.id)}>
+                            {o.type.startsWith('door') ? 'ドア' : '窓'}{i + 1}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {floor.length > 0 && (
+                    <div>
+                      <div className="mb-0.5 text-[9px] text-neutral-500">家具</div>
+                      <div className="flex flex-wrap gap-1">
+                        {floor.map((f) => (
+                          <button key={f.id} type="button" onClick={() => onFurnitureSelect(f.id)} className={`${chipCls(activeFurnitureId === f.id)} max-w-[96px] truncate`}>
+                            {furnLabel(f)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            }
+            // 天伏図: 梁 と 天井に配置した家具（ceilingMount）。
+            const ceiling = furnitureItems.filter((f) => f.ceilingMount);
+            if (beams.length === 0 && ceiling.length === 0)
+              return <span className="text-[10px] text-neutral-600">天伏に配置されたオブジェクトはありません</span>;
+            return (
+              <div className="space-y-1.5">
+                {beams.length > 0 && (
+                  <div>
+                    <div className="mb-0.5 text-[9px] text-neutral-500">梁 {beams.length}本</div>
+                    <div className="flex flex-wrap gap-1">
+                      {beams.map((b, i) => (
+                        <button key={b.id} type="button" onClick={() => setSelectedBeamId(b.id)} className={chipCls(selectedBeamId === b.id)}>
+                          梁{i + 1}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {ceiling.length > 0 && (
+                  <div>
+                    <div className="mb-0.5 text-[9px] text-neutral-500">天井家具</div>
+                    <div className="flex flex-wrap gap-1">
+                      {ceiling.map((f) => (
+                        <button key={f.id} type="button" onClick={() => onFurnitureSelect(f.id)} className={`${chipCls(activeFurnitureId === f.id)} max-w-[96px] truncate`}>
+                          {furnLabel(f)}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </div>
         {(() => {
           const b = beams.find((x) => x.id === selectedBeamId);
           if (!b) return null;
