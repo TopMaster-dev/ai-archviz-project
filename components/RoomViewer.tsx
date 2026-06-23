@@ -350,17 +350,17 @@ const Beam3DMesh: React.FC<{
         )}
       </mesh>
       {isSelected && !isWallBeam && editable && (
-        <mesh
-          ref={handleRef}
-          visible={false}
-          position={[bx + handleD * Math.cos(angleRad), by, bz + handleD * Math.sin(angleRad)]}
-          onPointerDown={startRotate}
-          onClick={(e) => e.stopPropagation()}
-          renderOrder={12}
-        >
-          <sphereGeometry args={[0.13, 16, 16]} />
-          <meshBasicMaterial color="#f97316" depthTest={false} depthWrite={false} />
-        </mesh>
+        // 家具と同様の回転リングを梁の中央に配置（260623・クライアント要望）。リングをドラッグで回転。
+        <group position={[bx, by, bz]}>
+          <FurnitureRotationRing3D
+            radius={Math.hypot(lengthM / 2, widthM / 2) + 0.15}
+            highlighted={false}
+            isDashed={isDragging}
+            onRingPointerDown={startRotate}
+            onRingPointerOver={() => {}}
+            onRingPointerOut={() => {}}
+          />
+        </group>
       )}
     </group>
   );

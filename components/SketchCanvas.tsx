@@ -1022,15 +1022,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
     // --- 天伏図: 既存の自由梁を選択/移動/回転（壁梁は壁固定のため対象外） ---
     if (isCeilingView && (isSelectMode || isBeamMode)) {
-      // 回転ハンドル（選択中の自由梁の端の先）にヒットしたら回転開始。
+      // 選択中の自由梁の回転リング（中央・家具と同様）にヒットしたら回転開始（260623）。
       const sel = beamsRef.current.find(
         (b) => b.id === selectedBeamIdRef.current && b.wallIndex === undefined,
       );
       if (sel) {
-        const rad = (sel.angleDeg * Math.PI) / 180;
-        const hd = sel.lengthMm / 2 + 600;
-        const hPx = worldToScreen({ x: sel.cx + hd * Math.cos(rad), y: sel.cy + hd * Math.sin(rad) });
-        if (Math.hypot(pixels.x - hPx.x, pixels.y - hPx.y) <= 12) {
+        const cPx = worldToScreen({ x: sel.cx, y: sel.cy });
+        const ringR = getFurnitureRotationRingRadiusPx(sel.lengthMm, sel.widthMm, viewZoomRef.current);
+        const dist = Math.hypot(pixels.x - cPx.x, pixels.y - cPx.y);
+        if (dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + RING_HIT_OUTER_PX) {
           beamDragRef.current = { id: sel.id, mode: 'rotate', startMm: mm, startCx: sel.cx, startCy: sel.cy };
           tryPointerCapture(e);
           return;
@@ -2415,8 +2415,22 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           ctx.lineWidth = selected ? 2 : 1;
           ctx.stroke();
 
-          // 自由梁選択時のオレンジ回転ハンドルは非表示（260623・クライアント要望）。回転は角度フィールドで行う。
-          // ドラッグ回転自体のヒット判定（handlePointerDown）は残置するが、視覚的なポイントは描画しない。
+          // 自由梁選択時: 家具と同様の回転リングを梁の中央に表示（260623・クライアント要望）。リングのドラッグで回転。
+          if (selected && !isWallBeam) {
+            const cPx = worldToScreen({ x: beam.cx, y: beam.cy });
+            const ringR = getFurnitureRotationRingRadiusPx(beam.lengthMm, beam.widthMm, currentZoom);
+            const rotating = beamDragRef.current?.mode === 'rotate' && beamDragRef.current.id === beam.id;
+            ctx.save();
+            ctx.translate(cPx.x, cPx.y);
+            drawFurnitureRotationRingIcon(ctx, ringR, {
+              dashed: rotating,
+              lineWidth: Math.max(1.5, 2.2 * getArrowGizmoScale(currentZoom)),
+              strokeStyle: '#2563eb',
+              fillStyle: '#2563eb',
+              gizmoScale: getArrowGizmoScale(currentZoom),
+            });
+            ctx.restore();
+          }
         }
         ctx.restore();
       }
