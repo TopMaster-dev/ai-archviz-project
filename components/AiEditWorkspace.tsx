@@ -30,6 +30,7 @@ import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
+import { RenderAdColumn } from './AdSlot.js';
 
 function normalizeImageDataUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -1434,6 +1435,8 @@ export function AiEditWorkspace({
               <p className="text-sm text-zinc-400">しばらくお待ちください。</p>
             </div>
           </div>
+          {/* 生成待ち時間に広告を表示（260624・仮 Google AdSense）。 */}
+          <RenderAdColumn className="absolute right-6 top-1/2 -translate-y-1/2" />
         </div>
       )}
     </div>

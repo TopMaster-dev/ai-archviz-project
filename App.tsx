@@ -31,6 +31,7 @@ import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { OnboardingGuide } from './components/OnboardingGuide.js';
+import { RenderAdColumn } from './components/AdSlot.js';
 import { useStore } from 'zustand';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
@@ -4377,6 +4378,8 @@ const App: React.FC = () => {
                <p className="text-zinc-400 text-sm">しばらくお待ちください。</p>
              </div>
           </div>
+          {/* AIレンダリング待ち時間に広告を表示（260624・仮 Google AdSense）。 */}
+          <RenderAdColumn className="absolute right-6 top-1/2 -translate-y-1/2" />
         </div>
       )}
 
