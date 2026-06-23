@@ -197,6 +197,8 @@ export function AiEditWorkspace({
   const [isSituationCardVisible, setIsSituationCardVisible] = useState(false);
   // AIエージェント相談パネルの開閉（トリガは「エリア編集」横のタブへ移動。260619 クライアント要望）。
   const [agentOpen, setAgentOpen] = useState(false);
+  // 右レール「AIマジックツール」のタブ（260624 クライアントUI準拠）: area=エリア編集 / coordinate=コーディネート / agent=相談。
+  const [activeTool, setActiveTool] = useState<'area' | 'coordinate' | 'agent'>('area');
 
   const styleInputRef = useRef<HTMLInputElement>(null);
   const objectInputRef = useRef<HTMLInputElement>(null);
@@ -377,7 +379,10 @@ export function AiEditWorkspace({
   const hasSituationInput =
     isSituationCardVisible && (!!styleImageDataUrl || draftStyleMemo.trim().length > 0);
   const emptySituationCard =
-    isSituationCardVisible && !styleImageDataUrl && draftStyleMemo.trim().length === 0;
+    activeTool === 'coordinate' &&
+    isSituationCardVisible &&
+    !styleImageDataUrl &&
+    draftStyleMemo.trim().length === 0;
   const areaEmptyCount = draftObjects.filter((o) => {
     const image = normalizeImageDataUrl(o.imageDataUrl);
     return !image && o.memo.trim().length === 0;
@@ -1076,37 +1081,56 @@ export function AiEditWorkspace({
             <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-0 pb-6 space-y-2 md:px-4 md:pb-8 md:space-y-3 scroll-dark">
             <div>
               <div className="text-[10px] font-black uppercase text-neutral-500 tracking-widest mb-2">
-                参照画像
+                AI マジックツール
               </div>
-              <div className="flex flex-wrap gap-2">
+              <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  disabled={isSubmitting || !activeVersion || !!projectSession?.aiCredits.blocked}
-                  onClick={() => void runCoordinate()}
-                  title={
-                    creditBlockMessage(projectSession?.aiCredits) ??
-                    '空間全体をAIにお任せで再コーディネート（家具・装飾・演出を一新）'
-                  }
-                  className="w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-900/70 border border-purple-500/30 text-xs font-black text-purple-200 hover:bg-purple-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  onClick={() => {
+                    setActiveTool('area');
+                    setAgentOpen(false);
+                    onAddObject();
+                  }}
+                  className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
+                    activeTool === 'area'
+                      ? 'bg-emerald-600/15 border-emerald-500 text-emerald-100'
+                      : 'bg-zinc-800 border-white/10 text-neutral-200 hover:bg-zinc-700'
+                  }`}
                 >
-                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                  AIデザイン提案
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onAddObject()}
-                  className="flex items-center gap-1 px-3 py-2 rounded-lg bg-zinc-800 border border-white/10 text-xs font-bold hover:bg-zinc-700"
-                >
-                  <ImagePlus className="w-4 h-4" />
+                  <ImagePlus className="w-4 h-4 shrink-0" />
                   エリア編集
                 </button>
                 <button
                   type="button"
-                  onClick={() => setIsSituationCardVisible(true)}
-                  className="flex items-center gap-1 px-3 py-2 rounded-lg bg-zinc-800 border border-white/10 text-xs font-bold hover:bg-zinc-700"
+                  onClick={() => {
+                    setActiveTool('coordinate');
+                    setAgentOpen(false);
+                    setIsSituationCardVisible(true);
+                  }}
+                  className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
+                    activeTool === 'coordinate'
+                      ? 'bg-emerald-600/15 border-emerald-500 text-emerald-100'
+                      : 'bg-zinc-800 border-white/10 text-neutral-200 hover:bg-zinc-700'
+                  }`}
                 >
-                  <ImagePlus className="w-4 h-4" />
+                  <Sparkles className="w-4 h-4 shrink-0" />
                   コーディネート
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveTool('agent');
+                    setAgentOpen(true);
+                  }}
+                  title="AIエージェントに相談（デザイン・素材・見積の相談）"
+                  className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
+                    activeTool === 'agent'
+                      ? 'bg-emerald-600/15 border-emerald-500 text-emerald-100'
+                      : 'bg-zinc-800 border-white/10 text-neutral-200 hover:bg-zinc-700'
+                  }`}
+                >
+                  <MessageCircle className="w-4 h-4 shrink-0" />
+                  エージェントに相談
                 </button>
                 <input
                   ref={styleInputRef}
@@ -1115,19 +1139,6 @@ export function AiEditWorkspace({
                   className="hidden"
                   onChange={onPickStyleFile}
                 />
-                <button
-                  type="button"
-                  onClick={() => setAgentOpen((o) => !o)}
-                  title="AIエージェントに相談（デザイン・素材・見積の相談）"
-                  className={`flex items-center gap-1 px-3 py-2 rounded-lg border text-xs font-bold transition ${
-                    agentOpen
-                      ? 'bg-emerald-700 border-emerald-500 text-white'
-                      : 'bg-zinc-800 border-white/10 hover:bg-zinc-700'
-                  }`}
-                >
-                  <MessageCircle className="w-4 h-4" />
-                  エージェントに相談
-                </button>
                 <input
                   ref={objectInputRef}
                   type="file"
@@ -1136,7 +1147,22 @@ export function AiEditWorkspace({
                   onChange={onPickObjectFile}
                 />
               </div>
-              {isSituationCardVisible && (
+              {activeTool === 'coordinate' && (
+                <button
+                  type="button"
+                  disabled={isSubmitting || !activeVersion || !!projectSession?.aiCredits.blocked}
+                  onClick={() => void runCoordinate()}
+                  title={
+                    creditBlockMessage(projectSession?.aiCredits) ??
+                    '空間全体をAIにお任せで再コーディネート（家具・装飾・演出を一新）'
+                  }
+                  className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-900/70 border border-purple-500/30 text-xs font-black text-purple-200 hover:bg-purple-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
+                  お任せでAIコーディネート
+                </button>
+              )}
+              {activeTool === 'coordinate' && isSituationCardVisible && (
                 <div className="mt-2 rounded-lg border border-white/10 bg-[rgba(24,24,27,0.5)] p-2 text-xs">
                   <div className="flex items-start gap-2">
                     <div className="w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center border-white/20">
@@ -1194,10 +1220,13 @@ export function AiEditWorkspace({
               )}
             </div>
 
+            {activeTool === 'area' && (
             <div>
-              <div className="text-[10px] font-black uppercase text-neutral-500 tracking-widest mb-2">
-                エリア編集一覧
-              </div>
+              {draftObjects.length === 0 && (
+                <p className="text-[11px] leading-relaxed text-neutral-500 py-2">
+                  「エリア編集」を押して、編集したい範囲（領域）を追加してください。
+                </p>
+              )}
               <ul className="space-y-2">
                 {draftObjects.map((o, objIdx) => {
                   const pal = aiEditObjectUiColors(objIdx);
@@ -1351,6 +1380,7 @@ export function AiEditWorkspace({
                 })}
               </ul>
             </div>
+            )}
             </div>
 
             <div className="z-40 shrink-0 border-t border-white/10 p-3 bg-[#050505] space-y-2">
@@ -1417,7 +1447,10 @@ export function AiEditWorkspace({
         imageDataUrl={activeVersion?.outputImageDataUrl ?? null}
         projectId={projectSession?.projectId ?? null}
         open={agentOpen}
-        onOpenChange={setAgentOpen}
+        onOpenChange={(o) => {
+          setAgentOpen(o);
+          if (!o && activeTool === 'agent') setActiveTool('area');
+        }}
         catalog={agentCatalog}
         onAddEstimateItem={onAddEstimateItem}
       />
