@@ -209,6 +209,8 @@ interface SketchCanvasProps {
   onFurnitureSelect: (id: string | null, additive?: boolean) => void;
   /** 部屋の天井高（mm）。2Dパネルでの家具/建具の高さ編集に使用（260623）。 */
   roomHeight: number;
+  /** 共有ビューア等の読み取り専用表示（上部ツールバー非表示＋キャンバス編集無効＝パン/ズームのみ・260623）。 */
+  readOnly?: boolean;
   /** 下絵（2D背景画像）。null で非挿入。 */
   underlay?: UnderlaySettings | null;
   onUnderlayChange?: (underlay: UnderlaySettings | null) => void;
@@ -255,6 +257,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   activeFurnitureId,
   onFurnitureSelect,
   roomHeight,
+  readOnly = false,
   underlay = null,
   onUnderlayChange,
   beams = [],
@@ -973,6 +976,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       tryPointerCapture(e);
       return;
     }
+    // 読み取り専用（共有ビューア）: パン/ズーム以外の編集操作（選択・描画・移動など）を無効化。
+    if (readOnly) return;
 
     // --- 下絵 リサイズ: 右下角ハンドルを掴んだら拡縮（移動判定より先に評価） ---
     if (
@@ -1088,7 +1093,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
     // --- SELECT MODE ---
     if (isSelectMode || isAddFurniture) {
-      if (furnitureHit) {
+      // 天伏図では現在レイヤ（天井家具）以外の家具は選択しない。平面図では床家具のみ（260623）。
+      const fhItem = furnitureHit ? furnitureItems.find((f) => f.id === furnitureHit.id) : null;
+      const fhInLayer = !!fhItem && !!fhItem.ceilingMount === isCeilingView;
+      if (furnitureHit && fhInLayer) {
         // shift / ctrl / cmd 押下時は複数選択（トグル）。それ以外は単一選択（260623・Cフェーズ2）。
         onFurnitureSelect(furnitureHit.id, e.shiftKey || e.ctrlKey || e.metaKey);
         onOpeningSelect(null);
@@ -1124,6 +1132,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         onFurnitureSelect(null);
       }
 
+      // 天伏図では平面要素（壁・窓・ドア）を選択しない。梁は上で処理済み（260623）。
+      if (!isCeilingView) {
       // 0. Check Opening Hit (PRIORITIZED)
       let openingHit = false;
       if (openings.length > 0) {
@@ -1198,6 +1208,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           }
         }
       }
+      } // 天伏図では平面要素（壁・窓・ドア）の選択をスキップ
 
       // Clicked empty space in select mode
       setSelectedPointIndex(null);
@@ -2927,7 +2938,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           下端通知（Undo/Redo・ホームの退避位置）がズレる。アニメ無し＝確定レイアウトを即時計測。 */}
       <div
         ref={toolbarRef}
-        className="absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:top-6 md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] pointer-events-auto"
+        className={`absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:top-6 md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] pointer-events-auto ${readOnly ? 'hidden' : ''}`}
       >
           <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
               
