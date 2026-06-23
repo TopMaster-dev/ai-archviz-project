@@ -44,7 +44,7 @@ import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/
 import { toStoredImage } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
-import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -2103,13 +2103,28 @@ const App: React.FC = () => {
     }
   }, [activeFurnitureId]);
 
-  const handleMaterialUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!e.target) return;
-    // Explicitly cast to File[] to avoid 'unknown' type errors on file properties
+  // 建材（テクスチャ）画像の追加（260623・ホームの「＋建材を追加（画像）」と同じ流れに統一）:
+  // ① ファイル選択 → ② カテゴリ（共通/壁/床/天井）選択ポップアップ → ③ 選んだカテゴリで素材へ追加。
+  const [pendingMaterialFiles, setPendingMaterialFiles] = useState<File[]>([]);
+  const [pendingMaterialPreview, setPendingMaterialPreview] = useState<string | null>(null);
+  const [pendingMaterialCategory, setPendingMaterialCategory] = useState<MaterialCategory | null>(null);
+  const closeMaterialPopup = () => {
+    setPendingMaterialPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
+    setPendingMaterialFiles([]);
+    setPendingMaterialCategory(null);
+  };
+  const onMaterialFilesPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
+    if (e.target) e.target.value = ''; // 同じファイルの再選択を許可
     if (files.length === 0) return;
-
-    files.forEach(file => {
+    setPendingMaterialFiles(files);
+    setPendingMaterialPreview(URL.createObjectURL(files[0]));
+    setPendingMaterialCategory(null); // 既定＝共通
+  };
+  const commitMaterialUpload = () => {
+    const files = pendingMaterialFiles;
+    const chosen = pendingMaterialCategory; // null=共通（crossCategory）
+    files.forEach((file) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         if (typeof reader.result === 'string') {
@@ -2117,34 +2132,30 @@ const App: React.FC = () => {
             id: `custom-${Date.now()}-${Math.random()}`,
             name: file.name.split('.')[0],
             brand: 'Custom',
-            category: activeCategory || 'Wall',
+            category: chosen ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
+            crossCategory: chosen === null,
             pricePerUnit: 0,
             unit: '㎡',
             lossFactor: 0,
             textureUrl: reader.result as string,
             color: '#ffffff',
             pbr: { roughness: 0.8, metalness: 0, reflectivity: 0, glossiness: 'Matte', normalMapStrength: 0 },
-            promptHint: '(Custom Texture)'
+            promptHint: '(Custom Texture)',
           };
-          
-          setProducts(prev => [newProduct, ...prev]);
-          
-          // Apply to all selected meshes
+          setProducts((prev) => [newProduct, ...prev]);
+          // 選択中メッシュがあれば即適用（従来挙動を維持）。
           if (activeMeshes.length > 0) {
-            setSelections(prev => {
-                const next = { ...prev };
-                activeMeshes.forEach(meshName => {
-                    next[meshName] = newProduct;
-                });
-                return next;
+            setSelections((prev) => {
+              const next = { ...prev };
+              activeMeshes.forEach((meshName) => { next[meshName] = newProduct; });
+              return next;
             });
           }
         }
       };
       reader.readAsDataURL(file);
     });
-    
-    if (e.target) e.target.value = '';
+    closeMaterialPopup();
   };
 
   const handleProductSelect = (product: Product) => {
@@ -2796,6 +2807,37 @@ const App: React.FC = () => {
 
       {/* 使い方ガイド（エディタ上部の「?」から見返せる・260623） */}
       <OnboardingGuide open={editorOnboardingOpen} onClose={() => setEditorOnboardingOpen(false)} />
+
+      {/* 建材画像の追加: カテゴリ選択ポップアップ（260623・ホームの「＋建材を追加（画像）」と同じ流れ） */}
+      {pendingMaterialFiles.length > 0 && (
+        <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4" onClick={closeMaterialPopup} role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-neutral-100">追加した建材画像のカテゴリを選択してください。</h3>
+            <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。</p>
+            <div className="mt-4 flex gap-4">
+              <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
+                {pendingMaterialPreview && <img src={pendingMaterialPreview} alt="選択された建材画像" className="h-full w-full object-cover" />}
+              </div>
+              <div className="grid flex-1 grid-cols-2 gap-2 self-center">
+                {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() => setPendingMaterialCategory(opt.value)}
+                    className={`rounded-lg px-3 py-2.5 text-xs font-bold transition ${pendingMaterialCategory === opt.value ? 'bg-emerald-600 text-white' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={closeMaterialPopup} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">キャンセル</button>
+              <button type="button" onClick={commitMaterialUpload} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500">選択したカテゴリに追加</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 3Dモデルのアップロード用 input（家具ストリップの「アップロード」内「＋」から起動・260623） */}
       <input
@@ -4139,7 +4181,7 @@ const App: React.FC = () => {
                   {availableBrands.length > 0 && (
                     <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2 items-center">
                       <button onClick={() => setSelectedBrand(null)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${!selectedBrand ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>すべてのブランド</button>
-                      <label className="shrink-0 h-7 px-4 rounded-full text-[9px] font-bold border bg-emerald-500/10 border-emerald-500 text-emerald-400 hover:bg-emerald-500 hover:text-black transition-all flex items-center cursor-pointer">+ 素材を追加<input type="file" multiple accept="image/*" className="hidden" onChange={handleMaterialUpload} /></label>
+                      <label className="shrink-0 h-7 px-4 rounded-full text-[9px] font-black border bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500 transition-all flex items-center cursor-pointer shadow-sm shadow-emerald-900/40">＋ 建材を追加（画像）<input type="file" multiple accept="image/*" className="hidden" onChange={onMaterialFilesPicked} /></label>
                       {availableBrands.map(brand => (
                         <button key={brand} onClick={() => setSelectedBrand(brand)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${selectedBrand === brand ? 'bg-white text-black border-white' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>{brand}</button>
                       ))}
