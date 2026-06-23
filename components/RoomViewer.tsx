@@ -352,6 +352,7 @@ const Beam3DMesh: React.FC<{
       {isSelected && !isWallBeam && editable && (
         <mesh
           ref={handleRef}
+          visible={false}
           position={[bx + handleD * Math.cos(angleRad), by, bz + handleD * Math.sin(angleRad)]}
           onPointerDown={startRotate}
           onClick={(e) => e.stopPropagation()}

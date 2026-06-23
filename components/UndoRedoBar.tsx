@@ -23,8 +23,9 @@ export function UndoRedoBar() {
   // フローティングのバーは隠す（260623・重複回避）。3Dビューでは従来どおり表示する。
   if (overlayActive || sketchToolbarBottom > 0) return null;
 
+  // 2Dツールバーと合わせてアイコン＋テキスト表記（260623）。
   const btn =
-    'flex h-8 w-8 items-center justify-center rounded-lg text-neutral-200 transition hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent';
+    'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-[11px] font-bold text-neutral-200 transition hover:bg-neutral-700 disabled:opacity-30 disabled:hover:bg-transparent';
 
   return (
     <div
@@ -39,7 +40,7 @@ export function UndoRedoBar() {
         aria-label="元に戻す"
         className={btn}
       >
-        <Undo2 className="h-4 w-4" />
+        <Undo2 className="h-4 w-4" /> 一つ戻る
       </button>
       <button
         type="button"
@@ -49,7 +50,7 @@ export function UndoRedoBar() {
         aria-label="やり直す"
         className={btn}
       >
-        <Redo2 className="h-4 w-4" />
+        <Redo2 className="h-4 w-4" /> やり直し
       </button>
     </div>
   );

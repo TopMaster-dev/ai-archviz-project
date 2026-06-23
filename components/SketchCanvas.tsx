@@ -2415,24 +2415,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           ctx.lineWidth = selected ? 2 : 1;
           ctx.stroke();
 
-          // 選択中の自由梁: 回転ハンドル（天伏図のみ）。ドラッグで角度変更、本体ドラッグで移動。
-          if (ceilingV && selected && !isWallBeam) {
-            const endP = worldToScreen({ x: cx + (lengthMm / 2) * ux, y: cy + (lengthMm / 2) * uy });
-            const handP = worldToScreen({ x: cx + (lengthMm / 2 + 600) * ux, y: cy + (lengthMm / 2 + 600) * uy });
-            ctx.beginPath();
-            ctx.moveTo(endP.x, endP.y);
-            ctx.lineTo(handP.x, handP.y);
-            ctx.strokeStyle = 'rgba(249,115,22,0.9)';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-            ctx.beginPath();
-            ctx.arc(handP.x, handP.y, 6, 0, Math.PI * 2);
-            ctx.fillStyle = 'rgba(249,115,22,0.95)';
-            ctx.fill();
-            ctx.strokeStyle = '#ffffff';
-            ctx.lineWidth = 1.5;
-            ctx.stroke();
-          }
+          // 自由梁選択時のオレンジ回転ハンドルは非表示（260623・クライアント要望）。回転は角度フィールドで行う。
+          // ドラッグ回転自体のヒット判定（handlePointerDown）は残置するが、視覚的なポイントは描画しない。
         }
         ctx.restore();
       }
