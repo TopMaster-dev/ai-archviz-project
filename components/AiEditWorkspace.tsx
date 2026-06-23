@@ -1094,11 +1094,19 @@ export function AiEditWorkspace({
                 </button>
                 <button
                   type="button"
+                  onClick={() => onAddObject()}
+                  className="flex items-center gap-1 px-3 py-2 rounded-lg bg-zinc-800 border border-white/10 text-xs font-bold hover:bg-zinc-700"
+                >
+                  <ImagePlus className="w-4 h-4" />
+                  エリア編集
+                </button>
+                <button
+                  type="button"
                   onClick={() => setIsSituationCardVisible(true)}
                   className="flex items-center gap-1 px-3 py-2 rounded-lg bg-zinc-800 border border-white/10 text-xs font-bold hover:bg-zinc-700"
                 >
                   <ImagePlus className="w-4 h-4" />
-                  AIデザイン
+                  コーディネート
                 </button>
                 <input
                   ref={styleInputRef}
@@ -1107,14 +1115,6 @@ export function AiEditWorkspace({
                   className="hidden"
                   onChange={onPickStyleFile}
                 />
-                <button
-                  type="button"
-                  onClick={() => onAddObject()}
-                  className="flex items-center gap-1 px-3 py-2 rounded-lg bg-zinc-800 border border-white/10 text-xs font-bold hover:bg-zinc-700"
-                >
-                  <ImagePlus className="w-4 h-4" />
-                  エリア編集
-                </button>
                 <button
                   type="button"
                   onClick={() => setAgentOpen((o) => !o)}
