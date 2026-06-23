@@ -353,7 +353,7 @@ const Beam3DMesh: React.FC<{
         // 家具と同様の回転リングを梁の中央に配置（260623・クライアント要望）。リングをドラッグで回転。
         <group position={[bx, by, bz]}>
           <FurnitureRotationRing3D
-            radius={Math.hypot(lengthM / 2, widthM / 2) + 0.15}
+            radius={Math.max(0.3, widthM)}
             highlighted={false}
             isDashed={isDragging}
             onRingPointerDown={startRotate}

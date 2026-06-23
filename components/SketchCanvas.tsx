@@ -1028,7 +1028,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       );
       if (sel) {
         const cPx = worldToScreen({ x: sel.cx, y: sel.cy });
-        const ringR = getFurnitureRotationRingRadiusPx(sel.lengthMm, sel.widthMm, viewZoomRef.current);
+        const ringR = getFurnitureRotationRingRadiusPx(sel.widthMm, sel.widthMm, viewZoomRef.current);
         const dist = Math.hypot(pixels.x - cPx.x, pixels.y - cPx.y);
         if (dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + RING_HIT_OUTER_PX) {
           beamDragRef.current = { id: sel.id, mode: 'rotate', startMm: mm, startCx: sel.cx, startCy: sel.cy };
@@ -2418,7 +2418,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           // 自由梁選択時: 家具と同様の回転リングを梁の中央に表示（260623・クライアント要望）。リングのドラッグで回転。
           if (selected && !isWallBeam) {
             const cPx = worldToScreen({ x: beam.cx, y: beam.cy });
-            const ringR = getFurnitureRotationRingRadiusPx(beam.lengthMm, beam.widthMm, currentZoom);
+            // リングは梁中央の近くに置く（梁幅基準・長さ基準だと両端へ広がるため・260623）。
+            const ringR = getFurnitureRotationRingRadiusPx(beam.widthMm, beam.widthMm, currentZoom);
             const rotating = beamDragRef.current?.mode === 'rotate' && beamDragRef.current.id === beam.id;
             ctx.save();
             ctx.translate(cPx.x, cPx.y);
