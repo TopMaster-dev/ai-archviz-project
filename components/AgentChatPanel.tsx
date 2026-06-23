@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Loader2, MessageCircle, Send, X, Plus } from 'lucide-react';
+import { Check, Copy, Loader2, MessageCircle, Send, X, Plus, ImagePlus } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
@@ -19,6 +19,17 @@ import type { AgentCatalogEntry, AgentRecommendation } from '../types.js';
 
 const CHAT_STORAGE_PREFIX = 'arise-agent-chat-';
 const MAX_STORED = 50;
+
+/** 空状態に出す相談例（クリックで入力欄へ流し込む・260624 クライアント要望のUIに合わせる）。 */
+const AGENT_EXAMPLES: { label: string; fill: string; hint?: string }[] = [
+  {
+    label: 'このブランドに合うデザインを提案して',
+    fill: 'このブランドに合うデザインを提案して。',
+    hint: '（HPに掲載されている企業理念や現在の展開されている店舗画像、今回の提案要件を記入してください）',
+  },
+  { label: 'この空間に合う家具を提案して', fill: 'この空間に合う家具を提案して。' },
+  { label: '最近のトレンドカラーを教えて', fill: '最近のトレンドカラーを教えて。' },
+];
 
 /** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）が付くことがある。 */
 type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[] };
@@ -72,6 +83,9 @@ export function AgentChatPanel({
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   // 「見積に追加」済みの推薦キー（メッセージ番号-推薦番号）。二重追加を視覚的に抑止。
   const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
+  // 参考画像の添付（260624: 入力欄左の画像アイコンから添付。ブランドの店舗写真などを文脈に渡す）。
+  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  const attachInputRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // プロジェクト切替直後、まだ古い messages のまま保存 effect が走るのを防ぐ。
   const skipSave = useRef(false);
@@ -108,11 +122,14 @@ export function AgentChatPanel({
     const next: ChatMessage[] = [...messages, { role: 'user', content: text }];
     setMessages(next);
     setInput('');
+    const imgToSend = attachedImage; // 添付があれば優先して文脈に渡す（無ければ現在の生成画像）。
+    setAttachedImage(null);
     setError(null);
     setSending(true);
     try {
       // 履歴がURL（クラウド保存）の場合に備え、サーバへ渡す前に base64 データURL化（画像グラウンディング維持・260619）。
-      const grounding = imageDataUrl ? await ensureDataUrl(imageDataUrl) : null;
+      const groundingSource = imgToSend ?? imageDataUrl;
+      const grounding = groundingSource ? await ensureDataUrl(groundingSource) : null;
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
@@ -159,6 +176,15 @@ export function AgentChatPanel({
     setError(null);
   };
 
+  const onPickAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => setAttachedImage(typeof reader.result === 'string' ? reader.result : null);
+    reader.readAsDataURL(file);
+  };
+
   if (!open) return null; // 開閉トリガは「エリア編集」横のタブ（AiEditWorkspace）へ移動
 
   return (
@@ -192,9 +218,27 @@ export function AgentChatPanel({
 
       <div ref={scrollRef} className="scroll-dark flex-1 space-y-2 overflow-y-auto p-3 text-[12px]">
         {messages.length === 0 ? (
-          <p className="leading-relaxed text-neutral-500">
-            空間デザインの相談ができます。例:「この部屋を北欧風にするには？」「ソファの色は何が合う？」「巾木の色のおすすめは？」
-          </p>
+          <div className="space-y-2.5">
+            <p className="font-bold text-neutral-200">ここにお困りごとを記入してください。</p>
+            <div className="space-y-1.5">
+              {AGENT_EXAMPLES.map((ex, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => setInput(ex.fill)}
+                  className="block w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left transition hover:border-emerald-500/40 hover:bg-emerald-500/[0.06]"
+                  title="クリックで入力欄へ"
+                >
+                  <span className="text-[12px] text-neutral-200">
+                    例{i + 1}）{ex.label}
+                  </span>
+                  {ex.hint && (
+                    <span className="mt-0.5 block text-[10px] leading-relaxed text-neutral-500">{ex.hint}</span>
+                  )}
+                </button>
+              ))}
+            </div>
+          </div>
         ) : (
           messages.map((m, i) => (
             <div key={`${m.role}-${i}`} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
@@ -297,7 +341,36 @@ export function AgentChatPanel({
       </div>
 
       <div className="border-t border-white/10 p-2.5">
+        {attachedImage && (
+          <div className="mb-2 flex items-center gap-2">
+            <img src={attachedImage} alt="添付画像" className="h-10 w-10 rounded object-cover" />
+            <span className="text-[10px] text-neutral-400">参考画像を添付中</span>
+            <button
+              type="button"
+              onClick={() => setAttachedImage(null)}
+              className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-neutral-400 transition hover:bg-white/10 hover:text-white"
+            >
+              外す
+            </button>
+          </div>
+        )}
         <div className="flex items-end gap-2">
+          <button
+            type="button"
+            onClick={() => attachInputRef.current?.click()}
+            title="参考画像を添付（店舗写真など）"
+            aria-label="参考画像を添付"
+            className="shrink-0 rounded-lg border border-white/10 bg-black/40 p-2 text-neutral-300 transition hover:bg-white/10 hover:text-white"
+          >
+            <ImagePlus className="h-4 w-4" />
+          </button>
+          <input
+            ref={attachInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onPickAttach}
+          />
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -308,7 +381,7 @@ export function AgentChatPanel({
               }
             }}
             rows={1}
-            placeholder="相談を入力（Enterで送信）"
+            placeholder="例：最近のトレンドカラーを教えて"
             className="max-h-24 flex-1 resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white outline-none focus:border-emerald-500"
           />
           <button
