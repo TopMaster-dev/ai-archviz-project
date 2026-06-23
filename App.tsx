@@ -2472,15 +2472,17 @@ const App: React.FC = () => {
       const divs = wallDivisions[i] || 1;
       const bottomMesh = divs === 1 ? `Sketch_Wall_${i}` : `Sketch_Wall_${i}_0`;
       const prod = selections[bottomMesh];
-      if (!prod) continue;
-      const settings = materialSettings[prod.id];
+      // 素材未割当の壁でも巾木を計上する。未割当時の巾木設定は 'default_no_tex' キー（壁材と同じ）に入るため、
+      // prod が無くてもそのキーで拾う（260623: 未割当壁だと巾木が見積/PDF/CSVに出ない不具合の修正）。
+      const settingsKey = prod ? prod.id : 'default_no_tex';
+      const settings = materialSettings[settingsKey];
       if (!settings?.baseboardEnabled) continue;
       const lengthM = Math.hypot(a.x - b.x, a.y - b.y) / 0.05 / 1000;
       segs.push({
         lengthM,
-        productId: prod.id,
-        productName: prod.name,
-        brand: prod.brand ?? '',
+        productId: settingsKey,
+        productName: prod ? prod.name : '巾木',
+        brand: prod ? (prod.brand ?? '') : '',
         unitPricePerM: settings.baseboardUnitPrice ?? 0,
       });
     }
