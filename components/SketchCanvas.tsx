@@ -2989,7 +2989,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                       title="元に戻す (Ctrl+Z)"
                       className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
                   >
-                      <Undo2 className="h-4 w-4" /> 一つ戻る
+                      一つ戻る <Undo2 className="h-4 w-4" /> 
                   </button>
                   <button
                       type="button"

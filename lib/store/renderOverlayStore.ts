@@ -20,6 +20,9 @@ interface RenderOverlayState {
    */
   sketchToolbarBottom: number;
   setSketchToolbarBottom: (value: number) => void;
+  /** 3Dビューのヘッダー内にインラインの undo/redo を表示中なら true（フローティングの UndoRedoBar を隠す・260623）。 */
+  undoRedoInline: boolean;
+  setUndoRedoInline: (value: boolean) => void;
 }
 
 export const useRenderOverlayStore = create<RenderOverlayState>((set) => ({
@@ -31,4 +34,7 @@ export const useRenderOverlayStore = create<RenderOverlayState>((set) => ({
   sketchToolbarBottom: 0,
   setSketchToolbarBottom: (value) =>
     set((state) => (state.sketchToolbarBottom === value ? state : { sketchToolbarBottom: value })),
+  undoRedoInline: false,
+  setUndoRedoInline: (value) =>
+    set((state) => (state.undoRedoInline === value ? state : { undoRedoInline: value })),
 }));

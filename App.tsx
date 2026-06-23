@@ -12,6 +12,7 @@ import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { FurnitureAssetStrip, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
+import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
 import { lookDirection } from './utils/walkthrough.js';
@@ -1286,6 +1287,11 @@ const App: React.FC = () => {
   }, [renderState.isRendering]);
   // エディタ離脱（アンマウント）時にフラグを必ず倒す（レンダ中にホームへ戻った等で true が残らないように）。
   useEffect(() => () => { useRenderOverlayStore.getState().setActive(false); }, []);
+  // 3Dビューはヘッダー内にインラインの undo/redo を表示し、フローティングの UndoRedoBar を隠す（260623）。
+  useEffect(() => {
+    useRenderOverlayStore.getState().setUndoRedoInline(viewMode === '3D' && !renderState.isRendering);
+    return () => useRenderOverlayStore.getState().setUndoRedoInline(false);
+  }, [viewMode, renderState.isRendering]);
 
   // 上部ツールバーの実測下端を共有ストアへ反映し、別ツリーの UndoRedoBar をその直下に置く
   // （ヘッダー折り返しで高くなっても被らない）。ref コールバックでマウント/アンマウントを検知し、
@@ -2882,10 +2888,10 @@ const App: React.FC = () => {
             style={viewMode === '3D' ? { paddingTop: canvasTopInset } : undefined}
           >
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
-                <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 md:gap-3 pointer-events-none">
+                <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start gap-2 md:gap-3 pointer-events-none">
                     {renderGlobalModeToggle(aiEditOpen ? 'ai' : viewMode)}
                     {!renderState.isRendering && viewMode === '3D' && (
-                      <div className="pointer-events-none flex flex-col items-center gap-1.5 shrink-0 order-2">
+                      <div className="pointer-events-none flex flex-col items-center gap-1.5 shrink-0">
                         <button
                           onClick={handleInstantRender}
                           disabled={renderState.isRendering || !!projectSession?.aiCredits.blocked}
@@ -2902,8 +2908,11 @@ const App: React.FC = () => {
                         )}
                       </div>
                     )}
+                    {viewMode === '3D' && !renderState.isRendering && (
+                      <UndoRedoBar inline />
+                    )}
                     {viewMode === '3D' && (
-                      <div className="flex items-start justify-end gap-2 flex-wrap order-3">
+                      <div className="flex items-start justify-end gap-2 flex-wrap ml-auto">
                         <div className="glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-2 bg-black/40 backdrop-blur-md shadow-xl pointer-events-auto shrink-0 h-[46px]">
                           <span className="text-[10px] font-black uppercase text-neutral-400 tracking-widest">天井高</span>
                           <div className="flex items-center gap-1.5">
