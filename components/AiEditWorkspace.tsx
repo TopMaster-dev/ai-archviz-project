@@ -242,24 +242,6 @@ export function AiEditWorkspace({
     [versions],
   );
 
-  // 初回ポップアップ:「評価すると精度が上がる」旨を一度だけ案内（localStorage で既読管理）。
-  const [showFeedbackTip, setShowFeedbackTip] = useState(false);
-  useEffect(() => {
-    if (!baseDisplayUrl) return;
-    try {
-      if (!localStorage.getItem('arise.aiFeedbackTip.seen')) setShowFeedbackTip(true);
-    } catch {
-      setShowFeedbackTip(true);
-    }
-  }, [baseDisplayUrl]);
-  const dismissFeedbackTip = useCallback(() => {
-    setShowFeedbackTip(false);
-    try {
-      localStorage.setItem('arise.aiFeedbackTip.seen', '1');
-    } catch {
-      // localStorage 不可でも閉じる
-    }
-  }, []);
 
   const activeObjectIndex = draftObjects.findIndex((o) => o.id === activeObjectId);
   const dragPreviewColors =
@@ -1055,56 +1037,7 @@ export function AiEditWorkspace({
                 </div>
               )}
 
-              {/* AI生成の評価（good/bad）ボタン＋初回ポップアップ（管理表 row 209/215）。生成画像付近に配置。 */}
-              {baseDisplayUrl && activeVersion && (
-                <>
-                  <div className="absolute right-3 top-3 z-10 flex items-center gap-1.5 rounded-full border border-white/10 bg-black/60 px-2 py-1.5 backdrop-blur">
-                    <span className="mr-0.5 select-none text-[10px] font-bold text-neutral-400">評価</span>
-                    <button
-                      type="button"
-                      title="この生成結果は良い"
-                      aria-label="良い評価"
-                      onClick={() => void submitFeedback(activeVersion.id, 'good')}
-                      className={`rounded-full p-1.5 transition ${
-                        feedbackByVersion[activeVersion.id] === 'good'
-                          ? 'bg-emerald-500 text-black'
-                          : 'text-neutral-300 hover:bg-white/10 hover:text-emerald-300'
-                      }`}
-                    >
-                      <ThumbsUp className="h-4 w-4" />
-                    </button>
-                    <button
-                      type="button"
-                      title="この生成結果は悪い"
-                      aria-label="悪い評価"
-                      onClick={() => void submitFeedback(activeVersion.id, 'bad')}
-                      className={`rounded-full p-1.5 transition ${
-                        feedbackByVersion[activeVersion.id] === 'bad'
-                          ? 'bg-rose-500 text-white'
-                          : 'text-neutral-300 hover:bg-white/10 hover:text-rose-300'
-                      }`}
-                    >
-                      <ThumbsDown className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  {showFeedbackTip && (
-                    <div className="absolute right-3 top-16 z-20 w-60 rounded-xl border border-emerald-500/30 bg-neutral-900/95 p-3 text-[11px] shadow-2xl backdrop-blur">
-                      <p className="font-bold text-emerald-300">評価で精度アップ</p>
-                      <p className="mt-1 leading-relaxed text-neutral-200">
-                        👍 / 👎 で評価すると、AIの生成精度の向上に役立ちます。気軽に押してください。
-                      </p>
-                      <button
-                        type="button"
-                        onClick={dismissFeedbackTip}
-                        className="mt-2 rounded bg-white/10 px-2.5 py-1 text-[10px] font-bold text-neutral-100 transition hover:bg-white/20"
-                      >
-                        閉じる
-                      </button>
-                    </div>
-                  )}
-                </>
-              )}
+              {/* 評価（good/bad）は左の履歴パネル（各サムネ下）に集約（260623）。画像右上の評価ピル＋初回ヒントは廃止。 */}
             </div>
           </div>
         </main>
