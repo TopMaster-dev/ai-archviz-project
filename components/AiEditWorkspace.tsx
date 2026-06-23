@@ -784,26 +784,63 @@ export function AiEditWorkspace({
             <div className="text-[10px] font-black uppercase tracking-widest text-neutral-500">履歴</div>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 space-y-2">
-            {versions.map((v) => (
-              <button
-                key={v.id}
-                type="button"
-                onClick={() => onSelectVersion(v.id)}
-                className={`w-full text-left rounded-xl border p-2 transition-colors ${
-                  v.id === activeVersionId
-                    ? 'border-purple-500/60 bg-purple-500/10'
-                    : 'border-white/10 bg-black/30 hover:border-white/20'
-                }`}
-              >
-                <div className="aspect-video rounded-lg overflow-hidden bg-black mb-1">
-                  <img src={v.outputImageDataUrl} alt="" className="w-full h-full object-cover" />
+            {/* 新しい生成ほど上（新しい順・降順）に並べる（260623 クライアント要望）。 */}
+            {[...versions]
+              .sort((a, b) => b.createdAt - a.createdAt)
+              .map((v) => (
+                <div
+                  key={v.id}
+                  className={`w-full rounded-xl border p-2 transition-colors ${
+                    v.id === activeVersionId
+                      ? 'border-purple-500/60 bg-purple-500/10'
+                      : 'border-white/10 bg-black/30 hover:border-white/20'
+                  }`}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onSelectVersion(v.id)}
+                    className="block w-full text-left"
+                  >
+                    <div className="aspect-video rounded-lg overflow-hidden bg-black mb-1">
+                      <img src={v.outputImageDataUrl} alt="" className="w-full h-full object-cover" />
+                    </div>
+                    <div className="text-[9px] text-neutral-400 font-mono truncate">
+                      {new Date(v.createdAt).toLocaleString('ja-JP')}
+                    </div>
+                    <div className="text-[9px] text-neutral-500 truncate">自動モード</div>
+                  </button>
+                  {/* 各履歴サムネの下に good/bad 評価を表示。ホバーでボタン＋アイコンを強調（260623）。 */}
+                  <div className="mt-1.5 flex items-center gap-1 border-t border-white/5 pt-1.5">
+                    <span className="mr-0.5 select-none text-[9px] font-bold text-neutral-500">評価</span>
+                    <button
+                      type="button"
+                      title="この生成結果は良い"
+                      aria-label="良い評価"
+                      onClick={() => void submitFeedback(v.id, 'good')}
+                      className={`rounded-full p-1 transition ${
+                        feedbackByVersion[v.id] === 'good'
+                          ? 'bg-emerald-500 text-black'
+                          : 'text-neutral-400 hover:scale-110 hover:bg-emerald-500/20 hover:text-emerald-300'
+                      }`}
+                    >
+                      <ThumbsUp className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      title="この生成結果は悪い"
+                      aria-label="悪い評価"
+                      onClick={() => void submitFeedback(v.id, 'bad')}
+                      className={`rounded-full p-1 transition ${
+                        feedbackByVersion[v.id] === 'bad'
+                          ? 'bg-rose-500 text-white'
+                          : 'text-neutral-400 hover:scale-110 hover:bg-rose-500/20 hover:text-rose-300'
+                      }`}
+                    >
+                      <ThumbsDown className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
                 </div>
-                <div className="text-[9px] text-neutral-400 font-mono truncate">
-                  {new Date(v.createdAt).toLocaleString('ja-JP')}
-                </div>
-                <div className="text-[9px] text-neutral-500 truncate">自動モード</div>
-              </button>
-            ))}
+              ))}
           </div>
         </aside>
         <main className="flex-1 flex flex-col min-w-0 gap-3">
