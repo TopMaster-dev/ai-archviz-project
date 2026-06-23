@@ -2306,6 +2306,8 @@ const UpperBandSegment: React.FC<{
   length: number;
   bandM: number;
   yTop: number;
+  openings: Opening[];
+  isCCW: boolean;
   selections: any;
   materialSettings: any;
   captureStep: any;
@@ -2313,8 +2315,70 @@ const UpperBandSegment: React.FC<{
   isDraggingRef: React.MutableRefObject<boolean>;
   onMeshClick: (category: any, name: string, isMulti: boolean) => void;
   onHoverNameChange?: (name: string | null) => void;
-}> = ({ length, bandM, yTop, selections, materialSettings, captureStep, shadowEnabled, isDraggingRef, onMeshClick, onHoverNameChange }) => {
+}> = ({ length, bandM, yTop, openings, isCCW, selections, materialSettings, captureStep, shadowEnabled, isDraggingRef, onMeshClick, onHoverNameChange }) => {
   const ref = useRef<THREE.Mesh>(null);
+  // 上部壁バンドも窓・ドアの開口を差し引く（巾木/壁と同じ処理）。これがないと開口の上部が箱で覆われる（260623）。
+  const bandGeometry = useMemo(() => {
+    const shape = new THREE.Shape();
+    shape.moveTo(-length / 2, -bandM / 2);
+    shape.lineTo(length / 2, -bandM / 2);
+    shape.lineTo(length / 2, bandM / 2);
+    shape.lineTo(-length / 2, bandM / 2);
+    shape.lineTo(-length / 2, -bandM / 2);
+
+    const bandMinY = yTop - bandM;
+    const bandMaxY = yTop;
+    const bandCenterY = yTop - bandM / 2;
+    const halfH = bandM / 2;
+    const minYL = -halfH + HOLE_INSET_EPS_M;
+    const maxYL = halfH - HOLE_INSET_EPS_M;
+    const bottomNoInsetYL = -halfH; // 壁との共有境界（bandMinY）に接する穴はスリバー防止でEPSを外す
+    const minXL = -length / 2 + HOLE_INSET_EPS_M;
+    const maxXL = length / 2 - HOLE_INSET_EPS_M;
+
+    [...openings]
+      .sort((a, b) => a.ratioPosition - b.ratioPosition)
+      .forEach((op) => {
+        const openingMinY = getOpeningBottomM(op);
+        const openingMaxY = openingMinY + op.height / 1000;
+        const clippedBottom = Math.max(openingMinY, bandMinY);
+        const clippedTop = Math.min(openingMaxY, bandMaxY);
+        if (clippedBottom >= clippedTop) return;
+        if (clippedTop - clippedBottom <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+        const holeX = openingRatioToWallLocalX(op.ratioPosition, length, isCCW);
+        const holeW = getEffectiveOpeningWidthMm(op) / 1000;
+        let hy = (clippedBottom + clippedTop) / 2 - bandCenterY;
+        let hh = (clippedTop - clippedBottom) / 2;
+        let yBot = hy - hh;
+        let yTopL = hy + hh;
+        const touchesBandBottom = Math.abs(clippedBottom - bandMinY) <= HOLE_INSET_EPS_M;
+        yBot = Math.max(yBot, touchesBandBottom ? bottomNoInsetYL : minYL);
+        yTopL = Math.min(yTopL, maxYL);
+        if (yTopL <= yBot) return;
+        hy = (yTopL + yBot) / 2;
+        hh = (yTopL - yBot) / 2;
+        if (hh * 2 <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+        let xL = holeX - holeW / 2;
+        let xR = holeX + holeW / 2;
+        xL = Math.max(xL, minXL);
+        xR = Math.min(xR, maxXL);
+        if (xR <= xL) return;
+        const hx = (xL + xR) / 2;
+        const hw = (xR - xL) / 2;
+
+        const holePath = new THREE.Path();
+        holePath.moveTo(hx - hw, hy - hh);
+        holePath.lineTo(hx - hw, hy + hh);
+        holePath.lineTo(hx + hw, hy + hh);
+        holePath.lineTo(hx + hw, hy - hh);
+        holePath.lineTo(hx - hw, hy - hh);
+        shape.holes.push(holePath);
+      });
+    return new THREE.ShapeGeometry(shape);
+  }, [length, bandM, yTop, openings, isCCW]);
+
   return (
     <mesh
       ref={ref}
@@ -2325,9 +2389,9 @@ const UpperBandSegment: React.FC<{
       onPointerOut={() => onHoverNameChange?.(null)}
       receiveShadow={shadowEnabled}
     >
-      <boxGeometry args={[length, bandM, 0.02]} />
-      <Suspense fallback={<meshStandardMaterial color="#cccccc" />}>
-        <DynamicMaterial product={selections['Sketch_UpperBand']} captureStep={captureStep} meshRef={ref} materialSettings={materialSettings} surfaceWidthM={length} surfaceHeightM={bandM} />
+      <primitive object={bandGeometry} attach="geometry" />
+      <Suspense fallback={<meshStandardMaterial color="#cccccc" side={THREE.DoubleSide} />}>
+        <DynamicMaterial product={selections['Sketch_UpperBand']} captureStep={captureStep} meshRef={ref} materialSettings={materialSettings} surfaceWidthM={length} surfaceHeightM={bandM} doubleSided />
       </Suspense>
     </mesh>
   );
@@ -2562,6 +2626,8 @@ const SketchRoom = ({
                 length={length}
                 bandM={skeletonUpperWallMm / 1000}
                 yTop={height}
+                openings={openings.filter((op: Opening) => op.wallIndex === i)}
+                isCCW={isCCW}
                 selections={selections}
                 materialSettings={materialSettings}
                 captureStep={captureStep}
