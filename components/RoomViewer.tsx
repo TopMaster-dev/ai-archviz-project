@@ -2170,12 +2170,11 @@ const WallSegment: React.FC<{
         </Suspense>
       </mesh>
 
-      {openingsInSegment
-          .filter((op: Opening) => {
-            // 壁穴生成と同じ縦方向交差判定を使い、建具表示と穴形状の不整合を防ぐ。
-            if (hideOpeningsForCamera) return false;
-            return openingIntersectsVerticalSegment(op, segmentMinY, segmentMaxY);
-          })
+      {/* 建具メッシュ（枠・ガラス・ドア板）は壁分割やバンド（巾木/腰壁）に関係なく、開口ごとに1回だけ描く。
+          以前はセグメント交差で絞っていたため、巾木が高く開口が巾木域に入ると建具が消えていた（260623修正）。
+          posY は絶対値なので最下段(isBottom)からまとめて描けば位置は正しく、分割壁でも重複しない。 */}
+      {isBottom && wallOpenings
+          .filter((op: Opening) => !hideOpeningsForCamera)
           .map((op: Opening) => {
             const isSelected = selectedOpeningId === op.id;
             const posX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
