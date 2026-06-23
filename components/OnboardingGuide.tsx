@@ -39,7 +39,7 @@ export function OnboardingGuide({ open, onClose }: { open: boolean; onClose: () 
   const go = (d: number) => setIdx((i) => (i + d + SLIDES.length) % SLIDES.length);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/75 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[10200] flex items-center justify-center bg-black/75 p-4" onClick={onClose}>
       <div
         className="relative w-full max-w-3xl overflow-hidden rounded-2xl border border-white/10 bg-neutral-900 shadow-2xl"
         onClick={(e) => e.stopPropagation()}

@@ -4410,6 +4410,7 @@ const App: React.FC = () => {
                         estimatePanel={activeKind === 'photo' ? null : renderEstimatePanel(true)}
                         agentCatalog={agentCatalog}
                         onAddEstimateItem={handleAddAgentRecommendation}
+                        onOpenGuide={() => setEditorOnboardingOpen(true)}
                         photoOnly={activeKind === 'photo'}
                         onExitToHome={shellNav?.goHome}
                         exitToHomeBusy={shellNav?.homeBusy}

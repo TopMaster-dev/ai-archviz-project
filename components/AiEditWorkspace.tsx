@@ -141,6 +141,8 @@ type Props = {
   agentCatalog?: AgentCatalogEntry[];
   /** エージェント推薦を概算見積もりへ追加する（Tier2）。 */
   onAddEstimateItem?: (rec: AgentRecommendation) => void;
+  /** 使い方ガイドを開く（260624: AI画像編集にも「?」を出し、2D/3D 同様に見返せるように）。 */
+  onOpenGuide?: () => void;
 };
 
 export function AiEditWorkspace({
@@ -178,6 +180,7 @@ export function AiEditWorkspace({
   onUploadBaseImage,
   agentCatalog,
   onAddEstimateItem,
+  onOpenGuide,
 }: Props) {
   const [highResExportOpen, setHighResExportOpen] = useState(false);
   // 右サイドバー（見積＋編集パネル）: xl未満はドロワー化（既定で隠す）。xl以上は固定カラム（この状態は無視）。
@@ -364,6 +367,7 @@ export function AiEditWorkspace({
         canSwitchTo3D={canSwitchTo3D}
         onGoHome={onExitToHome}
         homeBusy={exitToHomeBusy}
+        onHelp={onOpenGuide}
         className="shrink-0"
       />
     );
