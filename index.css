@@ -109,6 +109,13 @@ canvas {
 .scroll-dark::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 9999px; }
 .scroll-dark::-webkit-scrollbar-track { background: transparent; }
 
+/* 全ページ共通の暗色スクロールバー（260623・既定スクロールバーもダーク基調になじむデザインに）。 */
+* { scrollbar-color: rgba(255, 255, 255, 0.18) transparent; scrollbar-width: thin; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.18); border-radius: 9999px; }
+*::-webkit-scrollbar-thumb:hover { background: rgba(255, 255, 255, 0.32); }
+*::-webkit-scrollbar-track { background: transparent; }
+
 /* 汎用 暗色レンジスライダー（.catalog-thumb-size-slider の一般化） */
 .range-dark { -webkit-appearance: none; appearance: none; background: transparent; }
 .range-dark::-webkit-slider-runnable-track { height: 4px; border-radius: 9999px; background: rgba(255, 255, 255, 0.12); }

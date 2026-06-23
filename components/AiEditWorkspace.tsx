@@ -367,14 +367,34 @@ export function AiEditWorkspace({
         )}
       </button>
     ) : (
-      <ModeToggleBar
-        activeMode="ai"
-        onSwitchToSketch={onSwitchToSketch}
-        onSwitchTo3D={onSwitchTo3D}
-        onSwitchToAi={onSwitchToAiEdit}
-        canSwitchTo3D={canSwitchTo3D}
-        className="shrink-0"
-      />
+      <div className="flex shrink-0 items-center gap-2">
+        {/* AI画像編集にも 2D/3D 同様の「ホームに戻る」を表示（モード切替の左に配置・260623）。
+            通常時は右上の「ホームに戻る」が AI のオーバーレイに覆われるため、ここに出す。 */}
+        <button
+          type="button"
+          onClick={onExitToHome}
+          disabled={exitToHomeBusy}
+          title="ホームに戻る（プロジェクト一覧）"
+          className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-white/10 bg-black/40 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-white/80 shadow-xl backdrop-blur-md transition hover:text-white disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:text-white/80"
+        >
+          {exitToHomeBusy ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              保存中…
+            </>
+          ) : (
+            '← ホーム'
+          )}
+        </button>
+        <ModeToggleBar
+          activeMode="ai"
+          onSwitchToSketch={onSwitchToSketch}
+          onSwitchTo3D={onSwitchTo3D}
+          onSwitchToAi={onSwitchToAiEdit}
+          canSwitchTo3D={canSwitchTo3D}
+          className="shrink-0"
+        />
+      </div>
     );
 
   const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
