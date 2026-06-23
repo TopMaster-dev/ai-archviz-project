@@ -135,6 +135,12 @@ export interface NormalizedRect {
   y: number;
   width: number;
   height: number;
+  /**
+   * 多角形マスクの頂点（0〜1 正規化・260623 クライアント要望）。
+   * 指定時は x/y/width/height はこの多角形の外接矩形であり、実際の編集領域は多角形の内側。
+   * 未指定（従来の矩形マスク）の場合は x/y/width/height がそのまま矩形領域。
+   */
+  points?: Array<{ x: number; y: number }>;
 }
 
 /** オブジェクト参照1件（参照画像1枚に対し複数配置矩形＝B案） */

@@ -19,8 +19,22 @@ vi.mock('../ProjectSaveIndicator.js', () => ({ ProjectSaveIndicator: () => null 
 vi.mock('../UndoRedoBar.js', () => ({ UndoRedoBar: () => null }));
 
 import { AuthedShell } from './AuthedShell.js';
+import { useShellNav } from '../../lib/shell/shellNavContext.js';
 
 const HOME_BTN_TITLE = 'ホームに戻る（プロジェクト一覧）';
+
+// 「ホームに戻る」ボタンは各ビューの ModeToggleBar 側へ移設（260623）。AuthedShell 自体は
+// goHome/homeBusy を ShellNav コンテキストで配布するので、テストでは子からそれを購読して
+// ボタンを描画し、離脱時オートセーブ（flushSave→遷移）の挙動を従来どおり検証する。
+function HomeTrigger() {
+  const nav = useShellNav();
+  if (!nav) return null;
+  return (
+    <button type="button" title={HOME_BTN_TITLE} disabled={nav.homeBusy} onClick={nav.goHome}>
+      HOME
+    </button>
+  );
+}
 
 function enterEditor() {
   fireEvent.click(screen.getByText('ENTER_EDITOR'));
@@ -39,6 +53,7 @@ describe('AuthedShell goHome (R9 離脱時オートセーブ)', () => {
     render(
       <AuthedShell>
         <div>EDITOR_CONTENT</div>
+        <HomeTrigger />
       </AuthedShell>,
     );
     enterEditor();
@@ -55,6 +70,7 @@ describe('AuthedShell goHome (R9 離脱時オートセーブ)', () => {
     render(
       <AuthedShell>
         <div>EDITOR_CONTENT</div>
+        <HomeTrigger />
       </AuthedShell>,
     );
     enterEditor();
@@ -76,6 +92,7 @@ describe('AuthedShell goHome (R9 離脱時オートセーブ)', () => {
     render(
       <AuthedShell>
         <div>EDITOR_CONTENT</div>
+        <HomeTrigger />
       </AuthedShell>,
     );
     enterEditor();

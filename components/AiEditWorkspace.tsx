@@ -203,6 +203,12 @@ export function AiEditWorkspace({
   const [dragStart, setDragStart] = useState<{ nx: number; ny: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ nx: number; ny: number } | null>(null);
   const [imgLayout, setImgLayout] = useState({ ox: 0, oy: 0, dw: 1, dh: 1 });
+  // マスクの描画方式（260623 クライアント要望）: 多角形（クリックで頂点）/ 矩形（従来のドラッグ）。既定=多角形。
+  const [maskMode, setMaskMode] = useState<'polygon' | 'rect'>('polygon');
+  // 作図中の多角形の頂点（正規化）。3点以上で「確定」または始点付近クリックで閉じる。
+  const [polygonPoints, setPolygonPoints] = useState<Array<{ nx: number; ny: number }>>([]);
+  // ラバーバンド表示用の現在カーソル位置（正規化）。
+  const [polygonCursor, setPolygonCursor] = useState<{ nx: number; ny: number } | null>(null);
 
   // フリープラン出力制限（縮小＋透かし・row 51/52）用にプランを参照（ゲスト=null=制限なし）。
   const projectSession = useOptionalProjectSession();
@@ -582,6 +588,44 @@ export function AiEditWorkspace({
     }
   }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession]);
 
+  const POLY_CLOSE_DIST = 0.03; // 始点付近クリックで多角形を閉じる距離（正規化）。
+
+  // 作図中の多角形を確定（外接矩形＋頂点を1つの配置として登録）。3点未満なら破棄。
+  const commitPolygon = useCallback(() => {
+    if (!activeObjectId || polygonPoints.length < 3) {
+      setPolygonPoints([]);
+      setPolygonCursor(null);
+      return;
+    }
+    const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+    const pts = polygonPoints.map((p) => ({ x: clamp01(p.nx), y: clamp01(p.ny) }));
+    const xs = pts.map((p) => p.x);
+    const ys = pts.map((p) => p.y);
+    const minX = Math.min(...xs);
+    const minY = Math.min(...ys);
+    const rect: NormalizedRect = {
+      x: minX,
+      y: minY,
+      width: Math.max(0, Math.max(...xs) - minX),
+      height: Math.max(0, Math.max(...ys) - minY),
+      points: pts,
+    };
+    onCommitPlacementRect(activeObjectId, rect);
+    setPolygonPoints([]);
+    setPolygonCursor(null);
+  }, [activeObjectId, polygonPoints, onCommitPlacementRect]);
+
+  const cancelPolygon = useCallback(() => {
+    setPolygonPoints([]);
+    setPolygonCursor(null);
+  }, []);
+
+  // 作図対象（オブジェクト）やマスク方式を切り替えたら、作図中の多角形は破棄する。
+  useEffect(() => {
+    setPolygonPoints([]);
+    setPolygonCursor(null);
+  }, [activeObjectId, maskMode]);
+
   const onMouseDownPlacement = (e: React.MouseEvent) => {
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
     const img = imgRef.current;
@@ -589,18 +633,37 @@ export function AiEditWorkspace({
     const nh = img.naturalHeight;
     const p = clientToNormalized(e.clientX, e.clientY, img, nw, nh);
     if (!p) return;
+    if (maskMode === 'polygon') {
+      // 3点以上で始点付近をクリックしたら閉じる。それ以外は頂点を1つ追加する。
+      if (polygonPoints.length >= 3) {
+        const first = polygonPoints[0];
+        if (Math.hypot(p.nx - first.nx, p.ny - first.ny) < POLY_CLOSE_DIST) {
+          commitPolygon();
+          return;
+        }
+      }
+      setPolygonPoints((prev) => [...prev, p]);
+      return;
+    }
     setDragStart(p);
     setDragCurrent(p);
   };
 
   const onMouseMovePlacement = (e: React.MouseEvent) => {
-    if (!dragStart || !imgRef.current) return;
+    if (!imgRef.current) return;
     const img = imgRef.current;
     const p = clientToNormalized(e.clientX, e.clientY, img, img.naturalWidth, img.naturalHeight);
+    if (maskMode === 'polygon') {
+      // 1点以上打ってあれば、次の頂点候補（ラバーバンド）を表示する。
+      if (polygonPoints.length > 0) setPolygonCursor(p);
+      return;
+    }
+    if (!dragStart) return;
     if (p) setDragCurrent(p);
   };
 
   const onMouseUpPlacement = () => {
+    if (maskMode === 'polygon') return; // 多角形はクリックで頂点追加するためドラッグ確定しない。
     if (!dragStart || !dragCurrent || !activeObjectId) {
       setDragStart(null);
       setDragCurrent(null);
@@ -770,8 +833,54 @@ export function AiEditWorkspace({
           )}
 
           <div className="flex-1 min-h-0 flex flex-col">
-            <div className="text-[10px] font-bold text-neutral-500 uppercase tracking-wider mb-1">
-              ベース画像（オブジェクトを選択し、領域をドラッグ）
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div className="truncate text-[10px] font-bold uppercase tracking-wider text-neutral-500">
+                {maskMode === 'polygon'
+                  ? 'ベース画像（オブジェクト選択→クリックで頂点／始点付近クリックか確定で閉じる）'
+                  : 'ベース画像（オブジェクトを選択し、領域をドラッグ）'}
+              </div>
+              <div className="flex shrink-0 items-center gap-1">
+                {/* マスク方式の切替（260623）。多角形＝クリックで頂点、矩形＝従来のドラッグ。 */}
+                <div className="glass flex rounded-lg border border-white/10 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMaskMode('polygon')}
+                    className={`rounded-md px-2 py-1 text-[10px] font-black tracking-wider transition-colors ${
+                      maskMode === 'polygon' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
+                    }`}
+                  >
+                    多角形
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMaskMode('rect')}
+                    className={`rounded-md px-2 py-1 text-[10px] font-black tracking-wider transition-colors ${
+                      maskMode === 'rect' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
+                    }`}
+                  >
+                    矩形
+                  </button>
+                </div>
+                {maskMode === 'polygon' && polygonPoints.length > 0 && (
+                  <>
+                    <button
+                      type="button"
+                      onClick={commitPolygon}
+                      disabled={polygonPoints.length < 3}
+                      className="rounded-md border border-emerald-500/30 bg-emerald-500/15 px-2 py-1 text-[10px] font-black tracking-wider text-emerald-300 transition-colors hover:bg-emerald-500/25 disabled:opacity-40"
+                    >
+                      確定（{polygonPoints.length}点）
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelPolygon}
+                      className="rounded-md border border-white/10 px-2 py-1 text-[10px] font-black tracking-wider text-white/60 transition-colors hover:text-white"
+                    >
+                      取消
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
             <div
               ref={wrapRef}
@@ -784,16 +893,23 @@ export function AiEditWorkspace({
                     src={baseDisplayUrl}
                     alt="ベース"
                     draggable={false}
-                    className="absolute inset-0 w-full h-full object-contain select-none"
+                    className={`absolute inset-0 w-full h-full object-contain select-none ${
+                      activeObjectId ? 'cursor-crosshair' : ''
+                    }`}
                     onLoad={measureLayout}
                     onMouseDown={onMouseDownPlacement}
                     onMouseMove={onMouseMovePlacement}
                     onMouseUp={onMouseUpPlacement}
-                    onMouseLeave={onMouseUpPlacement}
+                    onMouseLeave={() => {
+                      if (maskMode === 'polygon') setPolygonCursor(null);
+                      else onMouseUpPlacement();
+                    }}
                   />
                   {draftObjects.map((o, objIdx) => {
                     const pal = aiEditObjectUiColors(objIdx);
                     return o.placements.map((pl, pi) => {
+                      // 多角形マスクは下の SVG レイヤで描画するため、矩形 div はスキップ。
+                      if (pl.points && pl.points.length >= 3) return null;
                       const isSlotActive =
                         o.id === activeObjectId && placementEditIndex === pi;
                       return (
@@ -828,6 +944,73 @@ export function AiEditWorkspace({
                       }}
                     />
                   )}
+                  {/* 多角形マスク（260623）: 確定済み多角形＋作図中の多角形を SVG で描画。 */}
+                  <svg className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden>
+                    {draftObjects.map((o, objIdx) => {
+                      const pal = aiEditObjectUiColors(objIdx);
+                      return o.placements.map((pl, pi) => {
+                        if (!pl.points || pl.points.length < 3) return null;
+                        const isSlotActive =
+                          o.id === activeObjectId && placementEditIndex === pi;
+                        const ptsStr = pl.points
+                          .map(
+                            (p) =>
+                              `${imgLayout.ox + p.x * imgLayout.dw},${imgLayout.oy + p.y * imgLayout.dh}`
+                          )
+                          .join(' ');
+                        return (
+                          <polygon
+                            key={`poly-${o.id}-${pi}`}
+                            points={ptsStr}
+                            fill={pal.fill}
+                            stroke={pal.border}
+                            strokeWidth={isSlotActive ? 3 : 2}
+                            strokeLinejoin="round"
+                          />
+                        );
+                      });
+                    })}
+                    {maskMode === 'polygon' &&
+                      polygonPoints.length > 0 &&
+                      (() => {
+                        const px = polygonPoints.map((p) => ({
+                          x: imgLayout.ox + p.nx * imgLayout.dw,
+                          y: imgLayout.oy + p.ny * imgLayout.dh,
+                        }));
+                        const cursorPx = polygonCursor
+                          ? {
+                              x: imgLayout.ox + polygonCursor.nx * imgLayout.dw,
+                              y: imgLayout.oy + polygonCursor.ny * imgLayout.dh,
+                            }
+                          : null;
+                        const lineStr =
+                          px.map((p) => `${p.x},${p.y}`).join(' ') +
+                          (cursorPx ? ` ${cursorPx.x},${cursorPx.y}` : '');
+                        return (
+                          <>
+                            <polyline
+                              points={lineStr}
+                              fill="none"
+                              stroke={dragPreviewColors.border}
+                              strokeWidth={2}
+                              strokeDasharray="5 3"
+                              strokeLinejoin="round"
+                            />
+                            {px.map((p, i) => (
+                              <circle
+                                key={i}
+                                cx={p.x}
+                                cy={p.y}
+                                r={i === 0 ? 5.5 : 3.5}
+                                fill={i === 0 ? dragPreviewColors.border : '#ffffff'}
+                                stroke={dragPreviewColors.border}
+                                strokeWidth={1.5}
+                              />
+                            ))}
+                          </>
+                        );
+                      })()}
+                  </svg>
                 </>
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
@@ -1145,7 +1328,7 @@ export function AiEditWorkspace({
                                       className="text-[10px] text-left truncate flex-1 underline-offset-2 hover:underline"
                                       style={{ color: pal.border }}
                                     >
-                                      範囲 {pi + 1} — 再ドラッグで上書き
+                                      範囲 {pi + 1} — {maskMode === 'polygon' ? '再作図で上書き' : '再ドラッグで上書き'}
                                     </button>
                                     <button
                                       type="button"
@@ -1178,7 +1361,9 @@ export function AiEditWorkspace({
                           </button>
                           {appendMode && (
                             <p className="text-[9px] text-amber-400/90">
-                              次のドラッグで新しい範囲を追加します
+                              {maskMode === 'polygon'
+                                ? '画像上をクリックして頂点を打ち、新しい範囲を作図します'
+                                : '次のドラッグで新しい範囲を追加します'}
                             </p>
                           )}
                           {o.placements.length === 0 && (

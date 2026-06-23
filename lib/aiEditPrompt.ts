@@ -17,6 +17,13 @@ export function resolvePromptMode(hasStyle: boolean, hasObjects: boolean): AiEdi
 }
 
 function formatPlacement(r: NormalizedRect): string {
+  // 多角形マスク（260623）: 頂点列で領域を厳密に指定し、多角形の内側のみ編集する。
+  if (r.points && r.points.length >= 3) {
+    const verts = r.points
+      .map((p) => `(${(p.x * 100).toFixed(1)}%, ${(p.y * 100).toFixed(1)}%)`)
+      .join(' → ');
+    return `多角形領域 頂点[${verts}]（画像全体に対する正規化座標。この多角形の内側のみを編集し、外接矩形ではなく多角形の境界に厳密に従う）`;
+  }
   return `左${(r.x * 100).toFixed(1)}%, 上${(r.y * 100).toFixed(1)}%, 幅${(r.width * 100).toFixed(1)}%, 高さ${(r.height * 100).toFixed(1)}%（画像全体に対する正規化座標）`;
 }
 

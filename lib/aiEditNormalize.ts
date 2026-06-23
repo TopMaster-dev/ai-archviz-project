@@ -11,6 +11,29 @@ function isNormalizedRect(x: unknown): x is NormalizedRect {
   );
 }
 
+/** 多角形マスクの頂点配列（260623）を正規化。妥当な {x,y} のみ残し、3点未満なら undefined。 */
+function normalizePolygonPoints(raw: unknown): Array<{ x: number; y: number }> | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const pts = raw
+    .filter(
+      (p): p is { x: number; y: number } =>
+        typeof p === 'object' &&
+        p !== null &&
+        typeof (p as Record<string, unknown>).x === 'number' &&
+        typeof (p as Record<string, unknown>).y === 'number'
+    )
+    .map((p) => ({ x: p.x, y: p.y }));
+  return pts.length >= 3 ? pts : undefined;
+}
+
+/** 配置矩形＋（あれば）多角形頂点を保持して正規化。 */
+function normalizeRect(raw: NormalizedRect): NormalizedRect {
+  const points = normalizePolygonPoints(raw.points);
+  return points
+    ? { x: raw.x, y: raw.y, width: raw.width, height: raw.height, points }
+    : { x: raw.x, y: raw.y, width: raw.width, height: raw.height };
+}
+
 function normalizeImageDataUrl(raw: unknown): string | null {
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== 'string') return null;
@@ -30,9 +53,9 @@ export function normalizeObjectReference(raw: unknown): AiEditObjectReference | 
   const memo = typeof o.memo === 'string' ? o.memo : '';
   let placements: NormalizedRect[] = [];
   if (Array.isArray(o.placements)) {
-    placements = o.placements.filter(isNormalizedRect);
+    placements = o.placements.filter(isNormalizedRect).map(normalizeRect);
   } else if (isNormalizedRect(o.placement)) {
-    placements = [o.placement];
+    placements = [normalizeRect(o.placement)];
   }
   const rawPlacementMemos = Array.isArray(o.placementMemos) ? o.placementMemos : [];
   const placementMemos = placements.map((_, idx) =>

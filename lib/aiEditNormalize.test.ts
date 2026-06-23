@@ -44,6 +44,33 @@ describe('normalizeObjectReference', () => {
     expect(bad!.placements).toHaveLength(1);
   });
 
+  it('preserves polygon mask points (>=3) and drops degenerate/invalid ones', () => {
+    const n = normalizeObjectReference({
+      id: 'p',
+      placements: [
+        // 多角形（3頂点以上）はそのまま保持
+        {
+          x: 0.1,
+          y: 0.1,
+          width: 0.4,
+          height: 0.3,
+          points: [
+            { x: 0.1, y: 0.1 },
+            { x: 0.5, y: 0.2 },
+            { x: 0.3, y: 0.4 },
+          ],
+        },
+        // 2頂点・不正頂点は落として矩形のみ残す
+        { x: 0, y: 0, width: 1, height: 1, points: [{ x: 0, y: 0 }, { x: 1, y: 1 }] },
+        { x: 0, y: 0, width: 1, height: 1, points: 'oops' },
+      ],
+    });
+    expect(n!.placements).toHaveLength(3);
+    expect(n!.placements[0].points).toHaveLength(3);
+    expect(n!.placements[1].points).toBeUndefined();
+    expect(n!.placements[2].points).toBeUndefined();
+  });
+
   it('treats the literal strings "null"/"undefined"/blank as no image', () => {
     expect(normalizeObjectReference({ id: 'd', imageDataUrl: 'null' })!.imageDataUrl).toBeNull();
     expect(normalizeObjectReference({ id: 'e', imageDataUrl: '   ' })!.imageDataUrl).toBeNull();
