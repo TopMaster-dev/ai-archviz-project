@@ -35,6 +35,7 @@ import { useStore } from 'zustand';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
 import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
+import { useAuth } from './lib/auth/AuthContext.js';
 import { maybeApplyFreePlanOutputLimits } from './utils/freePlanImage.js';
 import { creditBlockMessage } from './utils/freePlanCredits.js';
 import { useShellNav } from './lib/shell/shellNavContext.js';
@@ -1242,6 +1243,7 @@ const App: React.FC = () => {
 
   // ログイン時のみ存在するプロジェクトセッション（ゲストでは null）。一覧サムネ保存に使う（2c-i）。
   const projectSession = useOptionalProjectSession();
+  const { profile: authProfile } = useAuth();
   // 2a: プロジェクト種別。'photo' のときは写真AI編集専用UIにする。
   const activeKind = useProjectStore((s) => s.kind);
   // 2a: 写真専用オーバーレイからホームへ戻るための goHome（ゲストでは null）。
@@ -2520,8 +2522,11 @@ const App: React.FC = () => {
         wallDivisions,
         materialMemoByProductId: materialMemoOverrides,
         baseboardRows: baseboardBreakdown,
+        // マテリアルボード（A3）のヘッダ＝プロジェクト名、フッタ＝会社名（無ければユーザー名）。
+        projectName: projectSession?.projectName ?? '',
+        authorName: authProfile?.company || authProfile?.display_name || '',
       }),
-    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown]
+    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
   );
   const canExportEstimate =
     estimatePayload.materialSections.some((s) => s.rows.length > 0) ||

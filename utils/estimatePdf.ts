@@ -9,8 +9,6 @@ const html2canvas = (html2canvasModule as unknown as { default: Html2CanvasFn })
 
 const FONT_STACK = '"Segoe UI","Meiryo","Yu Gothic UI","Yu Gothic","Hiragino Sans","Hiragino Kaku Gothic ProN",sans-serif';
 
-const MATERIAL_BOARD_PAGE_SIZE = 6;
-
 function formatYen(n: number): string {
   return `¥${n.toLocaleString('ja-JP')}`;
 }
@@ -253,65 +251,104 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   return root;
 }
 
+/** 使用箇所ラベルから面カテゴリを判定（壁（境界 N）/上部壁→wall・天井→ceiling・床→floor・梁→beam）。 */
+function surfaceCategory(usages: string[]): 'wall' | 'ceiling' | 'floor' | 'beam' {
+  for (const u of usages) {
+    if (u.startsWith('天井')) return 'ceiling';
+    if (u.startsWith('床')) return 'floor';
+    if (u.startsWith('梁')) return 'beam';
+  }
+  return 'wall';
+}
+
+/**
+ * マテリアルボード（A3横向き・260623）。面別（壁/天井/床/梁）にグルーピングし、スウォッチは100mm角。
+ * 幅 1188px ≒ A3横 420mm（無余白で配置するため、283px ≒ 100mm になる）。
+ * ヘッダ＝プロジェクト名／日付、フッタ＝会社名（無ければユーザー名）。
+ */
 function buildMaterialBoardPage(
   items: MaterialBoardItem[],
-  pageLabel: string
+  projectName: string,
+  authorName: string,
+  dateLabel: string
 ): HTMLElement {
   const root = document.createElement('div');
-  root.style.cssText = `box-sizing:border-box;width:720px;padding:18px 22px;background:#fff;color:#111;font-family:${FONT_STACK};font-size:10px;`;
+  root.style.cssText = `box-sizing:border-box;width:1188px;background:#fff;color:#111;font-family:${FONT_STACK};display:flex;flex-direction:column;`;
 
-  const h = document.createElement('div');
-  h.textContent = `マテリアルボード ${pageLabel}`;
-  h.style.cssText = 'font-size:14px;font-weight:700;margin-bottom:12px;border-bottom:2px solid #111;padding-bottom:6px;';
-  root.appendChild(h);
+  const header = document.createElement('div');
+  header.style.cssText =
+    'display:flex;justify-content:space-between;align-items:center;background:#3a3a3a;color:#fff;padding:10px 18px;font-size:15px;font-weight:700;';
+  const pn = document.createElement('span');
+  pn.textContent = projectName || 'プロジェクト名';
+  const dt = document.createElement('span');
+  dt.textContent = `日付：${dateLabel}`;
+  header.appendChild(pn);
+  header.appendChild(dt);
+  root.appendChild(header);
 
-  const grid = document.createElement('div');
-  grid.style.cssText =
-    'display:grid;grid-template-columns:1fr 1fr;gap:12px 14px;align-items:start;';
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;padding:16px 18px;';
 
-  for (const item of items) {
-    const card = document.createElement('div');
-    card.style.cssText =
-      'border:1px solid #333;border-radius:4px;padding:8px;display:flex;gap:10px;align-items:flex-start;background:#fafafa;';
-
-    const imgWrap = document.createElement('div');
-    imgWrap.style.cssText =
-      'width:88px;height:88px;flex-shrink:0;border:1px solid #ccc;border-radius:4px;overflow:hidden;background:#e8e8e8;display:flex;align-items:center;justify-content:center;';
-    if (item.textureUrl) {
-      const img = document.createElement('img');
-      img.crossOrigin = 'anonymous';
-      img.src = item.textureUrl;
-      img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
-      img.alt = '';
-      imgWrap.appendChild(img);
-    } else {
-      const ph = document.createElement('div');
-      ph.textContent = '—';
-      ph.style.cssText = 'font-size:9px;color:#999;';
-      imgWrap.appendChild(ph);
-    }
-
-    const text = document.createElement('div');
-    text.style.cssText = 'min-width:0;flex:1;';
-    const code = document.createElement('div');
-    code.textContent = `品番: ${item.partCode}`;
-    code.style.cssText = 'font-size:9px;font-weight:700;margin-bottom:2px;word-break:break-all;';
-    const name = document.createElement('div');
-    name.textContent = item.displayName;
-    name.style.cssText = 'font-size:9px;margin-bottom:4px;line-height:1.3;';
-    const use = document.createElement('div');
-    use.textContent = `使用箇所: ${item.usages.join('、')}`;
-    use.style.cssText = 'font-size:8px;color:#444;line-height:1.4;';
-    text.appendChild(code);
-    text.appendChild(name);
-    text.appendChild(use);
-
-    card.appendChild(imgWrap);
-    card.appendChild(text);
-    grid.appendChild(card);
+  const groups: { key: 'wall' | 'ceiling' | 'floor' | 'beam'; title: string; jp: string; items: MaterialBoardItem[] }[] = [
+    { key: 'wall', title: '■壁', jp: '壁', items: [] },
+    { key: 'ceiling', title: '■天井', jp: '天井', items: [] },
+    { key: 'floor', title: '■床', jp: '床', items: [] },
+    { key: 'beam', title: '■梁', jp: '梁', items: [] },
+  ];
+  for (const it of items) {
+    const cat = surfaceCategory(it.usages);
+    (groups.find((g) => g.key === cat) ?? groups[0]).items.push(it);
   }
 
-  root.appendChild(grid);
+  for (const g of groups) {
+    if (g.items.length === 0) continue;
+    const sec = document.createElement('div');
+    sec.style.cssText = 'margin-bottom:16px;';
+    const st = document.createElement('div');
+    st.textContent = g.title;
+    st.style.cssText = 'color:#cc0000;font-size:14px;font-weight:800;margin-bottom:6px;';
+    sec.appendChild(st);
+
+    const grid = document.createElement('div');
+    grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:12px 16px;';
+    g.items.forEach((it, idx) => {
+      const card = document.createElement('div');
+      card.style.cssText = 'width:283px;';
+      const imgWrap = document.createElement('div');
+      imgWrap.style.cssText =
+        'width:283px;height:283px;border:1px solid #ccc;overflow:hidden;background:#ececec;display:flex;align-items:center;justify-content:center;';
+      if (it.textureUrl) {
+        const img = document.createElement('img');
+        img.crossOrigin = 'anonymous';
+        img.src = it.textureUrl;
+        img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+        img.alt = '';
+        imgWrap.appendChild(img);
+      } else {
+        const ph = document.createElement('div');
+        ph.textContent = '—';
+        ph.style.cssText = 'font-size:14px;color:#999;';
+        imgWrap.appendChild(ph);
+      }
+      const cap = document.createElement('div');
+      cap.textContent = `${g.jp}${idx + 1}：${it.partCode}【${it.brand || 'メーカー名'}】`;
+      cap.style.cssText =
+        'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;word-break:break-all;';
+      card.appendChild(imgWrap);
+      card.appendChild(cap);
+      grid.appendChild(card);
+    });
+    sec.appendChild(grid);
+    body.appendChild(sec);
+  }
+  root.appendChild(body);
+
+  const footer = document.createElement('div');
+  footer.style.cssText =
+    'background:#3a3a3a;color:#fff;padding:8px 18px;font-size:13px;font-weight:700;text-align:center;';
+  footer.textContent = authorName || '—';
+  root.appendChild(footer);
+
   return root;
 }
 
@@ -369,6 +406,32 @@ async function renderNodeToPdfPage(
   }
 }
 
+/** マテリアルボードを A3 横ページに描画（マテリアルボードのみ A3横・260623）。
+ *  幅いっぱい(420mm)に配置し内部の 283px=100mm を保つ。高さがA3を超える場合のみ縮小。 */
+async function renderBoardToA3Page(pdf: jsPDF, node: HTMLElement): Promise<void> {
+  node.style.position = 'fixed';
+  node.style.left = '-9999px';
+  node.style.top = '0';
+  document.body.appendChild(node);
+  try {
+    const canvas = await html2canvas(node, { scale: 2, backgroundColor: '#ffffff', useCORS: true, logging: false });
+    const img = canvas.toDataURL('image/png', 1.0);
+    pdf.addPage('a3', 'landscape');
+    const pageW = 420;
+    const pageH = 297;
+    let w = pageW;
+    let h = (canvas.height * w) / canvas.width;
+    if (h > pageH) {
+      const r = pageH / h;
+      w *= r;
+      h = pageH;
+    }
+    pdf.addImage(img, 'PNG', (pageW - w) / 2, 0, w, h);
+  } finally {
+    document.body.removeChild(node);
+  }
+}
+
 export async function downloadEstimatePdf(payload: EstimateExportPayload): Promise<void> {
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const estimateEl = buildEstimatePage(payload);
@@ -376,15 +439,10 @@ export async function downloadEstimatePdf(payload: EstimateExportPayload): Promi
 
   const board = payload.materialBoard;
   if (board.length > 0) {
-    const totalPages = Math.ceil(board.length / MATERIAL_BOARD_PAGE_SIZE);
-    for (let p = 0; p < totalPages; p++) {
-      const slice = board.slice(p * MATERIAL_BOARD_PAGE_SIZE, (p + 1) * MATERIAL_BOARD_PAGE_SIZE);
-      const urls = slice.map((b) => b.textureUrl).filter(Boolean);
-      await preloadTextureUrls(urls);
-      const label = totalPages > 1 ? `(${p + 1}/${totalPages})` : '';
-      const boardEl = buildMaterialBoardPage(slice, label);
-      await renderNodeToPdfPage(pdf, boardEl, false);
-    }
+    await preloadTextureUrls(board.map((b) => b.textureUrl).filter(Boolean));
+    const dateLabel = new Date(payload.generatedAtIso).toLocaleDateString('ja-JP');
+    const boardEl = buildMaterialBoardPage(board, payload.projectName, payload.authorName, dateLabel);
+    await renderBoardToA3Page(pdf, boardEl);
   }
 
   const out = pdf.output('blob');

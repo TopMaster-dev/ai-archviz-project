@@ -65,11 +65,15 @@ export interface MaterialBoardItem {
   textureUrl: string;
   partCode: string;
   displayName: string;
+  brand: string;
   usages: string[];
 }
 
 export interface EstimateExportPayload {
   generatedAtIso: string;
+  /** マテリアルボードのヘッダ（プロジェクト名）・フッタ（会社名、無ければユーザー名）（260623）。 */
+  projectName: string;
+  authorName: string;
   materialsTotal: number;
   furnitureTotal: number;
   aiItemsTotal: number;
@@ -84,6 +88,9 @@ export interface EstimateExportPayload {
 
 export interface BuildEstimateOptions {
   wallDivisions: Record<number, number>;
+  /** マテリアルボードのヘッダ/フッタ表示用（260623）。 */
+  projectName?: string;
+  authorName?: string;
   /** 建材ラインのメモ（productId キー）。CSV/PDF の備考へ反映（4c）。 */
   materialMemoByProductId?: Record<string, string>;
   /** 巾木ライン（壁延長 × m単価）。CSV/PDF の【巾木】セクションへ反映（260613）。 */
@@ -283,6 +290,7 @@ export function buildEstimateExportPayload(
         textureUrl: item.textureUrl ?? '',
         partCode: item.productId || pid,
         displayName: `${item.brand} ${item.prodName}`.trim(),
+        brand: item.brand,
         usages: [label],
       });
     }
@@ -338,6 +346,8 @@ export function buildEstimateExportPayload(
   const materialsTotalWithBaseboard = materialsTotal + baseboardTotal;
   return {
     generatedAtIso: new Date().toISOString(),
+    projectName: options.projectName ?? '',
+    authorName: options.authorName ?? '',
     materialsTotal: roundYen(materialsTotalWithBaseboard),
     furnitureTotal: roundYen(furnitureTotal),
     aiItemsTotal: roundYen(aiItemsTotal),
