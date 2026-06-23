@@ -17,10 +17,13 @@ import {
   walkForward,
   walkRight,
   clampPitch,
-  getAabbFromMPoints,
-  clampXZToAabb,
-  type WalkBoundsAabb,
+  clampXZToPolygon,
 } from '../utils/walkthrough.js';
+
+/** ウォーク時の壁からの最小距離（m）。near 面が壁にめり込まないよう少し余裕を持たせる。 */
+const WALK_WALL_MARGIN = 0.12;
+/** 部屋ポリゴン（XZ・原点中心メートル）。ウォークの閉じ込めに使う。 */
+type WalkPolygon = { x: number; z: number }[];
 import { MaterialCategory, Product, FurnitureItem, Opening, CameraBlendRequest } from '../types.js';
 import { OPENING_CENTER_OFFSET_M, OPENING_DEPTH_M, ParametricWindow, ParametricDoor } from './Openings.js';
 import { useGesture } from '@use-gesture/react';
@@ -2659,7 +2662,7 @@ const LOOK_DRAG_THRESHOLD_PX = 8;
 
 const WalkthroughController: React.FC<{
   eyeHeightM: number;
-  walkBounds: WalkBoundsAabb | null;
+  walkBounds: WalkPolygon | null;
   walkSessionKey: number;
   walkInitialYaw: number;
   walkInitialPitch: number;
@@ -2816,7 +2819,8 @@ const WalkthroughController: React.FC<{
     cam.position.y = eyeHeightM;
 
     if (walkBounds) {
-      const [cx, cz] = clampXZToAabb(cam.position.x, cam.position.z, walkBounds, 0.08);
+      // 外接矩形ではなく部屋ポリゴンに沿って閉じ込める（非矩形の部屋で1枚の壁だけ通り抜ける不具合の修正・260624）。
+      const [cx, cz] = clampXZToPolygon(cam.position.x, cam.position.z, walkBounds, WALK_WALL_MARGIN);
       cam.position.x = cx;
       cam.position.z = cz;
     }
@@ -3138,10 +3142,11 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
     return { centerMm, polygonMm };
   }, [modelUrl, sketchPoints]);
 
-  const walkBounds = useMemo((): WalkBoundsAabb | null => {
+  const walkBounds = useMemo((): WalkPolygon | null => {
     if (modelUrl || sketchPoints.length < 3) return null;
     const { mPoints } = getRoomTransform(sketchPoints as Point[]);
-    return getAabbFromMPoints(mPoints);
+    // 外接矩形ではなく実際の壁ポリゴンを返し、非矩形の部屋でも壁に沿って閉じ込める（260624）。
+    return mPoints.length >= 3 ? mPoints : null;
   }, [modelUrl, sketchPoints]);
 
   const eyeHeightM = eyeHeightMm / 1000;
