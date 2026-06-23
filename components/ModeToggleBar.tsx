@@ -1,5 +1,5 @@
 import React from 'react';
-import { HelpCircle } from 'lucide-react';
+import { HelpCircle, Home, Loader2 } from 'lucide-react';
 
 type ModeId = 'sketch' | '3D' | 'ai';
 
@@ -14,6 +14,11 @@ type Props = {
   className?: string;
   /** 使い方ガイドを開く（260623: 上部に ? を置いて、一度きりでなく見返せるように）。 */
   onHelp?: () => void;
+  /** ホームへ戻る（260623: 2D/3D/AI で配置を共通化。モードバー左端に「ホーム」を置く）。
+      未指定（ゲスト等）のときは「ホーム」を出さない。 */
+  onGoHome?: () => void;
+  /** 離脱時オートセーブ中（ホーム遷移処理中）は「保存中…」表示＋無効化。 */
+  homeBusy?: boolean;
 };
 
 const shellClassName =
@@ -33,9 +38,30 @@ export function ModeToggleBar({
   aiDisabledTitle,
   className,
   onHelp,
+  onGoHome,
+  homeBusy,
 }: Props) {
   return (
     <div className={`${shellClassName}${className ? ` ${className}` : ''}`}>
+      {onGoHome && (
+        <>
+          <button
+            type="button"
+            onClick={onGoHome}
+            disabled={homeBusy}
+            title="ホームに戻る（プロジェクト一覧）"
+            className={`${buttonBaseClassName} ${inactiveClassName} gap-1.5 disabled:cursor-not-allowed disabled:opacity-60`}
+          >
+            {homeBusy ? (
+              <Loader2 className="h-[15px] w-[15px] animate-spin" />
+            ) : (
+              <Home className="h-[15px] w-[15px]" />
+            )}
+            {homeBusy ? '保存中…' : 'ホーム'}
+          </button>
+          <div className="mx-0.5 h-5 w-px self-center bg-white/15" aria-hidden />
+        </>
+      )}
       <button
         type="button"
         onClick={onSwitchToSketch}

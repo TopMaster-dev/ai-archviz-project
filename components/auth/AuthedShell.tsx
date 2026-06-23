@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import { AlertTriangle } from 'lucide-react';
 import { HomeScreen } from '../HomeScreen.js';
-import { AccountMenu } from './AccountMenu.js';
 import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
 import { ShellNavProvider } from '../../lib/shell/shellNavContext.js';
@@ -58,7 +57,7 @@ export function AuthedShell({ children }: { children: ReactNode }) {
   return (
     <ShellNavProvider goHome={goHome} homeBusy={leavingHome}>
       {children}
-      <AccountMenu onHome={goHome} saving={leavingHome} />
+      {/* 「ホームに戻る」は 2D/3D/AI 各ビューの ModeToggleBar 左端に統一（260623）。右上固定ボタンは廃止。 */}
       <ProjectSaveIndicator />
       <UndoRedoBar />
       {saveError && (

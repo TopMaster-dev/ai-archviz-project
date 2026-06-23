@@ -367,34 +367,17 @@ export function AiEditWorkspace({
         )}
       </button>
     ) : (
-      <div className="flex shrink-0 items-center gap-2">
-        {/* AI画像編集にも 2D/3D 同様の「ホームに戻る」を表示（モード切替の左に配置・260623）。
-            通常時は右上の「ホームに戻る」が AI のオーバーレイに覆われるため、ここに出す。 */}
-        <button
-          type="button"
-          onClick={onExitToHome}
-          disabled={exitToHomeBusy}
-          title="ホームに戻る（プロジェクト一覧）"
-          className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-white/10 bg-black/40 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-white/80 shadow-xl backdrop-blur-md transition hover:text-white disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:text-white/80"
-        >
-          {exitToHomeBusy ? (
-            <>
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              保存中…
-            </>
-          ) : (
-            '← ホーム'
-          )}
-        </button>
-        <ModeToggleBar
-          activeMode="ai"
-          onSwitchToSketch={onSwitchToSketch}
-          onSwitchTo3D={onSwitchTo3D}
-          onSwitchToAi={onSwitchToAiEdit}
-          canSwitchTo3D={canSwitchTo3D}
-          className="shrink-0"
-        />
-      </div>
+      // AI画像編集も 2D/3D と同じく ModeToggleBar 左端の「ホーム」で戻る（260623・配置共通化）。
+      <ModeToggleBar
+        activeMode="ai"
+        onSwitchToSketch={onSwitchToSketch}
+        onSwitchTo3D={onSwitchTo3D}
+        onSwitchToAi={onSwitchToAiEdit}
+        canSwitchTo3D={canSwitchTo3D}
+        onGoHome={onExitToHome}
+        homeBusy={exitToHomeBusy}
+        className="shrink-0"
+      />
     );
 
   const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
@@ -1289,7 +1272,7 @@ export function AiEditWorkspace({
               <h3 className="mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-xl font-bold text-transparent">
                 AIが画像を生成中…
               </h3>
-              <p className="text-sm text-zinc-400">完了までしばらくお待ちください（数十秒かかる場合があります）</p>
+              <p className="text-sm text-zinc-400">しばらくお待ちください。</p>
             </div>
           </div>
         </div>

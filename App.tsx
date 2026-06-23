@@ -2299,6 +2299,8 @@ const App: React.FC = () => {
       canSwitchToAi={!!renderState.resultImageUrl}
       aiDisabledTitle="AIレンダリング完了後に利用できます"
       onHelp={() => setEditorOnboardingOpen(true)}
+      onGoHome={shellNav?.goHome}
+      homeBusy={shellNav?.homeBusy}
     />
   );
 
@@ -4370,9 +4372,9 @@ const App: React.FC = () => {
              <Wand2 className="w-16 h-16 text-purple-500 animate-pulse" />
              <div>
                <h3 className="font-bold text-2xl mb-3 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-500">
-                  クラウドAIで超高画質レンダリング中...
+                  AI が画像をレンダリング中...
                </h3>
-               <p className="text-zinc-400 text-sm">最高峰の建築ビジュアライゼーションモデルが処理を実行しています</p>
+               <p className="text-zinc-400 text-sm">しばらくお待ちください。</p>
              </div>
           </div>
         </div>
