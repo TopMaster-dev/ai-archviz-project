@@ -1636,19 +1636,25 @@ const App: React.FC = () => {
     return () => cancelAnimationFrame(id);
   }, [cameraMode, requestCameraBlend]);
 
+  // 視点の保存/リネームの名前入力（260623: ブラウザの prompt をやめ、アプリUIに合わせたダイアログに統一）。
+  const [presetNameDialog, setPresetNameDialog] = useState<
+    | { mode: 'save'; pending: CameraPreset }
+    | { mode: 'rename'; id: string }
+    | null
+  >(null);
+  const [presetNameInput, setPresetNameInput] = useState('');
+
   const handleSaveCameraPreset = useCallback(() => {
     const cam = cameraRef.current;
     if (!cam) return;
     const suggested = `視点 ${cameraPresets.length + 1}`;
-    const label = window.prompt('視点名', suggested);
-    if (label === null) return;
-    const trimmed = label.trim() || suggested;
-
+    // 視点（カメラ姿勢）は「保存ボタンを押した瞬間」の値を確定し、ダイアログ操作中にカメラが動いても変わらないようにする。
+    let pending: CameraPreset;
     if (cameraMode === 'walk') {
       const st = cameraWalkStateRef.current;
-      const preset: CameraPreset = {
+      pending = {
         id: crypto.randomUUID(),
-        label: trimmed,
+        label: suggested,
         cameraMode: 'walk',
         position: [cam.position.x, cam.position.y, cam.position.z],
         target: [cam.position.x, cam.position.y, cam.position.z],
@@ -1656,29 +1662,38 @@ const App: React.FC = () => {
         walkPitch: st.pitch,
         fov: cam.fov,
       };
+    } else {
+      const ctrl = orbitControlsRef.current;
+      if (!ctrl) return;
+      pending = {
+        id: crypto.randomUUID(),
+        label: suggested,
+        cameraMode: 'orbit',
+        position: [cam.position.x, cam.position.y, cam.position.z],
+        target: [ctrl.target.x, ctrl.target.y, ctrl.target.z],
+        fov: cam.fov,
+      };
+    }
+    setPresetNameInput(suggested);
+    setPresetNameDialog({ mode: 'save', pending });
+  }, [cameraPresets.length, cameraMode]);
+
+  const commitPresetName = useCallback(() => {
+    if (!presetNameDialog) return;
+    const trimmed = presetNameInput.trim();
+    if (presetNameDialog.mode === 'save') {
+      const preset = { ...presetNameDialog.pending, label: trimmed || presetNameDialog.pending.label };
       setCameraPresets((prev) => {
         const next = [...prev, preset];
         return next.length > MAX_CAMERA_PRESETS ? next.slice(-MAX_CAMERA_PRESETS) : next;
       });
       setLastAppliedPresetId(preset.id);
-      return;
+    } else if (trimmed) {
+      const id = presetNameDialog.id;
+      setCameraPresets((prev) => prev.map((p) => (p.id === id ? { ...p, label: trimmed } : p)));
     }
-    const ctrl = orbitControlsRef.current;
-    if (!ctrl) return;
-    const preset: CameraPreset = {
-      id: crypto.randomUUID(),
-      label: trimmed,
-      cameraMode: 'orbit',
-      position: [cam.position.x, cam.position.y, cam.position.z],
-      target: [ctrl.target.x, ctrl.target.y, ctrl.target.z],
-      fov: cam.fov,
-    };
-    setCameraPresets((prev) => {
-      const next = [...prev, preset];
-      return next.length > MAX_CAMERA_PRESETS ? next.slice(-MAX_CAMERA_PRESETS) : next;
-    });
-    setLastAppliedPresetId(preset.id);
-  }, [cameraPresets.length, cameraMode]);
+    setPresetNameDialog(null);
+  }, [presetNameDialog, presetNameInput]);
 
   const handleDeleteCameraPreset = useCallback((id: string) => {
     setCameraPresets((prev) => prev.filter((p) => p.id !== id));
@@ -1689,11 +1704,8 @@ const App: React.FC = () => {
     (id: string) => {
       const preset = cameraPresets.find((p) => p.id === id);
       if (!preset) return;
-      const next = window.prompt('視点名', preset.label);
-      if (next === null) return;
-      const trimmed = next.trim();
-      if (!trimmed) return;
-      setCameraPresets((prev) => prev.map((p) => (p.id === id ? { ...p, label: trimmed } : p)));
+      setPresetNameInput(preset.label);
+      setPresetNameDialog({ mode: 'rename', id });
     },
     [cameraPresets]
   );
@@ -2813,6 +2825,29 @@ const App: React.FC = () => {
 
       {/* 使い方ガイド（エディタ上部の「?」から見返せる・260623） */}
       <OnboardingGuide open={editorOnboardingOpen} onClose={() => setEditorOnboardingOpen(false)} />
+
+      {/* 視点の保存/リネーム名入力ダイアログ（260623・アプリUIに統一） */}
+      {presetNameDialog && (
+        <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/50 p-4" onClick={() => setPresetNameDialog(null)} role="dialog" aria-modal="true">
+          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-sm font-bold text-neutral-100">{presetNameDialog.mode === 'save' ? 'この視点を保存します' : '視点名を変更'}</h3>
+            <label className="mt-3 block text-[11px] font-bold text-neutral-400">
+              視点名
+              <input
+                autoFocus
+                value={presetNameInput}
+                onChange={(e) => setPresetNameInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') commitPresetName(); else if (e.key === 'Escape') setPresetNameDialog(null); }}
+                className="mt-1 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
+              />
+            </label>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setPresetNameDialog(null)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">キャンセル</button>
+              <button type="button" onClick={commitPresetName} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500">OK</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 建材画像の追加: カテゴリ選択ポップアップ（260623・ホームの「＋建材を追加（画像）」と同じ流れ） */}
       {pendingMaterialFiles.length > 0 && (
@@ -3942,6 +3977,11 @@ const App: React.FC = () => {
                                                     </li>
                                                 </>
                                             )}
+                                            <li className="mt-1 border-t border-white/10 pt-1"><span className="text-white/90">Ctrl+Z</span> 一つ戻る</li>
+                                            <li><span className="text-white/90">Ctrl+Y</span> やり直す</li>
+                                            <li><span className="text-white/90">Ctrl+G</span> グループ化</li>
+                                            <li><span className="text-white/90">Ctrl+C</span> コピー</li>
+                                            <li><span className="text-white/90">Ctrl+V</span> ペースト</li>
                                         </ul>
                                     </div>
                                     <CameraPresetBar

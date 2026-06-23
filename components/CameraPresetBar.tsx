@@ -109,7 +109,7 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
           className="shrink-0 flex items-center gap-1 px-2 py-1.5 rounded-xl text-[10px] font-black uppercase tracking-wider text-emerald-300/90 hover:bg-emerald-500/15 disabled:opacity-30 disabled:pointer-events-none transition-colors border border-emerald-500/25"
         >
           <Plus className="w-3.5 h-3.5" aria-hidden />
-          保存
+          視点を保存
         </button>
         <div className="w-px h-6 bg-white/15 shrink-0 self-center" aria-hidden />
         <div className="flex items-center gap-1 min-w-0 overflow-x-auto scroll-dark py-0.5 flex-1">

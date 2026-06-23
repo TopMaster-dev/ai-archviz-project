@@ -2325,9 +2325,10 @@ const UpperBandSegment: React.FC<{
     shape.lineTo(-length / 2, bandM / 2);
     shape.lineTo(-length / 2, -bandM / 2);
 
-    const bandMinY = yTop - bandM;
-    const bandMaxY = yTop;
-    const bandCenterY = yTop - bandM / 2;
+    // スケルトン天井の上部壁は、天井ラインから「上」へ伸ばす（260623・クライアント要望。天井面も併せて上へ）。
+    const bandMinY = yTop;
+    const bandMaxY = yTop + bandM;
+    const bandCenterY = yTop + bandM / 2;
     const halfH = bandM / 2;
     const minYL = -halfH + HOLE_INSET_EPS_M;
     const maxYL = halfH - HOLE_INSET_EPS_M;
@@ -2382,7 +2383,7 @@ const UpperBandSegment: React.FC<{
     <mesh
       ref={ref}
       name="Sketch_UpperBand"
-      position={[0, yTop - bandM / 2, 0]}
+      position={[0, yTop + bandM / 2, 0]}
       onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Wall', 'Sketch_UpperBand', e.shiftKey || e.metaKey || e.ctrlKey); }}
       onPointerOver={(e) => { e.stopPropagation(); onHoverNameChange?.('Sketch_UpperBand'); }}
       onPointerOut={() => onHoverNameChange?.(null)}
@@ -2482,11 +2483,12 @@ const SketchRoom = ({
         <StructuralEdges snapshotMode={snapshotMode} />
       </mesh>
 
-      {/* 天井スラブ。スケルトン天井でも天井（上面）は表示する（4b: 天井アリ）。 */}
+      {/* 天井スラブ。スケルトン天井でも天井（上面）は表示する（4b: 天井アリ）。
+          スケルトン時は上部壁ぶん上へ移動し、天井面も併せて上に伸びる（260623・クライアント要望）。 */}
       <mesh
         ref={ceilingRef}
         name="Sketch_Ceiling"
-        position={[0, height, 0]}
+        position={[0, skeletonCeiling && skeletonUpperWallMm > 0 ? height + skeletonUpperWallMm / 1000 : height, 0]}
         rotation={[Math.PI / 2, 0, 0]}
         scale={[1, 1, 1]}
         onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Ceiling', 'Sketch_Ceiling', e.shiftKey || e.metaKey || e.ctrlKey); }}
