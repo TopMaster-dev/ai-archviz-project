@@ -232,12 +232,12 @@ const ToggleSwitch = ({ enabled, onChange }: { enabled: boolean; onChange: () =>
 
 export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   initialPoints,
-  onSketchUpdate, 
-  onApply, 
-  gridSize = 1000, 
+  onSketchUpdate,
+  onApply,
+  gridSize = 1000,
   lengthSnapSize = 1000,
   isLengthSnapEnabled = true,
-  angleSnap = 45, 
+  angleSnap = 45,
   isAngleSnapEnabled = true,
   onGridSizeChange,
   onLengthSnapSizeChange,
@@ -310,7 +310,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const MAX_VIEW_GRID_ITER = 600;
 
   const [pointsMm, setPointsMm] = useState<Point[]>(() => {
-    const initial = initialPoints && initialPoints.length > 0 
+    const initial = initialPoints && initialPoints.length > 0
       ? initialPoints.map(p => ({ x: p.x / BASE_SCALE, y: p.y / BASE_SCALE }))
       : [];
     pointsMmRef.current = initial;
@@ -335,7 +335,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [isVertexSnapEnabled, setIsVertexSnapEnabled] = useState(true);
   // 下絵スナップ（背景画像の枠・辺・中心へ吸着）。既定OFF・任意。
   const [isUnderlaySnapEnabled, setIsUnderlaySnapEnabled] = useState(false);
-  
+
   // Selection & Interaction State
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
   const [draggingEdgeIndex, setDraggingEdgeIndex] = useState<number | null>(null);
@@ -369,7 +369,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const RING_HIT_OUTER_PX = 12;
 
   const FURNITURE_ROTATION_SNAP_RAD = (10 * Math.PI) / 180;
-  
+
   const [isPanning, setIsPanning] = useState(false);
   const lastMousePixelsRef = useRef<Point | null>(null);
   const isSelectMode = toolMode === 'select';
@@ -666,15 +666,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     // Priority 1: Snap to Start Point (Red Point) if closing loop
     // This takes precedence over all other snaps
     if (pointsMm.length >= 3 && !isClosed) {
-        const startPt = pointsMm[0];
-        const startScreen = worldToScreen(startPt);
-        const rawScreen = worldToScreen(rawMm);
-        const distPx = Math.hypot(startScreen.x - rawScreen.x, startScreen.y - rawScreen.y);
-        
-        // 20px threshold for magnetic snap
-        if (distPx < 20) {
-            return startPt;
-        }
+      const startPt = pointsMm[0];
+      const startScreen = worldToScreen(startPt);
+      const rawScreen = worldToScreen(rawMm);
+      const distPx = Math.hypot(startScreen.x - rawScreen.x, startScreen.y - rawScreen.y);
+
+      // 20px threshold for magnetic snap
+      if (distPx < 20) {
+        return startPt;
+      }
     }
 
     // Priority 2: 寸法/頂点スナップ（既存ジオメトリへの吸着）
@@ -748,10 +748,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     // Priority 3: Grid Snap (Absolute Coordinate Snap)
     // If Grid Snap is ON, strictly snap to grid intersections defined by gridSize.
     if (isGridSnapEnabled && gridSize > 0) {
-       return { 
-         x: snapValue(rawMm.x, gridSize), 
-         y: snapValue(rawMm.y, gridSize) 
-       };
+      return {
+        x: snapValue(rawMm.x, gridSize),
+        y: snapValue(rawMm.y, gridSize)
+      };
     }
 
     // Priority 3: Relative Length/Angle Snap
@@ -760,24 +760,24 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       // unless we treat the world origin as a reference, but usually the first point is free or grid snapped.
       return rawMm;
     }
-    
+
     const dx = rawMm.x - originMm.x;
     const dy = rawMm.y - originMm.y;
     const rawLen = Math.sqrt(dx * dx + dy * dy);
     const rawAngle = Math.atan2(dy, dx);
-    
+
     let finalAngle = rawAngle;
     if (isAngleSnapEnabled && angleSnap > 0) {
       const snapRad = (angleSnap * Math.PI) / 180;
       finalAngle = Math.round(rawAngle / snapRad) * snapRad;
     }
-    
+
     let finalLen = rawLen;
     // Use lengthSnapSize for relative length snapping
     if (isLengthSnapEnabled && lengthSnapSize > 0) {
       finalLen = snapValue(rawLen, lengthSnapSize);
     }
-    
+
     return {
       x: originMm.x + Math.cos(finalAngle) * finalLen,
       y: originMm.y + Math.sin(finalAngle) * finalLen
@@ -834,14 +834,14 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   const getFigureCenter = useCallback(() => {
     if (pointsMm.length === 0) {
-        return screenToWorld({ x: canvasSize.width / 2, y: canvasSize.height / 2 });
+      return screenToWorld({ x: canvasSize.width / 2, y: canvasSize.height / 2 });
     }
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     pointsMm.forEach(p => {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
     });
     return { x: (minX + maxX) / 2, y: (minY + maxY) / 2 };
   }, [pointsMm, canvasSize, screenToWorld]);
@@ -869,16 +869,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   const handleFitToScreen = () => {
     if (pointsMm.length === 0) {
-        viewZoomRef.current = DEFAULT_ZOOM;
-        viewOffsetRef.current = DEFAULT_OFFSET;
-        return;
+      viewZoomRef.current = DEFAULT_ZOOM;
+      viewOffsetRef.current = DEFAULT_OFFSET;
+      return;
     }
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     pointsMm.forEach(p => {
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.y < minY) minY = p.y;
-        if (p.y > maxY) maxY = p.y;
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
     });
     const padding = 1000;
     const width = maxX - minX + padding * 2;
@@ -902,29 +902,29 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       onFurnitureUpdate((prev) => prev.filter((item) => item.id !== activeFurnitureId));
       onFurnitureSelect(null);
     } else if (selectedPointIndex !== null) {
-        // Delete Point
-        setPointsMm(prev => {
-            const next = prev.filter((_, i) => i !== selectedPointIndex);
-            if (next.length < 3) setIsClosed(false);
-            return next;
-        });
-        setSelectedPointIndex(null);
+      // Delete Point
+      setPointsMm(prev => {
+        const next = prev.filter((_, i) => i !== selectedPointIndex);
+        if (next.length < 3) setIsClosed(false);
+        return next;
+      });
+      setSelectedPointIndex(null);
     } else if (selectedEdgeIndex !== null) {
-        // Delete Edge
-        setPointsMm(prev => {
-            const next = prev.filter((_, i) => i !== selectedEdgeIndex);
-            if (next.length < 3) setIsClosed(false);
-            return next;
-        });
-        setSelectedEdgeIndex(null);
+      // Delete Edge
+      setPointsMm(prev => {
+        const next = prev.filter((_, i) => i !== selectedEdgeIndex);
+        if (next.length < 3) setIsClosed(false);
+        return next;
+      });
+      setSelectedEdgeIndex(null);
     } else {
-        // Fallback: Delete last point if nothing selected (old Undo behavior)
-        if (isClosed) {
-            setIsClosed(false);
-            setIsDrawing(true);
-        } else {
-            setPointsMm(prev => prev.slice(0, -1));
-        }
+      // Fallback: Delete last point if nothing selected (old Undo behavior)
+      if (isClosed) {
+        setIsClosed(false);
+        setIsDrawing(true);
+      } else {
+        setPointsMm(prev => prev.slice(0, -1));
+      }
     }
   };
 
@@ -1075,16 +1075,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       const wallSeg = bestWall >= 0 && bestDist <= snapThresholdMm ? getWallSegment(pointsMm, bestWall) : null;
       const beam: Beam = wallSeg
         ? {
-            id,
-            cx: (wallSeg.p1.x + wallSeg.p2.x) / 2,
-            cy: (wallSeg.p1.y + wallSeg.p2.y) / 2,
-            lengthMm: wallSeg.length,
-            angleDeg: (Math.atan2(wallSeg.dy, wallSeg.dx) * 180) / Math.PI,
-            widthMm: 150,
-            dropMm: 0,
-            heightMm: 300,
-            wallIndex: bestWall,
-          }
+          id,
+          cx: (wallSeg.p1.x + wallSeg.p2.x) / 2,
+          cy: (wallSeg.p1.y + wallSeg.p2.y) / 2,
+          lengthMm: wallSeg.length,
+          angleDeg: (Math.atan2(wallSeg.dy, wallSeg.dx) * 180) / Math.PI,
+          widthMm: 150,
+          dropMm: 0,
+          heightMm: 300,
+          wallIndex: bestWall,
+        }
         : { id, cx: mm.x, cy: mm.y, lengthMm: 2000, angleDeg: 0, widthMm: 150, dropMm: 0, heightMm: 300 };
       onBeamsChange?.([...beamsRef.current, beam]);
       setSelectedBeamId(id);
@@ -1134,80 +1134,80 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
       // 天伏図では平面要素（壁・窓・ドア）を選択しない。梁は上で処理済み（260623）。
       if (!isCeilingView) {
-      // 0. Check Opening Hit (PRIORITIZED)
-      let openingHit = false;
-      if (openings.length > 0) {
-        for (const op of openings) {
-          const wall = getWallSegment(pointsMm, op.wallIndex);
-          if (!wall) continue;
-          const wallDir = { x: wall.dx / wall.length, y: wall.dy / wall.length };
-          const perpDir = { x: -wallDir.y, y: wallDir.x };
-          const opCenterMm = lerpPoint(wall.p1, wall.p2, op.ratioPosition);
+        // 0. Check Opening Hit (PRIORITIZED)
+        let openingHit = false;
+        if (openings.length > 0) {
+          for (const op of openings) {
+            const wall = getWallSegment(pointsMm, op.wallIndex);
+            if (!wall) continue;
+            const wallDir = { x: wall.dx / wall.length, y: wall.dy / wall.length };
+            const perpDir = { x: -wallDir.y, y: wallDir.x };
+            const opCenterMm = lerpPoint(wall.p1, wall.p2, op.ratioPosition);
 
-          const mouseVec = { x: mm.x - opCenterMm.x, y: mm.y - opCenterMm.y };
+            const mouseVec = { x: mm.x - opCenterMm.x, y: mm.y - opCenterMm.y };
 
-          const parallelDist = mouseVec.x * wallDir.x + mouseVec.y * wallDir.y;
-          const perpDist = Math.abs(mouseVec.x * perpDir.x + mouseVec.y * perpDir.y);
-          
-          const halfWidth = op.width / 2;
-          const hitThreshold = 300; // 30cm perpendicular tolerance
-          if (Math.abs(parallelDist) <= halfWidth && perpDist <= hitThreshold) {
-            onOpeningSelect(op.id);
-            setSelectedPointIndex(null);
-            setSelectedEdgeIndex(null);
-            onFurnitureSelect(null);
-            setDraggingOpeningId(op.id);
-            lastMousePixelsRef.current = pixels;
-            tryPointerCapture(e);
-            openingHit = true;
-            break; 
+            const parallelDist = mouseVec.x * wallDir.x + mouseVec.y * wallDir.y;
+            const perpDist = Math.abs(mouseVec.x * perpDir.x + mouseVec.y * perpDir.y);
+
+            const halfWidth = op.width / 2;
+            const hitThreshold = 300; // 30cm perpendicular tolerance
+            if (Math.abs(parallelDist) <= halfWidth && perpDist <= hitThreshold) {
+              onOpeningSelect(op.id);
+              setSelectedPointIndex(null);
+              setSelectedEdgeIndex(null);
+              onFurnitureSelect(null);
+              setDraggingOpeningId(op.id);
+              lastMousePixelsRef.current = pixels;
+              tryPointerCapture(e);
+              openingHit = true;
+              break;
+            }
           }
         }
-      }
-      if (openingHit) return;
+        if (openingHit) return;
 
-      // 1. Check Point Hit
-      const pointHitR = Math.max(10, Math.min(18, 12 * getArrowGizmoScale(viewZoomRef.current)));
-      const foundPointIdx = pointsMm.findIndex(p => {
-        const pScreen = worldToScreen(p);
-        return Math.hypot(pScreen.x - pixels.x, pScreen.y - pixels.y) < pointHitR;
-      });
+        // 1. Check Point Hit
+        const pointHitR = Math.max(10, Math.min(18, 12 * getArrowGizmoScale(viewZoomRef.current)));
+        const foundPointIdx = pointsMm.findIndex(p => {
+          const pScreen = worldToScreen(p);
+          return Math.hypot(pScreen.x - pixels.x, pScreen.y - pixels.y) < pointHitR;
+        });
 
-      if (foundPointIdx !== -1) {
-        setDraggingPointIndex(foundPointIdx);
-        setSelectedPointIndex(foundPointIdx);
-        setSelectedEdgeIndex(null);
-        onOpeningSelect(null);
-        onFurnitureSelect(null);
-        lastMousePixelsRef.current = pixels;
-        tryPointerCapture(e);
-        return;
-      }
-      
-      // 2. Check Edge Hit
-      if (pointsMm.length >= 2) {
-        const edgeHitPx = Math.max(8, Math.min(14, 10 * getArrowGizmoScale(viewZoomRef.current)));
-        const edgeCount = isClosed ? pointsMm.length : pointsMm.length - 1;
-        for (let i = 0; i < edgeCount; i++) {
-          const p1 = worldToScreen(pointsMm[i]);
-          const p2 = worldToScreen(pointsMm[(i + 1) % pointsMm.length]);
-          const l2 = (p1.x - p2.x)**2 + (p1.y - p2.y)**2;
-          let t = ((pixels.x - p1.x) * (p2.x - p1.x) + (pixels.y - p1.y) * (p2.y - p1.y)) / l2;
-          t = Math.max(0, Math.min(1, t));
-          const dist = Math.hypot(pixels.x - (p1.x + t * (p2.x - p1.x)), pixels.y - (p1.y + t * (p2.y - p1.y)));
-          
-          if (dist < edgeHitPx) {
-            setDraggingEdgeIndex(i);
-            setSelectedEdgeIndex(i);
-            setSelectedPointIndex(null);
-            onOpeningSelect(null);
-            onFurnitureSelect(null);
-            lastMousePixelsRef.current = pixels;
-            tryPointerCapture(e);
-            return;
+        if (foundPointIdx !== -1) {
+          setDraggingPointIndex(foundPointIdx);
+          setSelectedPointIndex(foundPointIdx);
+          setSelectedEdgeIndex(null);
+          onOpeningSelect(null);
+          onFurnitureSelect(null);
+          lastMousePixelsRef.current = pixels;
+          tryPointerCapture(e);
+          return;
+        }
+
+        // 2. Check Edge Hit
+        if (pointsMm.length >= 2) {
+          const edgeHitPx = Math.max(8, Math.min(14, 10 * getArrowGizmoScale(viewZoomRef.current)));
+          const edgeCount = isClosed ? pointsMm.length : pointsMm.length - 1;
+          for (let i = 0; i < edgeCount; i++) {
+            const p1 = worldToScreen(pointsMm[i]);
+            const p2 = worldToScreen(pointsMm[(i + 1) % pointsMm.length]);
+            const l2 = (p1.x - p2.x) ** 2 + (p1.y - p2.y) ** 2;
+            let t = ((pixels.x - p1.x) * (p2.x - p1.x) + (pixels.y - p1.y) * (p2.y - p1.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            const dist = Math.hypot(pixels.x - (p1.x + t * (p2.x - p1.x)), pixels.y - (p1.y + t * (p2.y - p1.y)));
+
+            if (dist < edgeHitPx) {
+              setDraggingEdgeIndex(i);
+              setSelectedEdgeIndex(i);
+              setSelectedPointIndex(null);
+              onOpeningSelect(null);
+              onFurnitureSelect(null);
+              lastMousePixelsRef.current = pixels;
+              tryPointerCapture(e);
+              return;
+            }
           }
         }
-      }
       } // 天伏図では平面要素（壁・窓・ドア）の選択をスキップ
 
       // Clicked empty space in select mode
@@ -1224,13 +1224,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
       const lastPoint = pointsMm.length > 0 ? pointsMm[pointsMm.length - 1] : undefined;
       const snappedMm = getSnappedMm(mm, lastPoint);
-      
+
       if (pointsMm.length >= 3 && snappedMm.x === pointsMm[0].x && snappedMm.y === pointsMm[0].y) {
-         setIsClosed(true);
-         setIsDrawing(false);
-         return;
+        setIsClosed(true);
+        setIsDrawing(false);
+        return;
       }
-      
+
       if (lastPoint && Math.hypot(snappedMm.x - lastPoint.x, snappedMm.y - lastPoint.y) < 10) return;
 
       setPointsMm(prev => [...prev, snappedMm]);
@@ -1242,7 +1242,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     if ((isAddDoor || isAddWindow) && pointsMm.length >= 2) {
       if (hoveredOpeningRef.current) {
         const { wallIndex, ratioPosition, type } = hoveredOpeningRef.current;
-        
+
         const wall = getWallSegment(pointsMm, wallIndex);
         if (!wall) return;
         const wallLength = wall.length;
@@ -1321,9 +1321,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     }
 
     if (isPanning && lastMousePixelsRef.current) {
-      viewOffsetRef.current = { 
-        x: viewOffsetRef.current.x + (pixels.x - lastMousePixelsRef.current.x), 
-        y: viewOffsetRef.current.y + (pixels.y - lastMousePixelsRef.current.y) 
+      viewOffsetRef.current = {
+        x: viewOffsetRef.current.x + (pixels.x - lastMousePixelsRef.current.x),
+        y: viewOffsetRef.current.y + (pixels.y - lastMousePixelsRef.current.y)
       };
       lastMousePixelsRef.current = pixels;
       if (canvas) canvas.style.cursor = 'grabbing';
@@ -1439,11 +1439,11 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       let dMmY = mmNow.y - mmLast.y;
 
       if (isGridSnapEnabled && gridSize > 0) {
-         const p1 = pointsMm[draggingEdgeIndex];
-         const newP1Raw = { x: p1.x + dMmX, y: p1.y + dMmY };
-         const newP1Snapped = { x: snapValue(newP1Raw.x, gridSize), y: snapValue(newP1Raw.y, gridSize) };
-         dMmX = newP1Snapped.x - p1.x;
-         dMmY = newP1Snapped.y - p1.y;
+        const p1 = pointsMm[draggingEdgeIndex];
+        const newP1Raw = { x: p1.x + dMmX, y: p1.y + dMmY };
+        const newP1Snapped = { x: snapValue(newP1Raw.x, gridSize), y: snapValue(newP1Raw.y, gridSize) };
+        dMmX = newP1Snapped.x - p1.x;
+        dMmY = newP1Snapped.y - p1.y;
       }
 
       if (Math.abs(dMmX) > 0.01 || Math.abs(dMmY) > 0.01) {
@@ -1466,7 +1466,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         if (!wall) return;
         const wallLength = wall.length;
         const l2 = wallLength * wallLength;
-        
+
         if (l2 > 0) {
           let rawRatio = ((mm.x - wall.p1.x) * wall.dx + (mm.y - wall.p1.y) * wall.dy) / l2;
           const otherOps = openings
@@ -1716,7 +1716,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       if (!ctx) return;
 
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
+
       const currentZoom = viewZoomRef.current;
       const currentOffset = viewOffsetRef.current;
 
@@ -1795,31 +1795,31 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           x: p.x * currentZoom + currentOffset.x,
           y: p.y * currentZoom + currentOffset.y
         }));
-        
+
         // Draw Fill
-        if (isClosed) { 
-            ctx.fillStyle = 'rgba(16, 185, 129, 0.08)'; 
-            ctx.beginPath(); 
-            ctx.moveTo(screenPoints[0].x, screenPoints[0].y); 
-            screenPoints.forEach(p => ctx.lineTo(p.x, p.y)); 
-            ctx.closePath(); 
-            ctx.fill(); 
+        if (isClosed) {
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.08)';
+          ctx.beginPath();
+          ctx.moveTo(screenPoints[0].x, screenPoints[0].y);
+          screenPoints.forEach(p => ctx.lineTo(p.x, p.y));
+          ctx.closePath();
+          ctx.fill();
         }
-        
+
         // Draw Lines
         ctx.lineWidth = 3;
         const edgeCount = isClosed ? pointsMm.length : pointsMm.length - 1;
         for (let i = 0; i < edgeCount; i++) {
-            const p1 = screenPoints[i];
-            const p2 = screenPoints[(i + 1) % screenPoints.length];
-            ctx.beginPath();
-            ctx.moveTo(p1.x, p1.y);
-            ctx.lineTo(p2.x, p2.y);
-            if (selectedEdgeIndex === i) {
-                ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 5; ctx.stroke(); ctx.lineWidth = 3;
-            } else {
-                ctx.strokeStyle = isClosed ? '#10b981' : '#fff'; ctx.stroke();
-            }
+          const p1 = screenPoints[i];
+          const p2 = screenPoints[(i + 1) % screenPoints.length];
+          ctx.beginPath();
+          ctx.moveTo(p1.x, p1.y);
+          ctx.lineTo(p2.x, p2.y);
+          if (selectedEdgeIndex === i) {
+            ctx.strokeStyle = '#fbbf24'; ctx.lineWidth = 5; ctx.stroke(); ctx.lineWidth = 3;
+          } else {
+            ctx.strokeStyle = isClosed ? '#10b981' : '#fff'; ctx.stroke();
+          }
         }
 
         // Draw Labels（閉多角形の外側判定用に重心は1回だけ）
@@ -1940,12 +1940,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             y: posMm.y * currentZoom + currentOffset.y
           };
           const isSelected = selectedOpeningId === op.id;
-          
+
           ctx.save();
           ctx.translate(pos.x, pos.y);
           const angle = getWallAngle2D(wall.p1, wall.p2);
           ctx.rotate(angle);
-          
+
           ctx.fillStyle = op.type.startsWith('door') ? '#f97316' : '#0ea5e9';
           if (isSelected) ctx.fillStyle = '#fbbf24';
 
@@ -2167,7 +2167,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.fillStyle = type.startsWith('door') ? 'rgba(249, 115, 22, 0.4)' : 'rgba(14, 165, 233, 0.4)';
             const w = ((type.startsWith('door') ? 900 : 1500) * currentZoom) / 2;
             ctx.fillRect(-w, -6, w * 2, 12);
-            
+
             if (type.startsWith('door')) {
               // プレビューも配置後と同じ室内側へ開く向きで表示（3c）。
               const c = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
@@ -2189,7 +2189,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.restore();
           }
         }
-        
+
         // Draw Current Drawing Line
         if (isDrawing && !isClosed) {
           const lastMm = pointsMm[pointsMm.length - 1];
@@ -2200,7 +2200,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           const snappedMm = getSnappedMm(currentMm, lastMm);
           const sPx = { x: snappedMm.x * currentZoom + currentOffset.x, y: snappedMm.y * currentZoom + currentOffset.y };
           const lPx = { x: lastMm.x * currentZoom + currentOffset.x, y: lastMm.y * currentZoom + currentOffset.y };
-          
+
           ctx.setLineDash([5, 5]); ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)'; ctx.beginPath(); ctx.moveTo(lPx.x, lPx.y); ctx.lineTo(sPx.x, sPx.y); ctx.stroke(); ctx.setLineDash([]);
           drawEdgeDimensionLabel(ctx, lastMm, snappedMm, null);
           if (isAngleSnapEnabled && !isGridSnapEnabled) {
@@ -2484,242 +2484,117 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         <div className="lg:hidden absolute inset-0 z-[54] bg-black/60" onClick={() => setPanelOpen(false)} aria-hidden />
       )}
       <div
-        className={`absolute top-28 left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 max-h-[calc(100vh-9rem)] overflow-y-auto scroll-dark pr-1 transition-transform duration-300 lg:translate-x-0 ${
-          panelOpen ? 'translate-x-0' : '-translate-x-[150%] lg:translate-x-0'
-        }`}
+        className={`absolute top-28 left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 max-h-[calc(100vh-9rem)] overflow-y-auto scroll-dark pr-1 transition-transform duration-300 lg:translate-x-0 ${panelOpen ? 'translate-x-0' : '-translate-x-[150%] lg:translate-x-0'
+          }`}
       >
-      {/* 平面図 / 天伏図 切替（独立・最上段）(3b) */}
-      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-1.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
-        <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
-          <button
-            type="button"
-            onClick={() => {
-              onCeilingViewChange?.(false);
-              if (isBeamMode) setToolMode('select');
-            }}
-            className={`flex-1 rounded-md px-3 py-1 font-bold transition ${!isCeilingView ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-            title="平面図: 床面（壁・建具・床家具）を表示"
-          >
-            平面図
-          </button>
-          <button
-            type="button"
-            onClick={() => {
-              onCeilingViewChange?.(true);
-              if (isDrawMode || isAddWindow || isAddDoor) setToolMode('select');
-            }}
-            className={`flex-1 rounded-md px-3 py-1 font-bold transition ${isCeilingView ? 'bg-amber-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-            title="天伏図: 天井面（梁・天井オブジェクト）を表示。床面は半透明化。"
-          >
-            天伏図
-          </button>
-        </div>
-      </div>
-
-      {/* スナップ設定（旧・上部ツールバーから移設。lg以上は左カラム常時表示／狭幅はドロワー内。下絵スナップは下絵カード側）。 */}
-      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl flex flex-col gap-2">
-        <p className="text-[9px] font-black uppercase tracking-wider text-neutral-500">スナップ</p>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold text-neutral-400">長さ(mm)</span>
-          <div className="flex items-center gap-2 shrink-0">
-            <NumericField value={lengthSnapSize} onChange={onLengthSnapSizeChange} dragSensitivity={5} className="h-8 w-[72px]" inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50" />
-            <ToggleSwitch enabled={isLengthSnapEnabled ?? true} onChange={() => onLengthSnapToggle(!isLengthSnapEnabled)} />
+        {/* 平面図 / 天伏図 切替（独立・最上段）(3b) */}
+        <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-1.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+          <div className="flex items-center gap-0.5 rounded-lg bg-black/40 p-0.5">
+            <button
+              type="button"
+              onClick={() => {
+                onCeilingViewChange?.(false);
+                if (isBeamMode) setToolMode('select');
+              }}
+              className={`flex-1 rounded-md px-3 py-1 font-bold transition ${!isCeilingView ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+              title="平面図: 床面（壁・建具・床家具）を表示"
+            >
+              平面図
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onCeilingViewChange?.(true);
+                if (isDrawMode || isAddWindow || isAddDoor) setToolMode('select');
+              }}
+              className={`flex-1 rounded-md px-3 py-1 font-bold transition ${isCeilingView ? 'bg-amber-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+              title="天伏図: 天井面（梁・天井オブジェクト）を表示。床面は半透明化。"
+            >
+              天伏図
+            </button>
           </div>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold text-neutral-400">角度</span>
-          <div className="flex items-center gap-2 shrink-0">
-            <NumericField value={angleSnap} onChange={onAngleSnapChange} dragSensitivity={0.5} className="h-8 w-[58px]" inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50" />
-            <ToggleSwitch enabled={isAngleSnapEnabled ?? true} onChange={() => onAngleSnapToggle(!isAngleSnapEnabled)} />
-          </div>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold text-neutral-400">グリッド</span>
-          <div className="flex items-center gap-2 shrink-0">
-            <select value={gridSize} onChange={(e) => onGridSizeChange(Number(e.target.value))} className="bg-[#000]/30 border border-white/10 rounded-lg pl-2 pr-1 h-8 text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer hover:bg-white/5 transition-all">
-              <option value="500">500mm</option>
-              <option value="1000">1m</option>
-              <option value="10000">10m</option>
-            </select>
-            <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
-          </div>
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-bold text-neutral-400" title="ON で、新しい点を既存の頂点や、既存頂点と同じX/Y位置（整列）に自動で吸着させます">頂点スナップ</span>
-          <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
-        </div>
-      </div>
-      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
-        {!underlay ? (
-          <button
-            type="button"
-            onClick={() => underlayFileInputRef.current?.click()}
-            className="px-3 py-1.5 rounded-lg font-bold transition hover:bg-white/10"
-          >
-            下絵を挿入
-          </button>
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => underlayFileInputRef.current?.click()}
-                className="font-bold transition hover:text-white"
-                title="画像/PDFを差し替え"
-              >
-                下絵
-              </button>
-              <input
-                type="range"
-                min={0}
-                max={1}
-                step={0.05}
-                value={underlay.opacity}
-                onChange={(e) => onUnderlayChange?.({ ...underlay, opacity: Number(e.target.value) })}
-                className="w-20"
-                title="不透明度"
-              />
-              <button
-                type="button"
-                onClick={() => onUnderlayChange?.({ ...underlay, visible: !underlay.visible })}
-                className="px-2 py-1 rounded transition hover:bg-white/10"
-              >
-                {underlay.visible ? '表示' : '非表示'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setUnderlayMoveMode((v) => !v)}
-                disabled={!underlay.visible}
-                className={`px-2 py-1 rounded transition disabled:opacity-40 ${
-                  underlayMoveMode ? 'bg-emerald-500 text-black' : 'hover:bg-white/10'
-                }`}
-                title="オンにして下絵をドラッグで移動、右下角のハンドルをドラッグでサイズ変更"
-              >
-                移動/拡縮
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setUnderlayMoveMode(false);
-                  onUnderlayChange?.(null);
-                }}
-                className="px-2 py-1 rounded text-red-300 transition hover:bg-red-500/20"
-                title="下絵を削除"
-              >
-                ×
-              </button>
-            </div>
-            {/* キャリブレーション: 実寸幅(mm) と 位置(mm) */}
-            <div className="flex items-center gap-2 text-[10px] text-neutral-300">
-              <label className="flex items-center gap-1">
-                幅
-                <input
-                  type="number"
-                  value={underlayImgSize ? Math.round(underlayImgSize.w * (underlay.scaleMmPerPx ?? 10)) : 0}
-                  onChange={(e) => {
-                    const widthMm = Number(e.target.value);
-                    if (underlayImgSize && underlayImgSize.w > 0 && widthMm > 0) {
-                      onUnderlayChange?.({ ...underlay, scaleMmPerPx: widthMm / underlayImgSize.w });
-                    }
-                  }}
-                  className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
-                />
-                mm
-              </label>
-              <label className="flex items-center gap-1">
-                X
-                <input
-                  type="number"
-                  value={Math.round(underlay.offsetX)}
-                  onChange={(e) => onUnderlayChange?.({ ...underlay, offsetX: Number(e.target.value) })}
-                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
-                />
-              </label>
-              <label className="flex items-center gap-1">
-                Y
-                <input
-                  type="number"
-                  value={Math.round(underlay.offsetY)}
-                  onChange={(e) => onUnderlayChange?.({ ...underlay, offsetY: Number(e.target.value) })}
-                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
-                />
-              </label>
-            </div>
-            {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）＋ サイズ変更のヒント */}
-            <div className="flex items-center gap-2 text-[10px] text-neutral-400">
-              <button
-                type="button"
-                onClick={() => setIsUnderlaySnapEnabled((v) => !v)}
-                disabled={!underlay.visible}
-                className={`px-2 py-0.5 rounded border transition disabled:opacity-40 ${
-                  isUnderlaySnapEnabled
-                    ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                    : 'border-white/15 text-neutral-300 hover:bg-white/10'
-                }`}
-                title="壁の頂点を下絵の枠・辺・中心へ吸着する"
-              >
-                下絵スナップ {isUnderlaySnapEnabled ? 'ON' : 'OFF'}
-              </button>
-              <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
-            </div>
-          </div>
-        )}
-        <input
-          ref={underlayFileInputRef}
-          type="file"
-          accept="image/png,image/jpeg,image/webp,application/pdf"
-          className="hidden"
-          onChange={handleUnderlayFile}
-        />
-      </div>
-
-      {/* オブジェクト管理（平面=ドア/窓・床家具／天伏=梁・天井家具）＋非アクティブ濃度・260623 */}
-      <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
-        <div className="flex items-center gap-2 text-[10px] text-neutral-400">
-          <span title="非アクティブな図面（平面/天伏）の表示濃度">非アクティブ濃度</span>
-          <input
-            type="range"
-            min={0}
-            max={0.8}
-            step={0.05}
-            value={inactiveLayerOpacity}
-            onChange={(e) => setInactiveLayerOpacity(Number(e.target.value))}
-            className="w-24"
-          />
         </div>
 
-        <div className="mt-2 border-t border-white/5 pt-2">
-          <div className="mb-1 text-[10px] font-bold text-neutral-500">
-            {isCeilingView ? '天伏オブジェクト' : '平面オブジェクト'}
+        {/* オブジェクト管理（平面=ドア/窓・床家具／天伏=梁・天井家具）＋非アクティブ濃度・260623 */}
+        <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+          <div className="flex items-center gap-2 text-[10px] text-neutral-400">
+            <span title="非アクティブな図面（平面/天伏）の表示濃度">天伏図の透明度</span>
+            <input
+              type="range"
+              min={0}
+              max={0.8}
+              step={0.05}
+              value={inactiveLayerOpacity}
+              onChange={(e) => setInactiveLayerOpacity(Number(e.target.value))}
+              className="w-24"
+            />
           </div>
-          {(() => {
-            const chipCls = (active: boolean) =>
-              `px-2 py-0.5 rounded text-[10px] transition ${active ? 'bg-emerald-500/30 text-emerald-200' : 'bg-neutral-700/50 hover:bg-neutral-700'}`;
-            const furnLabel = (f: FurnitureItem) => f.customName ?? f.name ?? '家具';
-            if (!isCeilingView) {
-              // 平面図: ドア・窓 と 床に配置した家具（!ceilingMount）。
-              const floor = furnitureItems.filter((f) => !f.ceilingMount);
-              if (openings.length === 0 && floor.length === 0)
-                return <span className="text-[10px] text-neutral-600">平面に配置されたオブジェクトはありません</span>;
+
+          <div className="mt-2 border-t border-white/5 pt-2">
+            <div className="mb-1 text-[10px] font-bold text-neutral-500">
+              {isCeilingView ? '天伏オブジェクト' : '平面オブジェクト'}
+            </div>
+            {(() => {
+              const chipCls = (active: boolean) =>
+                `px-2 py-0.5 rounded text-[10px] transition ${active ? 'bg-emerald-500/30 text-emerald-200' : 'bg-neutral-700/50 hover:bg-neutral-700'}`;
+              const furnLabel = (f: FurnitureItem) => f.customName ?? f.name ?? '家具';
+              if (!isCeilingView) {
+                // 平面図: ドア・窓 と 床に配置した家具（!ceilingMount）。
+                const floor = furnitureItems.filter((f) => !f.ceilingMount);
+                if (openings.length === 0 && floor.length === 0)
+                  return <span className="text-[10px] text-neutral-600">平面に配置されたオブジェクトはありません</span>;
+                return (
+                  <div className="space-y-1.5">
+                    {openings.length > 0 && (
+                      <div>
+                        <div className="mb-0.5 text-[9px] text-neutral-500">ドア・窓</div>
+                        <div className="flex flex-wrap gap-1">
+                          {openings.map((o, i) => (
+                            <button key={o.id} type="button" onClick={() => onOpeningSelect(o.id)} className={chipCls(selectedOpeningId === o.id)}>
+                              {o.type.startsWith('door') ? 'ドア' : '窓'}{i + 1}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {floor.length > 0 && (
+                      <div>
+                        <div className="mb-0.5 text-[9px] text-neutral-500">家具</div>
+                        <div className="flex flex-wrap gap-1">
+                          {floor.map((f) => (
+                            <button key={f.id} type="button" onClick={() => onFurnitureSelect(f.id)} className={`${chipCls(activeFurnitureId === f.id)} max-w-[96px] truncate`}>
+                              {furnLabel(f)}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              }
+              // 天伏図: 梁 と 天井に配置した家具（ceilingMount）。
+              const ceiling = furnitureItems.filter((f) => f.ceilingMount);
+              if (beams.length === 0 && ceiling.length === 0)
+                return <span className="text-[10px] text-neutral-600">天伏に配置されたオブジェクトはありません</span>;
               return (
                 <div className="space-y-1.5">
-                  {openings.length > 0 && (
+                  {beams.length > 0 && (
                     <div>
-                      <div className="mb-0.5 text-[9px] text-neutral-500">ドア・窓</div>
+                      <div className="mb-0.5 text-[9px] text-neutral-500">梁 {beams.length}本</div>
                       <div className="flex flex-wrap gap-1">
-                        {openings.map((o, i) => (
-                          <button key={o.id} type="button" onClick={() => onOpeningSelect(o.id)} className={chipCls(selectedOpeningId === o.id)}>
-                            {o.type.startsWith('door') ? 'ドア' : '窓'}{i + 1}
+                        {beams.map((b, i) => (
+                          <button key={b.id} type="button" onClick={() => setSelectedBeamId(b.id)} className={chipCls(selectedBeamId === b.id)}>
+                            梁{i + 1}
                           </button>
                         ))}
                       </div>
                     </div>
                   )}
-                  {floor.length > 0 && (
+                  {ceiling.length > 0 && (
                     <div>
-                      <div className="mb-0.5 text-[9px] text-neutral-500">家具</div>
+                      <div className="mb-0.5 text-[9px] text-neutral-500">天井家具</div>
                       <div className="flex flex-wrap gap-1">
-                        {floor.map((f) => (
+                        {ceiling.map((f) => (
                           <button key={f.id} type="button" onClick={() => onFurnitureSelect(f.id)} className={`${chipCls(activeFurnitureId === f.id)} max-w-[96px] truncate`}>
                             {furnLabel(f)}
                           </button>
@@ -2729,195 +2604,317 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   )}
                 </div>
               );
-            }
-            // 天伏図: 梁 と 天井に配置した家具（ceilingMount）。
-            const ceiling = furnitureItems.filter((f) => f.ceilingMount);
-            if (beams.length === 0 && ceiling.length === 0)
-              return <span className="text-[10px] text-neutral-600">天伏に配置されたオブジェクトはありません</span>;
+            })()}
+          </div>
+
+          {/* 選択中の家具の属性編集（260623・3Dと同様に2Dでも調整可能に）。 */}
+          {(() => {
+            const f = furnitureItems.find((x) => x.id === activeFurnitureId);
+            if (!f) return null;
+            const ceilingY = roomHeight / 1000;
+            const heightMm = f.ceilingMount
+              ? Math.max(0, Math.round((ceilingY - f.position[1]) * 1000))
+              : Math.max(0, Math.round(f.position[1] * 1000));
+            const setHeight = (mm: number) => {
+              const c = Math.max(0, Math.round(Number.isFinite(mm) ? mm : 0));
+              onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : {
+                ...it,
+                position: [it.position[0], it.ceilingMount ? Math.max(0, ceilingY - c / 1000) : c / 1000, it.position[2]] as [number, number, number],
+              })));
+            };
+            const yawDeg = Math.round(((f.rotation[1] || 0) * 180) / Math.PI);
+            const setYaw = (deg: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : {
+              ...it, rotation: [it.rotation[0], (deg * Math.PI) / 180, it.rotation[2]] as [number, number, number],
+            })));
+            const scalePct = Math.round((f.scale[0] || 1) * 100);
+            const setScalePct = (pct: number) => {
+              const s = Math.max(10, Math.round(pct)) / 100;
+              onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, scale: [s, s, s] as [number, number, number] })));
+            };
+            const priceVal = Number.isFinite(f.customPrice as number) ? (f.customPrice as number) : 0;
+            const setPrice = (v: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, customPrice: v })));
+            const labelCls = 'flex items-center justify-between gap-2 text-[10px] text-neutral-300';
             return (
-              <div className="space-y-1.5">
-                {beams.length > 0 && (
-                  <div>
-                    <div className="mb-0.5 text-[9px] text-neutral-500">梁 {beams.length}本</div>
-                    <div className="flex flex-wrap gap-1">
-                      {beams.map((b, i) => (
-                        <button key={b.id} type="button" onClick={() => setSelectedBeamId(b.id)} className={chipCls(selectedBeamId === b.id)}>
-                          梁{i + 1}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
+              <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
+                <div className="truncate text-[10px] font-black text-emerald-400">{f.customName ?? f.name ?? '家具'}</div>
+                <label className={labelCls}>{f.ceilingMount ? '天井からの高さ' : '床からの高さ'}<span className="flex items-center gap-1 text-neutral-400"><NumericField value={heightMm} onChange={setHeight} dragSensitivity={2} className="w-16" />mm</span></label>
+                <label className={labelCls}>回転<span className="flex items-center gap-1 text-neutral-400"><NumericField value={yawDeg} onChange={setYaw} dragSensitivity={1} className="w-14" />°</span></label>
+                <label className={labelCls}>大きさ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={scalePct} onChange={setScalePct} dragSensitivity={2} className="w-14" />%</span></label>
+                <label className={labelCls}>単価<span className="flex items-center gap-1 text-neutral-400">¥<NumericField value={priceVal} onChange={setPrice} dragSensitivity={50} className="w-20" /></span></label>
+              </div>
+            );
+          })()}
+
+          {/* 選択中の建具（ドア/窓）の属性編集（260623）。重なり防止の厳密制約は3D側に集約、ここは簡易編集。 */}
+          {(() => {
+            const o = openings.find((x) => x.id === selectedOpeningId);
+            if (!o) return null;
+            const isDoor = o.type.startsWith('door');
+            const update = (patch: Partial<Opening>) => setOpenings((prev) => prev.map((x) => (x.id !== o.id ? x : { ...x, ...patch })));
+            const labelCls = 'flex items-center justify-between gap-2 text-[10px] text-neutral-300';
+            return (
+              <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
+                <div className="text-[10px] font-black text-emerald-400">{isDoor ? 'ドア' : '窓'}</div>
+                <label className={labelCls}>幅<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.width)} onChange={(n) => update({ width: Math.max(100, Math.round(n)) })} dragSensitivity={5} className="w-16" />mm</span></label>
+                <label className={labelCls}>高さ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.height)} onChange={(n) => update({ height: Math.max(100, Math.min(roomHeight, Math.round(n))) })} dragSensitivity={5} className="w-16" />mm</span></label>
+                <label className={labelCls}>位置<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round((o.ratioPosition ?? 0.5) * 100)} onChange={(n) => update({ ratioPosition: Math.max(0, Math.min(100, n)) / 100 })} dragSensitivity={1} className="w-14" />%</span></label>
+                {!isDoor && (
+                  <label className={labelCls}>床からの高さ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.bottomOffset ?? 0)} onChange={(n) => update({ bottomOffset: Math.max(0, Math.min(roomHeight - o.height, Math.round(n))) })} dragSensitivity={5} className="w-16" />mm</span></label>
                 )}
-                {ceiling.length > 0 && (
-                  <div>
-                    <div className="mb-0.5 text-[9px] text-neutral-500">天井家具</div>
-                    <div className="flex flex-wrap gap-1">
-                      {ceiling.map((f) => (
-                        <button key={f.id} type="button" onClick={() => onFurnitureSelect(f.id)} className={`${chipCls(activeFurnitureId === f.id)} max-w-[96px] truncate`}>
-                          {furnLabel(f)}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+              </div>
+            );
+          })()}
+
+          {(() => {
+            const b = beams.find((x) => x.id === selectedBeamId);
+            if (!b) return null;
+            const isWall = b.wallIndex !== undefined;
+            return (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
+                <span
+                  className={`rounded px-1.5 py-0.5 ${isWall ? 'bg-yellow-500/20 text-yellow-200' : 'bg-orange-500/20 text-orange-200'}`}
+                  title={isWall ? '壁に乗る梁（長さ・角度・位置は壁に追従）' : '自由配置の梁'}
+                >
+                  {isWall ? '壁梁' : '自由梁'}
+                </span>
+                <label className="flex items-center gap-1">
+                  長さ
+                  <NumericField
+                    value={Math.round(b.lengthMm)}
+                    onChange={(n) => updateBeam(b.id, { lengthMm: n })}
+                    dragSensitivity={5}
+                    disabled={isWall}
+                    className="w-16"
+                  />
+                  mm
+                </label>
+                <label className="flex items-center gap-1">
+                  角度
+                  <NumericField
+                    value={Math.round(b.angleDeg)}
+                    onChange={(n) => updateBeam(b.id, { angleDeg: n })}
+                    dragSensitivity={1}
+                    disabled={isWall}
+                    className="w-12"
+                  />
+                  °
+                </label>
+                <label className="flex items-center gap-1">
+                  幅
+                  <NumericField
+                    value={Math.round(b.widthMm)}
+                    onChange={(n) => updateBeam(b.id, { widthMm: Math.max(10, n) })}
+                    dragSensitivity={2}
+                    className="w-14"
+                  />
+                  mm
+                </label>
+                <label className="flex items-center gap-1">
+                  高さ
+                  <NumericField
+                    value={Math.round(b.heightMm)}
+                    onChange={(n) => updateBeam(b.id, { heightMm: Math.max(10, n) })}
+                    dragSensitivity={2}
+                    className="w-14"
+                  />
+                  mm
+                </label>
+                <label className="flex items-center gap-1">
+                  天井面からの距離
+                  <NumericField
+                    value={Math.round(b.dropMm)}
+                    onChange={(n) => updateBeam(b.id, { dropMm: Math.max(0, n) })}
+                    dragSensitivity={2}
+                    className="w-14"
+                  />
+                  mm
+                </label>
+                <label className="flex items-center gap-1">
+                  X
+                  <NumericField
+                    value={Math.round(b.cx)}
+                    onChange={(n) => updateBeam(b.id, { cx: n })}
+                    dragSensitivity={5}
+                    disabled={isWall}
+                    className="w-14"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  Y
+                  <NumericField
+                    value={Math.round(b.cy)}
+                    onChange={(n) => updateBeam(b.id, { cy: n })}
+                    dragSensitivity={5}
+                    disabled={isWall}
+                    className="w-14"
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => removeBeam(b.id)}
+                  className="px-2 py-0.5 rounded text-red-300 transition hover:bg-red-500/20"
+                >
+                  削除
+                </button>
               </div>
             );
           })()}
         </div>
 
-        {/* 選択中の家具の属性編集（260623・3Dと同様に2Dでも調整可能に）。 */}
-        {(() => {
-          const f = furnitureItems.find((x) => x.id === activeFurnitureId);
-          if (!f) return null;
-          const ceilingY = roomHeight / 1000;
-          const heightMm = f.ceilingMount
-            ? Math.max(0, Math.round((ceilingY - f.position[1]) * 1000))
-            : Math.max(0, Math.round(f.position[1] * 1000));
-          const setHeight = (mm: number) => {
-            const c = Math.max(0, Math.round(Number.isFinite(mm) ? mm : 0));
-            onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : {
-              ...it,
-              position: [it.position[0], it.ceilingMount ? Math.max(0, ceilingY - c / 1000) : c / 1000, it.position[2]] as [number, number, number],
-            })));
-          };
-          const yawDeg = Math.round(((f.rotation[1] || 0) * 180) / Math.PI);
-          const setYaw = (deg: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : {
-            ...it, rotation: [it.rotation[0], (deg * Math.PI) / 180, it.rotation[2]] as [number, number, number],
-          })));
-          const scalePct = Math.round((f.scale[0] || 1) * 100);
-          const setScalePct = (pct: number) => {
-            const s = Math.max(10, Math.round(pct)) / 100;
-            onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, scale: [s, s, s] as [number, number, number] })));
-          };
-          const priceVal = Number.isFinite(f.customPrice as number) ? (f.customPrice as number) : 0;
-          const setPrice = (v: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, customPrice: v })));
-          const labelCls = 'flex items-center justify-between gap-2 text-[10px] text-neutral-300';
-          return (
-            <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
-              <div className="truncate text-[10px] font-black text-emerald-400">{f.customName ?? f.name ?? '家具'}</div>
-              <label className={labelCls}>{f.ceilingMount ? '天井からの高さ' : '床からの高さ'}<span className="flex items-center gap-1 text-neutral-400"><NumericField value={heightMm} onChange={setHeight} dragSensitivity={2} className="w-16" />mm</span></label>
-              <label className={labelCls}>回転<span className="flex items-center gap-1 text-neutral-400"><NumericField value={yawDeg} onChange={setYaw} dragSensitivity={1} className="w-14" />°</span></label>
-              <label className={labelCls}>大きさ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={scalePct} onChange={setScalePct} dragSensitivity={2} className="w-14" />%</span></label>
-              <label className={labelCls}>単価<span className="flex items-center gap-1 text-neutral-400">¥<NumericField value={priceVal} onChange={setPrice} dragSensitivity={50} className="w-20" /></span></label>
+        {/* スナップ設定（旧・上部ツールバーから移設。lg以上は左カラム常時表示／狭幅はドロワー内。下絵スナップは下絵カード側）。 */}
+        <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl flex flex-col gap-2">
+          <p className="text-[9px] font-black uppercase tracking-wider text-neutral-500">スナップ</p>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-neutral-400">長さ(mm)</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <NumericField value={lengthSnapSize} onChange={onLengthSnapSizeChange} dragSensitivity={5} className="h-8 w-[72px]" inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50" />
+              <ToggleSwitch enabled={isLengthSnapEnabled ?? true} onChange={() => onLengthSnapToggle(!isLengthSnapEnabled)} />
             </div>
-          );
-        })()}
-
-        {/* 選択中の建具（ドア/窓）の属性編集（260623）。重なり防止の厳密制約は3D側に集約、ここは簡易編集。 */}
-        {(() => {
-          const o = openings.find((x) => x.id === selectedOpeningId);
-          if (!o) return null;
-          const isDoor = o.type.startsWith('door');
-          const update = (patch: Partial<Opening>) => setOpenings((prev) => prev.map((x) => (x.id !== o.id ? x : { ...x, ...patch })));
-          const labelCls = 'flex items-center justify-between gap-2 text-[10px] text-neutral-300';
-          return (
-            <div className="mt-2 space-y-1.5 border-t border-white/10 pt-2">
-              <div className="text-[10px] font-black text-emerald-400">{isDoor ? 'ドア' : '窓'}</div>
-              <label className={labelCls}>幅<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.width)} onChange={(n) => update({ width: Math.max(100, Math.round(n)) })} dragSensitivity={5} className="w-16" />mm</span></label>
-              <label className={labelCls}>高さ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.height)} onChange={(n) => update({ height: Math.max(100, Math.min(roomHeight, Math.round(n))) })} dragSensitivity={5} className="w-16" />mm</span></label>
-              <label className={labelCls}>位置<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round((o.ratioPosition ?? 0.5) * 100)} onChange={(n) => update({ ratioPosition: Math.max(0, Math.min(100, n)) / 100 })} dragSensitivity={1} className="w-14" />%</span></label>
-              {!isDoor && (
-                <label className={labelCls}>床からの高さ<span className="flex items-center gap-1 text-neutral-400"><NumericField value={Math.round(o.bottomOffset ?? 0)} onChange={(n) => update({ bottomOffset: Math.max(0, Math.min(roomHeight - o.height, Math.round(n))) })} dragSensitivity={5} className="w-16" />mm</span></label>
-              )}
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-neutral-400">角度</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <NumericField value={angleSnap} onChange={onAngleSnapChange} dragSensitivity={0.5} className="h-8 w-[58px]" inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50" />
+              <ToggleSwitch enabled={isAngleSnapEnabled ?? true} onChange={() => onAngleSnapToggle(!isAngleSnapEnabled)} />
             </div>
-          );
-        })()}
-
-        {(() => {
-          const b = beams.find((x) => x.id === selectedBeamId);
-          if (!b) return null;
-          const isWall = b.wallIndex !== undefined;
-          return (
-            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 text-[10px]">
-              <span
-                className={`rounded px-1.5 py-0.5 ${isWall ? 'bg-yellow-500/20 text-yellow-200' : 'bg-orange-500/20 text-orange-200'}`}
-                title={isWall ? '壁に乗る梁（長さ・角度・位置は壁に追従）' : '自由配置の梁'}
-              >
-                {isWall ? '壁梁' : '自由梁'}
-              </span>
-              <label className="flex items-center gap-1">
-                長さ
-                <NumericField
-                  value={Math.round(b.lengthMm)}
-                  onChange={(n) => updateBeam(b.id, { lengthMm: n })}
-                  dragSensitivity={5}
-                  disabled={isWall}
-                  className="w-16"
-                />
-                mm
-              </label>
-              <label className="flex items-center gap-1">
-                角度
-                <NumericField
-                  value={Math.round(b.angleDeg)}
-                  onChange={(n) => updateBeam(b.id, { angleDeg: n })}
-                  dragSensitivity={1}
-                  disabled={isWall}
-                  className="w-12"
-                />
-                °
-              </label>
-              <label className="flex items-center gap-1">
-                幅
-                <NumericField
-                  value={Math.round(b.widthMm)}
-                  onChange={(n) => updateBeam(b.id, { widthMm: Math.max(10, n) })}
-                  dragSensitivity={2}
-                  className="w-14"
-                />
-                mm
-              </label>
-              <label className="flex items-center gap-1">
-                高さ
-                <NumericField
-                  value={Math.round(b.heightMm)}
-                  onChange={(n) => updateBeam(b.id, { heightMm: Math.max(10, n) })}
-                  dragSensitivity={2}
-                  className="w-14"
-                />
-                mm
-              </label>
-              <label className="flex items-center gap-1">
-                天井面からの距離
-                <NumericField
-                  value={Math.round(b.dropMm)}
-                  onChange={(n) => updateBeam(b.id, { dropMm: Math.max(0, n) })}
-                  dragSensitivity={2}
-                  className="w-14"
-                />
-                mm
-              </label>
-              <label className="flex items-center gap-1">
-                X
-                <NumericField
-                  value={Math.round(b.cx)}
-                  onChange={(n) => updateBeam(b.id, { cx: n })}
-                  dragSensitivity={5}
-                  disabled={isWall}
-                  className="w-14"
-                />
-              </label>
-              <label className="flex items-center gap-1">
-                Y
-                <NumericField
-                  value={Math.round(b.cy)}
-                  onChange={(n) => updateBeam(b.id, { cy: n })}
-                  dragSensitivity={5}
-                  disabled={isWall}
-                  className="w-14"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => removeBeam(b.id)}
-                className="px-2 py-0.5 rounded text-red-300 transition hover:bg-red-500/20"
-              >
-                削除
-              </button>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-neutral-400">グリッド</span>
+            <div className="flex items-center gap-2 shrink-0">
+              <select value={gridSize} onChange={(e) => onGridSizeChange(Number(e.target.value))} className="bg-[#000]/30 border border-white/10 rounded-lg pl-2 pr-1 h-8 text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer hover:bg-white/5 transition-all">
+                <option value="500">500mm</option>
+                <option value="1000">1m</option>
+                <option value="10000">10m</option>
+              </select>
+              <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
             </div>
-          );
-        })()}
-      </div>
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-neutral-400" title="ON で、新しい点を既存の頂点や、既存頂点と同じX/Y位置（整列）に自動で吸着させます">頂点スナップ</span>
+            <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
+          </div>
+        </div>
+        <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+          {!underlay ? (
+            <button
+              type="button"
+              onClick={() => underlayFileInputRef.current?.click()}
+              className="px-3 py-1.5 rounded-lg font-bold transition hover:bg-white/10"
+            >
+              下絵を挿入
+            </button>
+          ) : (
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => underlayFileInputRef.current?.click()}
+                  className="font-bold transition hover:text-white"
+                  title="画像/PDFを差し替え"
+                >
+                  下絵
+                </button>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={underlay.opacity}
+                  onChange={(e) => onUnderlayChange?.({ ...underlay, opacity: Number(e.target.value) })}
+                  className="w-20"
+                  title="不透明度"
+                />
+                <button
+                  type="button"
+                  onClick={() => onUnderlayChange?.({ ...underlay, visible: !underlay.visible })}
+                  className="px-2 py-1 rounded transition hover:bg-white/10"
+                >
+                  {underlay.visible ? '表示' : '非表示'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setUnderlayMoveMode((v) => !v)}
+                  disabled={!underlay.visible}
+                  className={`px-2 py-1 rounded transition disabled:opacity-40 ${underlayMoveMode ? 'bg-emerald-500 text-black' : 'hover:bg-white/10'
+                    }`}
+                  title="オンにして下絵をドラッグで移動、右下角のハンドルをドラッグでサイズ変更"
+                >
+                  移動/拡縮
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setUnderlayMoveMode(false);
+                    onUnderlayChange?.(null);
+                  }}
+                  className="px-2 py-1 rounded text-red-300 transition hover:bg-red-500/20"
+                  title="下絵を削除"
+                >
+                  ×
+                </button>
+              </div>
+              {/* キャリブレーション: 実寸幅(mm) と 位置(mm) */}
+              <div className="flex items-center gap-2 text-[10px] text-neutral-300">
+                <label className="flex items-center gap-1">
+                  幅
+                  <input
+                    type="number"
+                    value={underlayImgSize ? Math.round(underlayImgSize.w * (underlay.scaleMmPerPx ?? 10)) : 0}
+                    onChange={(e) => {
+                      const widthMm = Number(e.target.value);
+                      if (underlayImgSize && underlayImgSize.w > 0 && widthMm > 0) {
+                        onUnderlayChange?.({ ...underlay, scaleMmPerPx: widthMm / underlayImgSize.w });
+                      }
+                    }}
+                    className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
+                  />
+                  mm
+                </label>
+                <label className="flex items-center gap-1">
+                  X
+                  <input
+                    type="number"
+                    value={Math.round(underlay.offsetX)}
+                    onChange={(e) => onUnderlayChange?.({ ...underlay, offsetX: Number(e.target.value) })}
+                    className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                  />
+                </label>
+                <label className="flex items-center gap-1">
+                  Y
+                  <input
+                    type="number"
+                    value={Math.round(underlay.offsetY)}
+                    onChange={(e) => onUnderlayChange?.({ ...underlay, offsetY: Number(e.target.value) })}
+                    className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
+                  />
+                </label>
+              </div>
+              {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）＋ サイズ変更のヒント */}
+              <div className="flex items-center gap-2 text-[10px] text-neutral-400">
+                <button
+                  type="button"
+                  onClick={() => setIsUnderlaySnapEnabled((v) => !v)}
+                  disabled={!underlay.visible}
+                  className={`px-2 py-0.5 rounded border transition disabled:opacity-40 ${isUnderlaySnapEnabled
+                      ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                      : 'border-white/15 text-neutral-300 hover:bg-white/10'
+                    }`}
+                  title="壁の頂点を下絵の枠・辺・中心へ吸着する"
+                >
+                  下絵スナップ {isUnderlaySnapEnabled ? 'ON' : 'OFF'}
+                </button>
+                <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
+              </div>
+            </div>
+          )}
+          <input
+            ref={underlayFileInputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp,application/pdf"
+            className="hidden"
+            onChange={handleUnderlayFile}
+          />
+        </div>
       </div>
 
       {/* Floating Toolbar (Right) — 全幅で右中央。スナップ設定を左パネルへ移したので上部ツールバーは低くなり干渉しない。 */}
@@ -2939,127 +2936,127 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         ref={toolbarRef}
         className={`absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:top-6 md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] pointer-events-auto ${readOnly ? 'hidden' : ''}`}
       >
-          <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
-              
-              {/* Tool mode: 選択・壁・窓・ドア（横並び。狭幅では折り返す） */}
-              <div className="flex flex-wrap items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">
+        <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
+
+          {/* Tool mode: 選択・壁・窓・ドア（横並び。狭幅では折り返す） */}
+          <div className="flex flex-wrap items-center gap-1 bg-black/40 p-1 rounded-xl border border-white/5">
+            <button
+              type="button"
+              onClick={() => setToolMode('select')}
+              className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isSelectMode ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+            >
+              選択
+            </button>
+            {/* 天伏図では壁・窓・ドアツールを隠す（3k）。選択と梁のみ。 */}
+            {!isCeilingView && (
+              <>
                 <button
                   type="button"
-                  onClick={() => setToolMode('select')}
-                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isSelectMode ? 'bg-white text-black' : 'text-neutral-400 hover:text-white'}`}
+                  onClick={() => setToolMode('draw')}
+                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isDrawMode ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
                 >
-                  選択
+                  壁
                 </button>
-                {/* 天伏図では壁・窓・ドアツールを隠す（3k）。選択と梁のみ。 */}
-                {!isCeilingView && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setToolMode('draw')}
-                      className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isDrawMode ? 'bg-emerald-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                    >
-                      壁
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setToolMode('add');
-                        setAddKind('window');
-                      }}
-                      className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddWindow ? 'bg-sky-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                    >
-                      窓
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setToolMode('add');
-                        setAddKind('door');
-                      }}
-                      className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddDoor ? 'bg-orange-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                    >
-                      ドア
-                    </button>
-                  </>
-                )}
-                {isCeilingView && (
-                  <button
-                    type="button"
-                    onClick={() => setToolMode('beam')}
-                    className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isBeamMode ? 'bg-yellow-500 text-black' : 'text-neutral-400 hover:text-white'}`}
-                    title="梁: 壁をクリックで壁梁（壁に追従）、空きスペースで自由梁を配置"
-                  >
-                    梁
-                  </button>
-                )}
-              </div>
-              <div className="w-px h-8 bg-white/10" />
-
-              {/* Editing Controls（狭幅では折り返す） */}
-              <div className="flex flex-wrap items-center gap-2">
-                  <button
-                      type="button"
-                      onClick={() => useProjectStore.temporal.getState().undo()}
-                      disabled={!canUndo}
-                      title="元に戻す (Ctrl+Z)"
-                      className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
-                  >
-                      一つ戻る <Undo2 className="h-4 w-4" /> 
-                  </button>
-                  <button
-                      type="button"
-                      onClick={() => useProjectStore.temporal.getState().redo()}
-                      disabled={!canRedo}
-                      title="やり直す (Ctrl+Y)"
-                      className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
-                  >
-                      <Redo2 className="h-4 w-4" /> やり直し
-                  </button>
-                  {(activeFurnitureId || selectedPointIndex !== null || selectedEdgeIndex !== null) && (
-                    <button
-                        type="button"
-                        onClick={handleDeleteSelected}
-                        className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 flex items-center justify-center"
-                    >
-                        {getDeleteLabel()}
-                    </button>
-                  )}
-                  
-                  <button
-                      onClick={async () => {
-                        if (!(await confirm({ message: '壁・窓・ドア・家具・梁をすべて削除します。よろしいですか？', confirmLabel: '全消去', danger: true }))) return;
-                        // ローカル（描画中の壁・選択）
-                        setPointsMm([]); setIsClosed(false); setIsDrawing(false);
-                        setSelectedPointIndex(null); setSelectedEdgeIndex(null); setSelectedBeamId(null);
-                        // App 保有のコレクション（建具・家具・梁）と選択をクリア
-                        setOpenings([]); onFurnitureUpdate([]); onBeamsChange?.([]);
-                        onFurnitureSelect(null); onOpeningSelect(null);
-                        // 確定済みの壁(sketchPoints)と素材割当も App 側で消す
-                        onClearAll?.();
-                      }}
-                      className="h-11 px-6 rounded-xl text-xs text-red-400/80 hover:text-red-400 hover:bg-red-500/10 font-black uppercase tracking-wider transition-all border border-red-500/10"
-                  >
-                      全消去
-                  </button>
-              </div>
-
-              <div className="w-px h-8 bg-white/10" />
-
-              {/* Generate Button */}
-              <button 
-                  onClick={() => onApply(pointsMm.map(p => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })))} 
-                  disabled={!isClosed} 
-                  className={`h-11 px-8 rounded-xl font-black text-xs transition-all uppercase italic tracking-wider flex items-center gap-3
-                  ${isClosed 
-                      ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:scale-105 hover:bg-emerald-400' 
-                      : 'bg-white/5 text-white/10 cursor-not-allowed border border-white/5'
-                  }`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setToolMode('add');
+                    setAddKind('window');
+                  }}
+                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddWindow ? 'bg-sky-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                >
+                  窓
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setToolMode('add');
+                    setAddKind('door');
+                  }}
+                  className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isAddDoor ? 'bg-orange-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                >
+                  ドア
+                </button>
+              </>
+            )}
+            {isCeilingView && (
+              <button
+                type="button"
+                onClick={() => setToolMode('beam')}
+                className={`px-4 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest transition-all ${isBeamMode ? 'bg-yellow-500 text-black' : 'text-neutral-400 hover:text-white'}`}
+                title="梁: 壁をクリックで壁梁（壁に追従）、空きスペースで自由梁を配置"
               >
-                  <span>3Dモデルを生成</span>
-                  {isClosed && <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>}
+                梁
               </button>
-
+            )}
           </div>
+          <div className="w-px h-8 bg-white/10" />
+
+          {/* Editing Controls（狭幅では折り返す） */}
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => useProjectStore.temporal.getState().undo()}
+              disabled={!canUndo}
+              title="元に戻す (Ctrl+Z)"
+              className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
+            >
+              一つ戻る <Undo2 className="h-4 w-4" />
+            </button>
+            <button
+              type="button"
+              onClick={() => useProjectStore.temporal.getState().redo()}
+              disabled={!canRedo}
+              title="やり直す (Ctrl+Y)"
+              className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-white/5 bg-white/5 text-neutral-300 hover:bg-white/10 hover:text-white disabled:opacity-30 disabled:hover:bg-white/5 flex items-center gap-1.5"
+            >
+              <Redo2 className="h-4 w-4" /> やり直し
+            </button>
+            {(activeFurnitureId || selectedPointIndex !== null || selectedEdgeIndex !== null) && (
+              <button
+                type="button"
+                onClick={handleDeleteSelected}
+                className="h-11 px-4 rounded-xl text-xs font-black uppercase tracking-wider transition-all border border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20 flex items-center justify-center"
+              >
+                {getDeleteLabel()}
+              </button>
+            )}
+
+            <button
+              onClick={async () => {
+                if (!(await confirm({ message: '壁・窓・ドア・家具・梁をすべて削除します。よろしいですか？', confirmLabel: '全消去', danger: true }))) return;
+                // ローカル（描画中の壁・選択）
+                setPointsMm([]); setIsClosed(false); setIsDrawing(false);
+                setSelectedPointIndex(null); setSelectedEdgeIndex(null); setSelectedBeamId(null);
+                // App 保有のコレクション（建具・家具・梁）と選択をクリア
+                setOpenings([]); onFurnitureUpdate([]); onBeamsChange?.([]);
+                onFurnitureSelect(null); onOpeningSelect(null);
+                // 確定済みの壁(sketchPoints)と素材割当も App 側で消す
+                onClearAll?.();
+              }}
+              className="h-11 px-6 rounded-xl text-xs text-red-400/80 hover:text-red-400 hover:bg-red-500/10 font-black uppercase tracking-wider transition-all border border-red-500/10"
+            >
+              全消去
+            </button>
+          </div>
+
+          <div className="w-px h-8 bg-white/10" />
+
+          {/* Generate Button */}
+          <button
+            onClick={() => onApply(pointsMm.map(p => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })))}
+            disabled={!isClosed}
+            className={`h-11 px-8 rounded-xl font-black text-xs transition-all uppercase italic tracking-wider flex items-center gap-3
+                  ${isClosed
+                ? 'bg-emerald-500 text-black shadow-[0_0_20px_rgba(16,185,129,0.3)] hover:scale-105 hover:bg-emerald-400'
+                : 'bg-white/5 text-white/10 cursor-not-allowed border border-white/5'
+              }`}
+          >
+            <span>3Dモデルを生成</span>
+            {isClosed && <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M14 5l7 7m0 0l-7 7m7-7H3" /></svg>}
+          </button>
+
+        </div>
       </div>
 
       <div className="relative pointer-events-auto h-full w-full" ref={canvasBoxRef}>
