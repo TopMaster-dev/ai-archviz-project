@@ -4466,6 +4466,7 @@ const App: React.FC = () => {
                         activeVersionId={aiEditSession.activeVersionId}
                         activeVersion={aiEditSession.activeVersion}
                         onSelectVersion={aiEditSession.selectVersion}
+                        onDeleteVersion={aiEditSession.deleteVersion}
                         draftStyleRefDataUrl={aiEditSession.draftStyleRefDataUrl}
                         onStyleRefChange={aiEditSession.setStyleRef}
                         draftStyleMemo={aiEditSession.draftStyleMemo}

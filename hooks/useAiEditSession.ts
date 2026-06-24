@@ -15,6 +15,29 @@ const STORAGE_KEY = 'archviz-ai-edit-session-v2';
 // 履歴の最大保持件数。260619: 生成画像はクラウド保存しURL化したため履歴メタは軽量になり、上限を大幅緩和
 // （クライアント要望「履歴を残したい」）。暴走防止の安全上限としてのみ機能する（実用上ほぼ無制限）。
 export const MAX_AI_EDIT_VERSIONS = 200;
+
+/**
+ * 削除対象の版とその全子孫（再生成で連なった版）の id 集合を返す（260625）。
+ * 親が削除されたら子・孫…も連鎖して含める（固定点反復）。子孫を取りこぼして親リンク切れの版を残さない。
+ */
+export function collectVersionsToDelete<T extends { id: string; parentId: string | null }>(
+  versions: T[],
+  idToDelete: string,
+): Set<string> {
+  const remove = new Set<string>([idToDelete]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const v of versions) {
+      if (!remove.has(v.id) && v.parentId && remove.has(v.parentId)) {
+        remove.add(v.id);
+        changed = true;
+      }
+    }
+  }
+  return remove;
+}
+
 function capVersions(vers: AiEditVersion[]): AiEditVersion[] {
   return vers.length > MAX_AI_EDIT_VERSIONS ? vers.slice(vers.length - MAX_AI_EDIT_VERSIONS) : vers;
 }
@@ -278,6 +301,18 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
     [resetDraft],
   );
 
+  /**
+   * 指定の生成結果（版）を削除する（260625・暗黙的フィードバックの「削除」項目に対応）。
+   * その子孫（再生成で連なった版）も連鎖削除して履歴ツリーが壊れないようにする。アクティブ版が消えた場合は
+   * 下の再選択 effect が最新の残存版（または空＝null）へ自動で移す。versions 変化で store/cloud へ自動 persist。
+   */
+  const deleteVersion = useCallback((idToDelete: string) => {
+    setVersions((prev) => {
+      const remove = collectVersionsToDelete(prev, idToDelete);
+      return prev.filter((v) => !remove.has(v.id));
+    });
+  }, []);
+
   const clearSession = useCallback(() => {
     lastHydratedActiveId.current = null;
     skipHydrateOnce.current = false;
@@ -293,7 +328,11 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   }, [resetDraft]);
 
   useEffect(() => {
-    if (versions.length === 0) return;
+    if (versions.length === 0) {
+      // 全削除後など、版が無ければ選択を解除する（空配列だと再選択できないため明示的に null へ）。
+      if (activeVersionId !== null) setActiveVersionId(null);
+      return;
+    }
     if (!activeVersionId || !versions.some((v) => v.id === activeVersionId)) {
       setActiveVersionId(versions[versions.length - 1].id);
     }
@@ -345,6 +384,7 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
     addVersionFromRender,
     selectVersion,
     appendVersionAfterEdit,
+    deleteVersion,
     clearSession,
     replaceAll,
     resetDraft,

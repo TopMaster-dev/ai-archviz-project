@@ -414,17 +414,23 @@ create policy "feedback_daily: read authenticated" on ai_feedback_daily
 create or replace function aggregate_ai_feedback(target_day date default (current_date - 1))
 returns void language plpgsql security definer set search_path = public as $$
 begin
-  insert into ai_feedback_daily (day, feature, good_count, bad_count, computed_at)
+  insert into ai_feedback_daily (day, feature, good_count, bad_count, summary, computed_at)
   select target_day, feature,
          count(*) filter (where verdict = 'good'),
          count(*) filter (where verdict = 'bad'),
+         -- 暗黙的フィードバックの重み付き合計（260625）。weight 欠損の旧データは 1.0 とみなす。
+         jsonb_build_object(
+           'good_weight', coalesce(sum(coalesce((prompt_context->>'weight')::numeric, 1.0)) filter (where verdict = 'good'), 0),
+           'bad_weight',  coalesce(sum(coalesce((prompt_context->>'weight')::numeric, 1.0)) filter (where verdict = 'bad'), 0)
+         ),
          now()
   from ai_feedback_events
   where created_at >= target_day and created_at < target_day + 1
   group by feature
   on conflict (day, feature) do update
-    set good_count = excluded.good_count,
-        bad_count  = excluded.bad_count,
+    set good_count  = excluded.good_count,
+        bad_count   = excluded.bad_count,
+        summary     = excluded.summary,
         computed_at = excluded.computed_at;
 end $$;
 
@@ -465,23 +471,38 @@ begin
   insert into ai_learned_hints (feature, hint, sample_count, user_count, score)
   select feature, hint, sample_count, user_count, score
   from (
-    select feature, hint, sample_count, user_count,
-           (user_count * 2 + sample_count)::numeric as score,
+    select feature, hint, sample_count, user_count, net_weight,
+           (user_count * 2 + net_weight)::numeric as score,
            row_number() over (partition by feature
-                              order by (user_count * 2 + sample_count) desc, hint) as rn
+                              order by (user_count * 2 + net_weight) desc, hint) as rn
     from (
-      select coalesce(feature, 'ai_design')      as feature,
-             btrim(prompt_context->>'styleMemo')  as hint,
-             count(*)                              as sample_count,
-             count(distinct user_id)               as user_count
+      -- 暗黙的フィードバックの「重み付き」集約（260625）: good を +weight・bad（再生成/削除等）を -weight として
+      -- 各意匠フレーズ(styleMemo)の純スコア net_weight を出す。weight 欠損の旧データは 1.0 とみなす。
+      -- ヒント化は「good を付けた異なるユーザーが p_min_users 以上」かつ「net_weight が正」のものに限る
+      -- （好評だが削除/再生成で敬遠されている案は学習ヒントから外す）。
+      select coalesce(feature, 'ai_design')                              as feature,
+             btrim(prompt_context->>'styleMemo')                          as hint,
+             count(*) filter (where verdict = 'good')                     as sample_count,
+             count(distinct user_id) filter (where verdict = 'good')      as user_count,
+             sum(
+               case when verdict = 'good'
+                    then  coalesce((prompt_context->>'weight')::numeric, 1.0)
+                    else -coalesce((prompt_context->>'weight')::numeric, 1.0)
+               end
+             )                                                            as net_weight
       from ai_feedback_events
-      where verdict = 'good'
-        and user_id is not null
+      where user_id is not null
         and created_at >= now() - make_interval(days => p_days)
         and prompt_context ? 'styleMemo'
         and length(btrim(coalesce(prompt_context->>'styleMemo', ''))) between 2 and p_max_len
       group by 1, 2
-      having count(distinct user_id) >= p_min_users
+      having count(distinct user_id) filter (where verdict = 'good') >= p_min_users
+         and sum(
+               case when verdict = 'good'
+                    then  coalesce((prompt_context->>'weight')::numeric, 1.0)
+                    else -coalesce((prompt_context->>'weight')::numeric, 1.0)
+               end
+             ) > 0
     ) agg
     where hint <> ''
   ) ranked

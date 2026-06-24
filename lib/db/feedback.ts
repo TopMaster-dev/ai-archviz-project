@@ -33,6 +33,46 @@ export async function recordAiFeedback(opts: {
 }
 
 /**
+ * 暗黙的フィードバックのシグナル別の重み（正の大きさ＝強さ。向きは verdict が表す・260625）。
+ * 「重み付きシグナル」の単一の真実。集約 SQL は good を +weight、bad を -weight として扱う。
+ */
+export const SIGNAL_WEIGHTS: Record<string, number> = {
+  export: 1.0, // 強い good: 書き出し＝採用とみなす
+  regenerate: 0.5, // 弱い bad: 前版を破棄して再生成（完全否定ではない）
+  delete: 1.0, // 強い bad: 生成結果を明示的に削除
+};
+
+/**
+ * 暗黙的フィードバック（再生成・保存・削除等の自然な操作）を good/bad の【重み付き】シグナルとして
+ * システム裏側で自動記録する（260625・インコンテキスト学習基盤）。
+ *  - 重みは prompt_context.weight に埋め込む（jsonb・マイグレーション不要・既存集約は欠損時 1.0 既定）。
+ *  - in-context 反映用に styleMemo も併せて残す（夜間 aggregate_learned_hints が good を加点 / bad を減点）。
+ *  - recordAiFeedback 経由のためゲスト/未ログインは自動で no-op（ベストエフォート・UI を妨げない）。
+ */
+export async function recordImplicitFeedback(
+  signal: 'export' | 'regenerate' | 'delete' | (string & {}),
+  opts: {
+    verdict: 'good' | 'bad';
+    imageRef?: string | null;
+    projectId?: string | null;
+    styleMemo?: string | null;
+    weight?: number;
+  },
+): Promise<void> {
+  const weight = opts.weight ?? SIGNAL_WEIGHTS[signal] ?? 1.0;
+  const promptContext: Record<string, unknown> = { implicit: true, signal, weight };
+  const memo = opts.styleMemo?.trim();
+  if (memo) promptContext.styleMemo = memo;
+  return recordAiFeedback({
+    verdict: opts.verdict,
+    imageRef: opts.imageRef ?? null,
+    projectId: opts.projectId ?? null,
+    feature: 'ai_design',
+    promptContext,
+  });
+}
+
+/**
  * ユーザー自身が過去に「good」評価した生成の傾向（styleMemo）を新しい順に返す（管理表 row 211/219）。
  * フェーズ1のin-context反映（各ユーザー個別）に使用。次回生成プロンプトへ参考として差し込む。
  * RLS の SELECT は本人の行のみ（auth.uid()=user_id）。ベストエフォート（未構成/未ログインは空配列）。

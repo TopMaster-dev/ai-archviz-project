@@ -16,7 +16,7 @@ import {
 } from 'lucide-react';
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect, AgentCatalogEntry, AgentRecommendation } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
-import { recordAiFeedback, getLearnedHints } from '../lib/db/feedback.js';
+import { recordAiFeedback, recordImplicitFeedback, getLearnedHints } from '../lib/db/feedback.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
@@ -107,6 +107,8 @@ type Props = {
   activeVersionId: string | null;
   activeVersion: AiEditVersion | null;
   onSelectVersion: (id: string) => void;
+  /** 生成結果（版）を削除する（260625・削除を暗黙的フィードバックへ）。 */
+  onDeleteVersion: (id: string) => void;
   draftStyleRefDataUrl: string | null;
   onStyleRefChange: (dataUrl: string | null) => void;
   draftStyleMemo: string;
@@ -158,6 +160,7 @@ export function AiEditWorkspace({
   activeVersionId,
   activeVersion,
   onSelectVersion,
+  onDeleteVersion,
   draftStyleRefDataUrl,
   onStyleRefChange,
   draftStyleMemo,
@@ -479,11 +482,10 @@ export function AiEditWorkspace({
       const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
       if (priorChildren.length > 0) {
         const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
-        void recordAiFeedback({
+        void recordImplicitFeedback('regenerate', {
           verdict: 'bad',
           imageRef: abandoned.id,
-          feature: 'ai_design',
-          promptContext: { implicit: true, signal: 'regenerate' },
+          styleMemo: abandoned.styleMemo,
         }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
       }
 
@@ -578,11 +580,10 @@ export function AiEditWorkspace({
       const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
       if (priorChildren.length > 0) {
         const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
-        void recordAiFeedback({
+        void recordImplicitFeedback('regenerate', {
           verdict: 'bad',
           imageRef: abandoned.id,
-          feature: 'ai_design',
-          promptContext: { implicit: true, signal: 'regenerate' },
+          styleMemo: abandoned.styleMemo,
         }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
       }
       onEditSuccess({
@@ -866,6 +867,30 @@ export function AiEditWorkspace({
                       }`}
                     >
                       <ThumbsDown className="h-3.5 w-3.5" />
+                    </button>
+                    {/* 削除: 生成結果を消す。同時に「削除＝強いbad」の暗黙的フィードバックを記録する（260625）。 */}
+                    <button
+                      type="button"
+                      title="この生成結果を削除"
+                      aria-label="生成結果を削除"
+                      onClick={() => {
+                        if (typeof window !== 'undefined' && !window.confirm('この生成結果を削除しますか？（元に戻せません）')) return;
+                        // 暗黙的フィードバック（260625）: 削除＝強い bad シグナル。styleMemo も学習用に残す。
+                        void recordImplicitFeedback('delete', {
+                          verdict: 'bad',
+                          imageRef: v.id,
+                          styleMemo: v.styleMemo,
+                        }).catch((e) => console.warn('[ai feedback] 削除シグナルの記録に失敗', e));
+                        // UI 評価状態の掃除（削除済み版の孤立エントリを残さない）。
+                        feedbackRef.current = Object.fromEntries(
+                          Object.entries(feedbackRef.current).filter(([id]) => id !== v.id),
+                        );
+                        setFeedbackByVersion({ ...feedbackRef.current });
+                        onDeleteVersion(v.id);
+                      }}
+                      className="ml-auto rounded-full p-1 text-neutral-400 transition hover:scale-110 hover:bg-red-500/20 hover:text-red-300"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
                 </div>
@@ -1453,11 +1478,10 @@ export function AiEditWorkspace({
           // in-context反映（row 211/219）用に、その版のスタイル傾向も併せて残す。
           if (!activeVersion) return;
           const styleMemo = activeVersion.styleMemo?.trim() || undefined;
-          void recordAiFeedback({
+          void recordImplicitFeedback('export', {
             verdict: 'good',
             imageRef: activeVersion.id,
-            feature: 'ai_design',
-            promptContext: { implicit: true, signal: 'export', ...(styleMemo ? { styleMemo } : {}) },
+            styleMemo,
           }).catch((e) => console.warn('[ai feedback] 暗黙的good評価の記録に失敗', e));
         }}
       />
