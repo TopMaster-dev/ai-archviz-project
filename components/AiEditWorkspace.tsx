@@ -20,6 +20,7 @@ import { recordAiFeedback, getLearnedHints } from '../lib/db/feedback.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
+import { useAuth } from '../lib/auth/AuthContext.js';
 import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
 import { creditBlockMessage } from '../utils/freePlanCredits.js';
 import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
@@ -216,6 +217,8 @@ export function AiEditWorkspace({
   // フリープラン出力制限（縮小＋透かし・row 51/52）用にプランを参照（ゲスト=null=制限なし）。
   const projectSession = useOptionalProjectSession();
   const isFreePlan = projectSession?.plan === 'free';
+  // 高解像度DL月次制限の判定用（260624）。AuthProvider 配下なので useAuth は安全（ゲストは userId=null=制限なし）。
+  const { userId: authUserId } = useAuth();
 
   const baseDisplayUrl = activeVersion?.outputImageDataUrl ?? null;
 
@@ -1442,6 +1445,8 @@ export function AiEditWorkspace({
         open={highResExportOpen}
         onClose={() => setHighResExportOpen(false)}
         sourceImageDataUrl={activeVersion?.outputImageDataUrl ?? null}
+        plan={projectSession?.plan ?? null}
+        userId={authUserId}
         onExported={() => {
           // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3「保存等」）: 書き出し＝採用とみなし good を記録。
           // in-context反映（row 211/219）用に、その版のスタイル傾向も併せて残す。

@@ -18,6 +18,14 @@ import {
   type ExportPreset16x9,
 } from '../utils/printExportSpec.js';
 import { resizeDataUrlToSize } from '../utils/resizeDataUrl.js';
+import { applyFreePlanOutputLimits } from '../utils/freePlanImage.js';
+import {
+  ENABLE_FREE_PLAN_HIRES_DL_LIMIT,
+  FREE_PLAN_HIRES_DL_PER_MONTH,
+  hiResRemaining,
+  incrementHiResDownloadCount,
+  isOverHiResLimit,
+} from '../utils/freePlanHiResLimit.js';
 
 const RENDER_PROMPT =
   'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。';
@@ -31,9 +39,16 @@ type Props = {
   sourceImageDataUrl: string | null;
   /** ダウンロード（書き出し）成功時。暗黙的フィードバック（採用＝good）の記録に使う（管理表 row 210/216）。 */
   onExported?: () => void;
+  /** 高解像度DL月次制限の判定用（260624）。プラン種別とログインユーザーID。 */
+  plan?: string | null;
+  userId?: string | null;
 };
 
-export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExported }: Props) {
+export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExported, plan, userId }: Props) {
+  const isFreePlan = plan === 'free';
+  // 高解像度DLの今月残り回数（フリープランのみ・対象外は Infinity）。表示はダイアログを開いた時点の値。
+  const hiResLeft = hiResRemaining(userId, isFreePlan);
+  const showHiResLimit = ENABLE_FREE_PLAN_HIRES_DL_LIMIT && isFreePlan;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedIndex, setSelectedIndex] = useState(PREVIEW_INDEX);
@@ -129,10 +144,16 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExpor
       let url = data.url as string;
       const p = dpiPreset!;
       url = await resizeDataUrlToSize(url, p.width, p.height);
+      // フリープラン: 今月の無償高解像度DL（3回）超過時は、解像度は維持したまま透かしのみ合成（260624）。
+      if (isOverHiResLimit(userId, isFreePlan)) {
+        url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
+      }
       const a = document.createElement('a');
       a.href = url;
       a.download = `archviz_print_${p.dpi}dpi_${p.width}x${p.height}.png`;
       a.click();
+      // 成功した高解像度DLのみ1消費（API失敗/キャンセルでは消費しない）。
+      incrementHiResDownloadCount(userId, isFreePlan);
       onExported?.();
       onClose();
     } catch (e) {
@@ -242,6 +263,17 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExpor
               <li key={line}>{line}</li>
             ))}
           </ul>
+          {/* フリープランの高解像度DL月次制限（260624）。プレビュー保存は対象外。 */}
+          {showHiResLimit &&
+            (hiResLeft > 0 ? (
+              <p className="text-[11px] font-bold text-neutral-400">
+                高解像ダウンロード 残り {hiResLeft} / {FREE_PLAN_HIRES_DL_PER_MONTH} 回（今月・無料プラン。プレビュー保存は対象外）
+              </p>
+            ) : (
+              <p className="text-[11px] font-bold leading-relaxed text-amber-300">
+                今月の無料高解像ダウンロード（{FREE_PLAN_HIRES_DL_PER_MONTH}回）を使い切りました。これ以降の高解像書き出しには「フリープラン サンプル」透かしが入ります。アップグレードで透かしなしに。
+              </p>
+            ))}
           {error && <p className="text-red-400 break-words">{error}</p>}
         </div>
         <div className="flex gap-2 justify-end px-4 py-3 border-t border-white/10 bg-black/20">
