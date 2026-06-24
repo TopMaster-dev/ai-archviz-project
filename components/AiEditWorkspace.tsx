@@ -117,7 +117,6 @@ type Props = {
   activeObjectId: string | null;
   onActiveObjectChange: (id: string | null) => void;
   placementEditIndex: number | null;
-  onSetAppendPlacementMode: () => void;
   onSetReplacePlacementMode: (objectId: string, index: number) => void;
   onCommitPlacementRect: (objectId: string, rect: NormalizedRect) => void;
   onRemovePlacementAt: (objectId: string, index: number) => void;
@@ -169,7 +168,6 @@ export function AiEditWorkspace({
   activeObjectId,
   onActiveObjectChange,
   placementEditIndex,
-  onSetAppendPlacementMode,
   onSetReplacePlacementMode,
   onCommitPlacementRect,
   onRemovePlacementAt,
@@ -195,8 +193,6 @@ export function AiEditWorkspace({
   const [compareSlider, setCompareSlider] = useState(50);
   const [objectImageTargetId, setObjectImageTargetId] = useState<string | null>(null);
   const [isSituationCardVisible, setIsSituationCardVisible] = useState(false);
-  // AIエージェント相談パネルの開閉（トリガは「エリア編集」横のタブへ移動。260619 クライアント要望）。
-  const [agentOpen, setAgentOpen] = useState(false);
   // 右レール「AIマジックツール」のタブ（260624 クライアントUI準拠）: area=エリア編集 / coordinate=コーディネート / agent=相談。
   const [activeTool, setActiveTool] = useState<'area' | 'coordinate' | 'agent'>('area');
 
@@ -579,6 +575,23 @@ export function AiEditWorkspace({
       setIsSubmitting(false);
     }
   }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession]);
+
+  // コーディネートタブの実行（260624）: プロンプト/添付があればそれを反映（runEdit流用）、無ければ完全お任せ（runCoordinate）。
+  // プロンプト未入力でも実行可能（クライアント要望）。
+  const handleCoordinateExecute = () => {
+    if (!activeVersion || isSubmitting) return;
+    const creditMsg = creditBlockMessage(projectSession?.aiCredits);
+    if (creditMsg) {
+      setSubmitError(creditMsg);
+      return;
+    }
+    setSubmitError(null);
+    if (draftStyleMemo.trim().length > 0 || styleImageDataUrl) {
+      void runEdit();
+    } else {
+      void runCoordinate();
+    }
+  };
 
   const POLY_CLOSE_DIST = 0.03; // 始点付近クリックで多角形を閉じる距離（正規化）。
 
@@ -1088,7 +1101,6 @@ export function AiEditWorkspace({
                   type="button"
                   onClick={() => {
                     setActiveTool('area');
-                    setAgentOpen(false);
                     onAddObject();
                   }}
                   className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
@@ -1104,7 +1116,6 @@ export function AiEditWorkspace({
                   type="button"
                   onClick={() => {
                     setActiveTool('coordinate');
-                    setAgentOpen(false);
                     setIsSituationCardVisible(true);
                   }}
                   className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
@@ -1118,10 +1129,7 @@ export function AiEditWorkspace({
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveTool('agent');
-                    setAgentOpen(true);
-                  }}
+                  onClick={() => setActiveTool('agent')}
                   title="AIエージェントに相談（デザイン・素材・見積の相談）"
                   className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
                     activeTool === 'agent'
@@ -1148,73 +1156,40 @@ export function AiEditWorkspace({
                 />
               </div>
               {activeTool === 'coordinate' && (
-                <button
-                  type="button"
-                  disabled={isSubmitting || !activeVersion || !!projectSession?.aiCredits.blocked}
-                  onClick={() => void runCoordinate()}
-                  title={
-                    creditBlockMessage(projectSession?.aiCredits) ??
-                    '空間全体をAIにお任せで再コーディネート（家具・装飾・演出を一新）'
-                  }
-                  className="mt-2 w-full flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl bg-purple-900/70 border border-purple-500/30 text-xs font-black text-purple-200 hover:bg-purple-800 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  <Sparkles className="w-3.5 h-3.5 shrink-0" />
-                  お任せでAIコーディネート
-                </button>
-              )}
-              {activeTool === 'coordinate' && isSituationCardVisible && (
-                <div className="mt-2 rounded-lg border border-white/10 bg-[rgba(24,24,27,0.5)] p-2 text-xs">
-                  <div className="flex items-start gap-2">
-                    <div className="w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center border-white/20">
-                      {styleImageDataUrl ? (
-                        <img src={styleImageDataUrl} alt="" className="w-full h-full object-cover" />
-                      ) : (
-                        <span className="text-[9px] font-bold text-neutral-400 px-1">no image</span>
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0 space-y-1">
-                      <div className="flex items-center justify-between gap-1">
-                        <span className="text-[10px] font-bold text-neutral-300">AIデザイン</span>
+                <div className="mt-2 space-y-2">
+                  <p className="text-[10px] font-bold text-neutral-500">＊任意</p>
+                  <textarea
+                    value={draftStyleMemo}
+                    onChange={(e) => onStyleMemoChange(e.target.value)}
+                    placeholder={
+                      '例）このブランドに合うデザインを提案して\n（HPに掲載されている企業理念や現在の展開されている店舗画像、今回の提案要件を記入してください）\n例）この空間に合う家具を提案して'
+                    }
+                    rows={6}
+                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white leading-relaxed resize-none outline-none focus:border-emerald-500"
+                  />
+                  <div className="flex items-center justify-between gap-2">
+                    <button
+                      type="button"
+                      onClick={() => styleInputRef.current?.click()}
+                      className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-white/10 text-[11px] font-bold hover:bg-zinc-700"
+                    >
+                      <ImagePlus className="w-4 h-4" />
+                      ファイルを添付
+                    </button>
+                    {styleImageDataUrl && (
+                      <div className="flex min-w-0 items-center gap-1.5">
                         <button
                           type="button"
-                          onClick={() => {
-                            onStyleRefChange(null);
-                            onStyleMemoChange('');
-                            setIsSituationCardVisible(false);
-                          }}
-                          className="p-1 text-red-400 hover:bg-red-500/10 rounded"
-                          aria-label="削除"
+                          onClick={() => onStyleRefChange(null)}
+                          className="shrink-0 rounded p-1 text-red-400 hover:bg-red-500/10"
+                          aria-label="添付を削除"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
+                        <img src={styleImageDataUrl} alt="添付" className="h-7 w-7 shrink-0 rounded object-cover" />
+                        <span className="truncate text-[10px] text-neutral-400">添付画像</span>
                       </div>
-                      <div className="flex gap-1">
-                        <button
-                          type="button"
-                          onClick={() => styleInputRef.current?.click()}
-                          className="flex items-center justify-center gap-1 px-2 py-1 rounded border border-white/15 text-[10px] font-bold hover:bg-white/5"
-                        >
-                          <ImagePlus className="w-3.5 h-3.5" />
-                          画像を選択
-                        </button>
-                        {styleImageDataUrl ? (
-                          <button
-                            type="button"
-                            onClick={() => onStyleRefChange(null)}
-                            className="px-2 py-1 rounded border border-white/15 text-[10px] font-bold hover:bg-white/5"
-                          >
-                            画像を外す
-                          </button>
-                        ) : null}
-                      </div>
-                      <textarea
-                        value={draftStyleMemo}
-                        onChange={(e) => onStyleMemoChange(e.target.value)}
-                        placeholder="画像全体をどんな雰囲気にしたいですか？"
-                        rows={2}
-                        className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] resize-none"
-                      />
-                    </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -1351,18 +1326,6 @@ export function AiEditWorkspace({
                             })}
                           </ul>
 
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              onActiveObjectChange(o.id);
-                              onSetAppendPlacementMode();
-                            }}
-                            className="mt-1 w-full flex items-center justify-center gap-1 py-1.5 rounded border text-[10px] font-bold border-white/15 hover:bg-white/5"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                            範囲を追加
-                          </button>
                           {appendMode && (
                             <p className="text-[9px] text-amber-400/90">
                               {maskMode === 'polygon'
@@ -1379,13 +1342,36 @@ export function AiEditWorkspace({
                   );
                 })}
               </ul>
+              {/* グローバルな「範囲を追加」: クリックで新しい領域カードを追加（260624 クライアントUI準拠）。 */}
+              <button
+                type="button"
+                onClick={() => onAddObject()}
+                className="mt-2 w-full flex items-center justify-center gap-1.5 py-2.5 rounded-xl border border-white/15 bg-zinc-800/60 text-xs font-bold hover:bg-zinc-700/60 transition"
+              >
+                <Plus className="w-4 h-4" />
+                範囲を追加
+              </button>
             </div>
+            )}
+            {/* エージェント相談はタブとして右レール内にインライン表示（260624・フローティング廃止）。 */}
+            {activeTool === 'agent' && (
+              <AgentChatPanel
+                inline
+                open
+                imageDataUrl={activeVersion?.outputImageDataUrl ?? null}
+                projectId={projectSession?.projectId ?? null}
+                onOpenChange={(o) => {
+                  if (!o) setActiveTool('area');
+                }}
+                catalog={agentCatalog}
+                onAddEstimateItem={onAddEstimateItem}
+              />
             )}
             </div>
 
             <div className="z-40 shrink-0 border-t border-white/10 p-3 bg-[#050505] space-y-2">
               {submitError && <p className="text-xs text-red-400 break-words">{submitError}</p>}
-              {emptyCardCount > 0 && (
+              {activeTool === 'area' && emptyCardCount > 0 && (
                 <p className="text-xs text-amber-300 font-bold">未入力{emptyCardCount}件</p>
               )}
               {projectSession?.aiCredits.active && (
@@ -1394,31 +1380,32 @@ export function AiEditWorkspace({
                   {projectSession.aiCredits.expired && '（有効期限切れ）'}
                 </p>
               )}
-              <button
-                type="button"
-                disabled={
-                  !activeVersion ||
-                  isSubmitting ||
-                  !hasAnyInput ||
-                  requiresAreaPlacement ||
-                  emptyCardCount > 0 ||
-                  !!projectSession?.aiCredits.blocked
-                }
-                onClick={handleClickExecute}
-                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:pointer-events-none font-black text-sm"
-              >
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    生成中…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-5 h-5" />
-                    この内容で編集実行
-                  </>
-                )}
-              </button>
+              {activeTool !== 'agent' && (
+                <button
+                  type="button"
+                  disabled={
+                    !activeVersion ||
+                    isSubmitting ||
+                    !!projectSession?.aiCredits.blocked ||
+                    (activeTool === 'area' &&
+                      (!hasAnyInput || requiresAreaPlacement || emptyCardCount > 0))
+                  }
+                  onClick={activeTool === 'coordinate' ? handleCoordinateExecute : handleClickExecute}
+                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:pointer-events-none font-black text-sm"
+                >
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="w-5 h-5 animate-spin" />
+                      生成中…
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-5 h-5" />
+                      {activeTool === 'coordinate' ? 'AIでコーディネートを実行' : 'この内容で編集実行'}
+                    </>
+                  )}
+                </button>
+              )}
             </div>
           </div>
         </aside>
@@ -1440,19 +1427,6 @@ export function AiEditWorkspace({
             promptContext: { implicit: true, signal: 'export', ...(styleMemo ? { styleMemo } : {}) },
           }).catch((e) => console.warn('[ai feedback] 暗黙的good評価の記録に失敗', e));
         }}
-      />
-
-      {/* AIエージェント相談パネル（管理表 row 208/214・プランA）。折り畳み式・現在画像を文脈に。 */}
-      <AgentChatPanel
-        imageDataUrl={activeVersion?.outputImageDataUrl ?? null}
-        projectId={projectSession?.projectId ?? null}
-        open={agentOpen}
-        onOpenChange={(o) => {
-          setAgentOpen(o);
-          if (!o && activeTool === 'agent') setActiveTool('area');
-        }}
-        catalog={agentCatalog}
-        onAddEstimateItem={onAddEstimateItem}
       />
 
       {/* AI生成中の全面オーバーレイ（クライアント要望 260619: ボタンの小さなスピナーだけでは処理中か

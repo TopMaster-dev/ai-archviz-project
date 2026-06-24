@@ -66,6 +66,7 @@ export function AgentChatPanel({
   onOpenChange,
   catalog,
   onAddEstimateItem,
+  inline = false,
 }: {
   imageDataUrl?: string | null;
   projectId?: string | null;
@@ -75,6 +76,8 @@ export function AgentChatPanel({
   catalog?: AgentCatalogEntry[];
   /** 推薦を見積もりへ追加する（Tier2）。未指定なら「見積に追加」ボタンを出さない。 */
   onAddEstimateItem?: (rec: AgentRecommendation) => void;
+  /** 右レール内にタブとしてインライン表示する（260624）。false=従来のフローティング。 */
+  inline?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredChat(projectId));
   const [input, setInput] = useState('');
@@ -188,7 +191,13 @@ export function AgentChatPanel({
   if (!open) return null; // 開閉トリガは「エリア編集」横のタブ（AiEditWorkspace）へ移動
 
   return (
-    <div className="fixed bottom-6 right-6 z-[10005] flex h-[28rem] w-[22rem] max-w-[92vw] flex-col rounded-2xl border border-white/15 bg-neutral-900/95 shadow-2xl backdrop-blur">
+    <div
+      className={
+        inline
+          ? 'flex h-[60vh] min-h-[26rem] w-full flex-col rounded-2xl border border-white/15 bg-neutral-900/60'
+          : 'fixed bottom-6 right-6 z-[10005] flex h-[28rem] w-[22rem] max-w-[92vw] flex-col rounded-2xl border border-white/15 bg-neutral-900/95 shadow-2xl backdrop-blur'
+      }
+    >
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2.5">
         <div className="flex items-center gap-2">
           <MessageCircle className="h-4 w-4 text-emerald-400" />

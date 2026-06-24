@@ -4406,7 +4406,6 @@ const App: React.FC = () => {
                         activeObjectId={aiEditSession.activeObjectId}
                         onActiveObjectChange={aiEditSession.setActiveObjectId}
                         placementEditIndex={aiEditSession.placementEditIndex}
-                        onSetAppendPlacementMode={aiEditSession.setAppendPlacementMode}
                         onSetReplacePlacementMode={aiEditSession.setReplacePlacementMode}
                         onCommitPlacementRect={aiEditSession.commitPlacementRect}
                         onRemovePlacementAt={aiEditSession.removePlacementAt}
