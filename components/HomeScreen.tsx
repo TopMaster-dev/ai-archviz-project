@@ -499,7 +499,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           onClick={() => setCreatingNew(false)}
         >
           <div
-            className="w-full max-w-sm rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-2xl"
+            className="w-full max-w-lg rounded-2xl border border-white/10 bg-neutral-900 p-6 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
             <h3 className="mb-3 text-base font-bold">新しいプロジェクト</h3>

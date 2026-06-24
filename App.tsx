@@ -44,7 +44,7 @@ import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
 import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/uploads.js';
-import { toStoredImage } from './lib/db/aiRenderStorage.js';
+import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
 import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
@@ -1413,6 +1413,37 @@ const App: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [docEditCount, viewMode, projectSession?.projectId]);
 
+  // 一覧サムネ（260624 クライアント要望）: AI生成画像があるプロジェクトは「最新のAI画像」をサムネにする。
+  // 上の capture 効果は versions>0 でスキップするため、AIレンダ/編集/コーディネート/写真AI編集の各バージョン追加で
+  // ここが最新版（versions 末尾）をサムネ化する。これにより「AIで写真編集」プロジェクトのサムネ未表示（#2）と
+  // 編集後にサムネが古いまま（#3）を解消する。onCanvasRenderSuccess（レンダ直後の即時設定）とは併用（最新版へ更新）。
+  const aiThumbTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const projectId = projectSession?.projectId;
+    const setThumb = projectSession?.setProjectThumbnail;
+    if (!projectId || !setThumb || aiEditVersions.length === 0) return;
+    // 連続編集を束ねる（短時間に複数版が追加されても最新版だけをサムネ化）。
+    if (aiThumbTimerRef.current) clearTimeout(aiThumbTimerRef.current);
+    aiThumbTimerRef.current = setTimeout(async () => {
+      try {
+        const last = aiEditVersions[aiEditVersions.length - 1];
+        if (!last?.outputImageDataUrl) return;
+        // 画像参照（クラウドURL or dataURL）を dataURL 化（canvas が cross-origin URL で taint/throw するため）。
+        const dataUrl = await ensureDataUrl(last.outputImageDataUrl);
+        if (!dataUrl) return;
+        const thumb = await makeThumbnailDataUrl(dataUrl);
+        if (thumb) await setThumb(thumb);
+      } catch {
+        /* best-effort（サムネ更新失敗は無害） */
+      }
+    }, 800);
+    return () => {
+      if (aiThumbTimerRef.current) clearTimeout(aiThumbTimerRef.current);
+    };
+    // projectSession はレンダ毎に新規オブジェクトのため、安定な projectId のみを依存にする（デバウンス飢餓回避）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aiEditVersions, projectSession?.projectId]);
+
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
   const cameraBlendTokenRef = useRef(0);
@@ -2265,6 +2296,47 @@ const App: React.FC = () => {
       return next;
     });
   }, []);
+
+  // === 2Dのみの作業も保存されるようにする（260624 クライアント報告: 2Dだけで3D未生成だと保存されない） ===
+  // 原因: ライブ2D下書きは App ローカル state の pendingPoints にあり、3D生成(handleSketchApply)/3D切替
+  //   (handleSwitchTo3DView)時しかストアへコミットされない＝ autosave のトリガ（temporal 変化）が起きない。
+  // pendingPoints をストアへ確定する共通処理。undo 履歴を汚さない（2D undo はストア temporal を参照するため、
+  // ここで履歴を積むと「undo でストアは戻るが canvas は戻らない」ずれ＝回帰を生む）よう temporal を pause して反映する。
+  const pendingPointsRef = useRef<SketchPoint[]>(pendingPoints);
+  pendingPointsRef.current = pendingPoints;
+  const commitPendingSketchToStore = useCallback(() => {
+    const pts = pendingPointsRef.current;
+    if (pts.length < 3) return;
+    const current = useProjectStore.getState().sketch.points as SketchPoint[];
+    const same = current.length === pts.length && current.every((p, i) => p.x === pts[i].x && p.y === pts[i].y);
+    if (same) return; // 既に反映済みなら何もしない（重複コミット防止）
+    const temporal = useProjectStore.temporal.getState();
+    temporal.pause();
+    try {
+      commitSketchPointsToRoomState(pts);
+    } finally {
+      temporal.resume();
+    }
+  }, [commitSketchPointsToRoomState]);
+
+  // 対策A（継続オートセーブ）: 描画が止まって1秒後に下書きをコミットし、temporal 非依存の persistAiEdit で保存する。
+  // （persistAiEdit は上の aiEdit 永続化ブロックで projectSession から抽出済み・projectId 安定。）
+  useEffect(() => {
+    if (pendingPoints.length < 3) return;
+    const tid = setTimeout(() => {
+      commitPendingSketchToStore();
+      persistAiEdit?.();
+    }, 1000);
+    return () => clearTimeout(tid);
+  }, [pendingPoints, commitPendingSketchToStore, persistAiEdit]);
+
+  // 対策B（離脱・切替の取りこぼし防止）: flush（離脱時 flushSave／プロジェクト切替）直前に未コミット下書きを確定する。
+  // goHome は flushSave を await してから unmount するため、unmount cleanup では間に合わない（保存後に走る）。
+  const registerBeforeSave = projectSession?.registerBeforeSave;
+  useEffect(() => {
+    registerBeforeSave?.(commitPendingSketchToStore);
+    return () => registerBeforeSave?.(null);
+  }, [registerBeforeSave, commitPendingSketchToStore]);
 
   const handleSketchApply = (points: SketchPoint[]) => {
     commitSketchPointsToRoomState(points);

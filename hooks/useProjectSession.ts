@@ -59,6 +59,11 @@ export interface ProjectSession {
   /** 写真AI編集（2a）の現在ストア内容をデバウンス保存する。aiEdit は temporal 対象外で autosave されないため別途呼ぶ。 */
   persistAiEdit(): void;
   /**
+   * 保存直前フックの登録。flush（切替・離脱時 flushSave）の直前に呼ばれる。2Dのライブ下書き
+   * （pendingPoints は App ローカル state）を保存前にストアへ確定する用途。null で解除（260624）。
+   */
+  registerBeforeSave(fn: (() => void) | null): void;
+  /**
    * 現在のストア内容を即時保存して完了を待つ（デバウンス待ちなし）。ホームへ戻る等の離脱時に、
    * 編集内容を確実に DB へ反映してから安全に遷移するために使う。未ログイン/未読込時は何もしない。
    */
@@ -175,10 +180,19 @@ export function useProjectSession(): ProjectSession {
   // 必ず取り消し、古いタイマーが発火して「別プロジェクトの内容を旧 id の行へ書き込む」事故を防ぐ。
   const aiEditSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // 保存直前フック。2Dスケッチのライブ下書き（pendingPoints）は App のローカル state にあり、
+  // 3D生成/3D切替時しかストアへコミットされない。離脱・切替の flush 直前にこれを呼び、未コミットの
+  // 下書きをストアへ確定してから保存させる（2Dのみの作業が保存されない不具合の取りこぼし防止・260624）。
+  const beforeSaveRef = useRef<() => void>(() => {});
+  const registerBeforeSave = useCallback((fn: (() => void) | null) => {
+    beforeSaveRef.current = fn ?? (() => {});
+  }, []);
+
   // 現在のストア内容を指定プロジェクトへ即時保存（切替・複製・削除前のフラッシュ）。
   // signal を渡すとタイムアウト等で中断でき、中断後に遅延書き込みが残らない。
   const flush = useCallback(async (id: string | null, signal?: AbortSignal) => {
     if (!id) return;
+    beforeSaveRef.current(); // 未コミットの2D下書きをストアへ確定してから toProjectState を読む
     await saveProject(id, { data: useProjectStore.getState().toProjectState() }, signal ? { signal } : undefined);
   }, []);
 
@@ -457,6 +471,7 @@ export function useProjectSession(): ProjectSession {
     restoreDeletedProject,
     setProjectThumbnail,
     persistAiEdit,
+    registerBeforeSave,
     flushSave,
   };
 }
