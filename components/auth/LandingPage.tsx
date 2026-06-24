@@ -1,3 +1,4 @@
+import { useState, useRef, useEffect, useCallback, type ReactNode, type RefObject } from 'react';
 import {
   PencilRuler,
   Box,
@@ -8,6 +9,7 @@ import {
   Ruler,
   LayoutGrid,
   Wand2,
+  X,
 } from 'lucide-react';
 
 /**
@@ -63,6 +65,99 @@ const GALLERY = [
   { src: '/lp/bedroom.jpg', alt: '間接照明のベッドルームのAIパース' },
 ] as const;
 
+/** LP の実例画像（クリックで拡大）。triggerRef は閉じたときにフォーカスを戻す呼び出し元ボタン。 */
+interface LpLightboxImage {
+  src: string;
+  alt: string;
+  triggerRef?: RefObject<HTMLButtonElement | null>;
+}
+
+/** 画像をクリックで拡大表示するトリガ。キーボード操作可能な実 <button> で包む（260624 クライアント要望）。 */
+function ImageTrigger({
+  src,
+  alt,
+  onOpen,
+  children,
+}: {
+  src: string;
+  alt: string;
+  onOpen: (image: LpLightboxImage) => void;
+  children: ReactNode;
+}) {
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  return (
+    <button
+      ref={triggerRef}
+      type="button"
+      onClick={() => onOpen({ src, alt, triggerRef })}
+      aria-label={`${alt}を拡大表示`}
+      className="focus-ring block w-full cursor-zoom-in rounded-xl"
+    >
+      {children}
+    </button>
+  );
+}
+
+/** 実例画像のライトボックス（拡大モーダル）。背景クリック / × / Escape で閉じる。 */
+function Lightbox({
+  image,
+  onClose,
+  scrollRef,
+}: {
+  image: LpLightboxImage | null;
+  onClose: () => void;
+  scrollRef: RefObject<HTMLDivElement | null>;
+}) {
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!image) return;
+    // 背面（LP本体）のスクロールを止める。スクロールは body ではなく外側の overflow-y-auto コンテナで起きるため、
+    // そのコンテナの overflowY のみ一時 hidden にする。復元は空文字（overflow-x-hidden クラスを壊さない）。
+    const container = scrollRef.current;
+    if (container) container.style.overflowY = 'hidden';
+    closeRef.current?.focus(); // 開いたら × へフォーカス（キーボードで即閉じられる）
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    document.addEventListener('keydown', onKey);
+    const trigger = image.triggerRef?.current ?? null;
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      if (container) container.style.overflowY = '';
+      trigger?.focus(); // 閉じたら呼び出し元の画像ボタンへフォーカスを戻す
+    };
+  }, [image, onClose, scrollRef]);
+
+  if (!image) return null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={image.alt}
+      onClick={onClose}
+      className="animate-in fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm sm:p-8"
+    >
+      <button
+        ref={closeRef}
+        type="button"
+        onClick={onClose}
+        aria-label="閉じる"
+        className="focus-ring absolute right-4 top-4 z-[51] flex h-10 w-10 items-center justify-center rounded-lg bg-white/10 text-white transition hover:bg-white/20"
+      >
+        <X className="h-5 w-5" />
+      </button>
+      {/* 画像自体のクリックでは閉じない（背景クリックのみ閉じる） */}
+      <img
+        src={image.src}
+        alt={image.alt}
+        onClick={(e) => e.stopPropagation()}
+        className="animate-in fade-in zoom-in-95 max-h-[90vh] max-w-[92vw] rounded-lg object-contain shadow-2xl"
+      />
+    </div>
+  );
+}
+
 export function LandingPage({
   onLogin,
   onShowLegal,
@@ -70,8 +165,14 @@ export function LandingPage({
   onLogin: () => void;
   onShowLegal?: (kind: 'terms' | 'privacy') => void;
 }) {
+  const [lightboxImage, setLightboxImage] = useState<LpLightboxImage | null>(null);
+  const closeLightbox = useCallback(() => setLightboxImage(null), []);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   return (
-    <div className="relative h-screen w-screen overflow-y-auto overflow-x-hidden bg-neutral-950 text-neutral-100">
+    <div
+      ref={scrollContainerRef}
+      className="relative h-screen w-screen overflow-y-auto overflow-x-hidden bg-neutral-950 text-neutral-100"
+    >
       {/* 背景の装飾グラデーション（ゆっくり明滅） */}
       <div className="pointer-events-none fixed inset-0 overflow-hidden">
         <div
@@ -167,17 +268,19 @@ export function LandingPage({
               </div>
             </div>
 
-            {/* ギャラリー（フォトリアル実例） */}
+            {/* ギャラリー（フォトリアル実例・クリックで拡大） */}
             <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-3">
               {GALLERY.map((g) => (
-                <div key={g.src} className="overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
-                  <img
-                    src={g.src}
-                    alt={g.alt}
-                    loading="lazy"
-                    className="aspect-video w-full object-cover transition duration-500 hover:scale-[1.03]"
-                  />
-                </div>
+                <ImageTrigger key={g.src} src={g.src} alt={g.alt} onOpen={setLightboxImage}>
+                  <div className="overflow-hidden rounded-xl border border-white/10 bg-neutral-900">
+                    <img
+                      src={g.src}
+                      alt={g.alt}
+                      loading="lazy"
+                      className="aspect-video w-full object-cover transition duration-500 hover:scale-[1.03]"
+                    />
+                  </div>
+                </ImageTrigger>
               ))}
             </div>
           </section>
@@ -255,15 +358,21 @@ export function LandingPage({
               <Jp parts={['迷わず、', '最短距離で提案まで。']} />
             </p>
 
-            {/* 2D作図 → 3D生成 → AIパースの実例（クライアント支給・260623） */}
-            <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
-              <img
-                src="/lp/lp-step-2d-3d-ai.jpg"
-                alt="2D作図から3D自動生成、AIパースまでの3ステップの実例"
-                loading="lazy"
-                className="w-full"
-              />
-            </div>
+            {/* 2D作図 → 3D生成 → AIパースの実例（クライアント支給・260623・クリックで拡大） */}
+            <ImageTrigger
+              src="/lp/lp-step-2d-3d-ai.jpg"
+              alt="2D作図から3D自動生成、AIパースまでの3ステップの実例"
+              onOpen={setLightboxImage}
+            >
+              <div className="mt-5 overflow-hidden rounded-2xl border border-white/10 bg-neutral-900">
+                <img
+                  src="/lp/lp-step-2d-3d-ai.jpg"
+                  alt="2D作図から3D自動生成、AIパースまでの3ステップの実例"
+                  loading="lazy"
+                  className="w-full"
+                />
+              </div>
+            </ImageTrigger>
           </section>
 
           {/* 実績数値 */}
@@ -305,15 +414,21 @@ export function LandingPage({
                 ]}
               />
             </p>
-            {/* AIイメージ編集の実例（写真→AI生成・クライアント支給・260623） */}
-            <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
-              <img
-                src="/lp/lp-ai-edit.jpg"
-                alt="AIイメージ編集：コンクリート空間をその場でカフェ内装に変換した例"
-                loading="lazy"
-                className="w-full"
-              />
-            </div>
+            {/* AIイメージ編集の実例（写真→AI生成・クライアント支給・260623・クリックで拡大） */}
+            <ImageTrigger
+              src="/lp/lp-ai-edit.jpg"
+              alt="AIイメージ編集：コンクリート空間をその場でカフェ内装に変換した例"
+              onOpen={setLightboxImage}
+            >
+              <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
+                <img
+                  src="/lp/lp-ai-edit.jpg"
+                  alt="AIイメージ編集：コンクリート空間をその場でカフェ内装に変換した例"
+                  loading="lazy"
+                  className="w-full"
+                />
+              </div>
+            </ImageTrigger>
           </section>
 
           {/* AIエージェント（リード＝「思考の死角」…＋デモ枠・260619 クライアントデザイン） */}
@@ -336,15 +451,21 @@ export function LandingPage({
                 ]}
               />
             </p>
-            {/* AIエージェントの紹介（クライアント支給・260623） */}
-            <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
-              <img
-                src="/lp/lp-ai-agent.webp"
-                alt="AIエージェント：和室を執務室に再提案している様子"
-                loading="lazy"
-                className="w-full"
-              />
-            </div>
+            {/* AIエージェントの紹介（クライアント支給・260623・クリックで拡大） */}
+            <ImageTrigger
+              src="/lp/lp-ai-agent.webp"
+              alt="AIエージェント：和室を執務室に再提案している様子"
+              onOpen={setLightboxImage}
+            >
+              <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
+                <img
+                  src="/lp/lp-ai-agent.webp"
+                  alt="AIエージェント：和室を執務室に再提案している様子"
+                  loading="lazy"
+                  className="w-full"
+                />
+              </div>
+            </ImageTrigger>
           </section>
 
           {/* クロージング CTA */}
@@ -394,6 +515,7 @@ export function LandingPage({
           © Arise — 建築・内装向け AI 空間デザイン
         </footer>
       </div>
+      <Lightbox image={lightboxImage} onClose={closeLightbox} scrollRef={scrollContainerRef} />
     </div>
   );
 }
