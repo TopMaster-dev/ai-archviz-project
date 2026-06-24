@@ -17,6 +17,7 @@ import {
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect, AgentCatalogEntry, AgentRecommendation } from '../types.js';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiFeedback, recordImplicitFeedback, getLearnedHints } from '../lib/db/feedback.js';
+import { useConfirm } from './ConfirmDialog.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { useOptionalProjectSession } from '../lib/project/projectSessionContext.js';
@@ -228,6 +229,8 @@ export function AiEditWorkspace({
   // AI生成の良し悪し評価（good/bad）。記録は ai_feedback_events へベストエフォート（管理表 row 209/215）。
   const [feedbackByVersion, setFeedbackByVersion] = useState<Record<string, 'good' | 'bad'>>({});
   const feedbackRef = useRef<Record<string, 'good' | 'bad'>>({});
+  // 破壊的操作（生成結果の削除）の確認は、ネイティブ window.confirm ではなくアプリ共通のダーク UI モーダルで出す（260625）。
+  const confirm = useConfirm();
   const submitFeedback = useCallback(
     async (versionId: string, verdict: 'good' | 'bad') => {
       if (!versionId || feedbackRef.current[versionId] === verdict) return;
@@ -873,8 +876,15 @@ export function AiEditWorkspace({
                       type="button"
                       title="この生成結果を削除"
                       aria-label="生成結果を削除"
-                      onClick={() => {
-                        if (typeof window !== 'undefined' && !window.confirm('この生成結果を削除しますか？（元に戻せません）')) return;
+                      onClick={async () => {
+                        // アプリ共通の確認モーダル（ダーク UI）。OK で true・キャンセル/ESC/背景クリックで false。
+                        const ok = await confirm({
+                          title: '生成結果の削除',
+                          message: 'この生成結果を削除しますか？\n（元に戻せません）',
+                          confirmLabel: '削除',
+                          danger: true,
+                        });
+                        if (!ok) return;
                         // 暗黙的フィードバック（260625）: 削除＝強い bad シグナル。styleMemo も学習用に残す。
                         void recordImplicitFeedback('delete', {
                           verdict: 'bad',
