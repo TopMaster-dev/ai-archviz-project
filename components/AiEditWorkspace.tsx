@@ -1105,10 +1105,7 @@ export function AiEditWorkspace({
               <div className="flex flex-wrap gap-1.5">
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveTool('area');
-                    onAddObject();
-                  }}
+                  onClick={() => setActiveTool('area')}
                   className={`flex items-center justify-center gap-1 px-2.5 py-2 rounded-lg border text-xs font-bold transition ${
                     activeTool === 'area'
                       ? 'bg-emerald-600/15 border-emerald-500 text-emerald-100'
@@ -1205,7 +1202,7 @@ export function AiEditWorkspace({
             <div>
               {draftObjects.length === 0 && (
                 <p className="text-[11px] leading-relaxed text-neutral-500 py-2">
-                  「エリア編集」を押して、編集したい範囲（領域）を追加してください。
+                  「＋範囲を追加」を押して、編集したい範囲（領域）を追加してください。
                 </p>
               )}
               <ul className="space-y-2">
