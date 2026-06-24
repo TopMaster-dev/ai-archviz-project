@@ -26,6 +26,7 @@ import {
   incrementHiResDownloadCount,
   isOverHiResLimit,
 } from '../utils/freePlanHiResLimit.js';
+import { buildPreviewFileName } from '../utils/exportFileName.js';
 
 const RENDER_PROMPT =
   'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。';
@@ -42,9 +43,19 @@ type Props = {
   /** 高解像度DL月次制限の判定用（260624）。プラン種別とログインユーザーID。 */
   plan?: string | null;
   userId?: string | null;
+  /** プレビューPNGの書き出しファイル名に使うプロジェクト名（260625）。 */
+  projectName?: string | null;
 };
 
-export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExported, plan, userId }: Props) {
+export function HighResExportDialog({
+  open,
+  onClose,
+  sourceImageDataUrl,
+  onExported,
+  plan,
+  userId,
+  projectName,
+}: Props) {
   const isFreePlan = plan === 'free';
   // 高解像度DLの今月残り回数（フリープランのみ・対象外は Infinity）。表示はダイアログを開いた時点の値。
   const hiResLeft = hiResRemaining(userId, isFreePlan);
@@ -106,12 +117,8 @@ export function HighResExportDialog({ open, onClose, sourceImageDataUrl, onExpor
       try {
         const a = document.createElement('a');
         a.href = src;
-        const wh =
-          sourceNatural && sourceNatural.w > 0 && sourceNatural.h > 0
-            ? `${sourceNatural.w}x${sourceNatural.h}`
-            : 'image';
-        a.download =
-          wh === 'image' ? 'archviz_preview.png' : `archviz_preview_${wh}.png`;
+        // ファイル名 = 日付＋プロジェクト名＋.png（260625 クライアント要望）。
+        a.download = buildPreviewFileName(projectName);
         a.click();
         onExported?.();
         onClose();

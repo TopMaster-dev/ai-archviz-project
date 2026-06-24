@@ -1447,6 +1447,7 @@ export function AiEditWorkspace({
         sourceImageDataUrl={activeVersion?.outputImageDataUrl ?? null}
         plan={projectSession?.plan ?? null}
         userId={authUserId}
+        projectName={projectSession?.projectName ?? null}
         onExported={() => {
           // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3「保存等」）: 書き出し＝採用とみなし good を記録。
           // in-context反映（row 211/219）用に、その版のスタイル傾向も併せて残す。
