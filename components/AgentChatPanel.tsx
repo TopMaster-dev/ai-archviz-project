@@ -255,9 +255,10 @@ export function AgentChatPanel({
           messages.map((m, i) => (
             <div key={`${m.role}-${i}`} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div
-                className={`max-w-[85%] whitespace-pre-wrap break-words rounded-xl px-3 py-2 ${
+                className={`max-w-[85%] cursor-text select-text whitespace-pre-wrap break-words rounded-xl px-3 py-2 ${
                   m.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-white/10 text-neutral-100'
                 }`}
+                style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
               >
                 {m.content}
               </div>
