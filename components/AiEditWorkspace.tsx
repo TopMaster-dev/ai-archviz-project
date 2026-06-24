@@ -1091,7 +1091,13 @@ export function AiEditWorkspace({
           {estimatePanel ?? null}
 
           <div className="flex-1 flex flex-col min-h-0 relative z-10 bg-[#050505]">
-            <div className="flex-1 min-h-0 overflow-y-auto px-3 pt-0 pb-6 space-y-2 md:px-4 md:pb-8 md:space-y-3 scroll-dark">
+            <div
+              className={`flex-1 min-h-0 px-3 pt-0 space-y-2 md:px-4 md:space-y-3 scroll-dark ${
+                activeTool === 'agent'
+                  ? 'flex flex-col overflow-hidden pb-3 md:pb-4'
+                  : 'overflow-y-auto pb-6 md:pb-8'
+              }`}
+            >
             <div>
               <div className="text-[10px] font-black uppercase text-neutral-500 tracking-widest mb-2">
                 AI マジックツール
@@ -1353,22 +1359,26 @@ export function AiEditWorkspace({
               </button>
             </div>
             )}
-            {/* エージェント相談はタブとして右レール内にインライン表示（260624・フローティング廃止）。 */}
+            {/* エージェント相談はタブとして右レール内にインライン表示（260624・フローティング廃止）。
+                flex-1 でレール残り高さいっぱいに広げる。 */}
             {activeTool === 'agent' && (
-              <AgentChatPanel
-                inline
-                open
-                imageDataUrl={activeVersion?.outputImageDataUrl ?? null}
-                projectId={projectSession?.projectId ?? null}
-                onOpenChange={(o) => {
-                  if (!o) setActiveTool('area');
-                }}
-                catalog={agentCatalog}
-                onAddEstimateItem={onAddEstimateItem}
-              />
+              <div className="flex min-h-0 flex-1">
+                <AgentChatPanel
+                  inline
+                  open
+                  imageDataUrl={activeVersion?.outputImageDataUrl ?? null}
+                  projectId={projectSession?.projectId ?? null}
+                  onOpenChange={(o) => {
+                    if (!o) setActiveTool('area');
+                  }}
+                  catalog={agentCatalog}
+                  onAddEstimateItem={onAddEstimateItem}
+                />
+              </div>
             )}
             </div>
 
+            {activeTool !== 'agent' && (
             <div className="z-40 shrink-0 border-t border-white/10 p-3 bg-[#050505] space-y-2">
               {submitError && <p className="text-xs text-red-400 break-words">{submitError}</p>}
               {activeTool === 'area' && emptyCardCount > 0 && (
@@ -1380,33 +1390,32 @@ export function AiEditWorkspace({
                   {projectSession.aiCredits.expired && '（有効期限切れ）'}
                 </p>
               )}
-              {activeTool !== 'agent' && (
-                <button
-                  type="button"
-                  disabled={
-                    !activeVersion ||
-                    isSubmitting ||
-                    !!projectSession?.aiCredits.blocked ||
-                    (activeTool === 'area' &&
-                      (!hasAnyInput || requiresAreaPlacement || emptyCardCount > 0))
-                  }
-                  onClick={activeTool === 'coordinate' ? handleCoordinateExecute : handleClickExecute}
-                  className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:pointer-events-none font-black text-sm"
-                >
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="w-5 h-5 animate-spin" />
-                      生成中…
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="w-5 h-5" />
-                      {activeTool === 'coordinate' ? 'AIでコーディネートを実行' : 'この内容で編集実行'}
-                    </>
-                  )}
-                </button>
-              )}
+              <button
+                type="button"
+                disabled={
+                  !activeVersion ||
+                  isSubmitting ||
+                  !!projectSession?.aiCredits.blocked ||
+                  (activeTool === 'area' &&
+                    (!hasAnyInput || requiresAreaPlacement || emptyCardCount > 0))
+                }
+                onClick={activeTool === 'coordinate' ? handleCoordinateExecute : handleClickExecute}
+                className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:pointer-events-none font-black text-sm"
+              >
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    生成中…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-5 h-5" />
+                    {activeTool === 'coordinate' ? 'AIでコーディネートを実行' : 'この内容で編集実行'}
+                  </>
+                )}
+              </button>
             </div>
+            )}
           </div>
         </aside>
       </div>

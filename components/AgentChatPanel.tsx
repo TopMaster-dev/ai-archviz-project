@@ -194,7 +194,7 @@ export function AgentChatPanel({
     <div
       className={
         inline
-          ? 'flex h-[60vh] min-h-[26rem] w-full flex-col rounded-2xl border border-white/15 bg-neutral-900/60'
+          ? 'flex h-full min-h-0 w-full flex-col rounded-2xl border border-white/15 bg-neutral-900/60'
           : 'fixed bottom-6 right-6 z-[10005] flex h-[28rem] w-[22rem] max-w-[92vw] flex-col rounded-2xl border border-white/15 bg-neutral-900/95 shadow-2xl backdrop-blur'
       }
     >
@@ -214,14 +214,17 @@ export function AgentChatPanel({
               履歴を消去
             </button>
           )}
-          <button
-            type="button"
-            onClick={() => onOpenChange(false)}
-            aria-label="閉じる"
-            className="focus-ring rounded p-1 text-neutral-400 transition hover:bg-white/10 hover:text-white"
-          >
-            <X className="h-4 w-4" />
-          </button>
+          {/* インライン（タブ）表示では閉じる「×」は不要（タブで切替える・260624）。フローティング時のみ表示。 */}
+          {!inline && (
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              aria-label="閉じる"
+              className="focus-ring rounded p-1 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
         </div>
       </div>
 
