@@ -27,6 +27,8 @@ const buttonBaseClassName =
   'inline-flex h-[34px] items-center justify-center px-4 rounded-xl text-[11px] font-black uppercase leading-none tracking-widest transition-all whitespace-nowrap focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/40';
 const activeClassName = 'bg-white text-black shadow-md';
 const inactiveClassName = 'text-white/55 hover:text-white/95 focus-visible:text-white';
+// 「ホーム」ボタンは全ビューで統一の緑（emerald）。モード切替タブと色で区別し、視認性を上げる（260624）。
+const homeClassName = 'bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 hover:text-emerald-100';
 
 export function ModeToggleBar({
   activeMode,
@@ -50,7 +52,7 @@ export function ModeToggleBar({
             onClick={onGoHome}
             disabled={homeBusy}
             title="ホームに戻る（プロジェクト一覧）"
-            className={`${buttonBaseClassName} ${inactiveClassName} gap-1.5 disabled:cursor-not-allowed disabled:opacity-60`}
+            className={`${buttonBaseClassName} ${homeClassName} gap-1.5 disabled:cursor-not-allowed disabled:opacity-60`}
           >
             {homeBusy ? (
               <Loader2 className="h-[15px] w-[15px] animate-spin" />

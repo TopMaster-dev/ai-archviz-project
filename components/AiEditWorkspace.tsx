@@ -349,7 +349,7 @@ export function AiEditWorkspace({
         onClick={onExitToHome}
         disabled={exitToHomeBusy}
         title="ホームに戻る（プロジェクト一覧）"
-        className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-white/10 bg-black/40 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-white/80 shadow-xl backdrop-blur-md transition hover:text-white disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:text-white/80"
+        className="glass pointer-events-auto flex shrink-0 items-center gap-1.5 rounded-2xl border border-emerald-500/30 bg-emerald-500/15 px-4 py-2.5 text-[11px] font-black uppercase tracking-widest text-emerald-300 shadow-xl backdrop-blur-md transition hover:bg-emerald-500/25 hover:text-emerald-100 disabled:cursor-not-allowed disabled:opacity-70 disabled:hover:text-emerald-300"
       >
         {exitToHomeBusy ? (
           <>
