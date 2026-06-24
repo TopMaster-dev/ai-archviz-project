@@ -1407,7 +1407,7 @@ export function AiEditWorkspace({
                 ) : (
                   <>
                     <Sparkles className="w-5 h-5" />
-                    {activeTool === 'coordinate' ? 'AIでコーディネートを実行' : 'この内容で編集実行'}
+                    {activeTool === 'coordinate' ? '実行ボタン' : 'この内容で編集実行'}
                   </>
                 )}
               </button>
