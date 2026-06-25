@@ -142,3 +142,10 @@ canvas {
 @keyframes keyframe-slide-in-top { from { transform: translateY(-100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes keyframe-slide-in-bottom { from { transform: translateY(10px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
 @keyframes keyframe-zoom-in { from { transform: scale(0.95); opacity: 0; } to { transform: scale(1); opacity: 1; } }
+
+/* LP ギャラリーの横スライダー（右→左に自動スクロール・260625）。track を2セット並べ -50% まで移動＝継ぎ目なくループ。 */
+@keyframes lp-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.lp-marquee { -webkit-mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent); mask-image: linear-gradient(to right, transparent, #000 6%, #000 94%, transparent); }
+.lp-marquee-track { animation: lp-marquee 45s linear infinite; will-change: transform; }
+.lp-marquee:hover .lp-marquee-track { animation-play-state: paused; }
+@media (prefers-reduced-motion: reduce) { .lp-marquee-track { animation: none; } }
