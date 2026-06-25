@@ -11,6 +11,8 @@ import {
   Wand2,
   X,
 } from 'lucide-react';
+// LP ギャラリー画像（public/assets/lp-gallery/ の配信URL配列）。vite-plugins/lpGallery.ts が供給（260625）。
+import LP_GALLERY_URLS from 'virtual:lp-gallery';
 
 /**
  * 未ログイン時のランディングページ（管理表 row 37/42/62/67）。
@@ -59,15 +61,13 @@ const STEPS = [
   { icon: Wand2, title: '仕上げる', desc: ['AIでパース化し、', '見積もりまで一気通貫。'] },
 ] as const;
 
-// ギャラリー画像は assets/lp-gallery/ に格納し、フォルダ内の全画像を自動表示する（260625 クライアント要望）。
-// Vite の import.meta.glob でビルド時に全件取り込む＝フォルダへ画像を追加してビルドすれば自動でスライダーに増える。
-const GALLERY_IMAGE_MODULES = import.meta.glob('../../public/assets/lp-gallery/*.{jpg,jpeg,png,webp}', {
-  eager: true,
-  import: 'default',
-}) as Record<string, string>;
-const GALLERY: { src: string; alt: string }[] = Object.entries(GALLERY_IMAGE_MODULES)
-  .sort(([a], [b]) => a.localeCompare(b))
-  .map(([, src]) => ({ src, alt: 'Ariseで生成した内装パースの実例' }));
+// ギャラリー画像は public/assets/lp-gallery/ に格納し、フォルダ内の全画像を自動表示する（260625 クライアント要望）。
+// import.meta.glob は public/ を読めないため、vite-plugins/lpGallery.ts が同フォルダを列挙して 'virtual:lp-gallery'
+// （配信URLの配列・上で import）として供給する。フォルダへ画像を追加してビルド（dev は再起動）すれば自動で増える。
+const GALLERY: { src: string; alt: string }[] = LP_GALLERY_URLS.map((src) => ({
+  src,
+  alt: 'Ariseで生成した内装パースの実例',
+}));
 
 /** LP の実例画像（クリックで拡大）。triggerRef は閉じたときにフォーカスを戻す呼び出し元ボタン。 */
 interface LpLightboxImage {

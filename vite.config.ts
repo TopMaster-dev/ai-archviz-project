@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
+import { lpGalleryPlugin } from './vite-plugins/lpGallery.js';
 import { v2 as cloudinary } from 'cloudinary';
 import path from 'node:path';
 import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
@@ -44,6 +45,7 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [
       react(),
+      lpGalleryPlugin(), // LPギャラリー: public/assets/lp-gallery/ を 'virtual:lp-gallery' で供給（260625）
       {
         name: 'local-api-middleware',
         configureServer(server) {
