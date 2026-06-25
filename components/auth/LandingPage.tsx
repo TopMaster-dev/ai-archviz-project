@@ -10,6 +10,7 @@ import {
   LayoutGrid,
   Wand2,
   X,
+  ChevronDown,
 } from 'lucide-react';
 // LP ギャラリー画像（public/assets/lp-gallery/ の配信URL配列）。vite-plugins/lpGallery.ts が供給（260625）。
 import LP_GALLERY_URLS from 'virtual:lp-gallery';
@@ -308,6 +309,16 @@ export function LandingPage({
 }) {
   const [lightboxImage, setLightboxImage] = useState<LpLightboxImage | null>(null);
   const closeLightbox = useCallback(() => setLightboxImage(null), []);
+  // FAQ アコーディオン（260626）: 既定は全て閉じて LP を短く保つ。各設問を独立してトグル（複数同時開閉可）。
+  const [openFaqs, setOpenFaqs] = useState<Set<number>>(() => new Set());
+  const toggleFaq = useCallback((i: number) => {
+    setOpenFaqs((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  }, []);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   return (
     <div
@@ -619,22 +630,54 @@ export function LandingPage({
           {/* よくある質問（FAQ・260626 クライアント支給） */}
           <section className="pb-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">よくある質問</h2>
-            <dl className="mt-8 max-w-4xl space-y-7">
-              {FAQS.map((f) => (
-                <div key={f.q}>
-                  <dt className="flex gap-2 text-sm font-bold text-emerald-300 sm:text-base">
-                    <span aria-hidden className="shrink-0">Q.</span>
-                    <span>{f.q}</span>
-                  </dt>
-                  <dd className="mt-2 flex gap-2 text-[13px] leading-relaxed text-neutral-400 sm:text-sm">
-                    <span aria-hidden className="shrink-0 font-bold text-neutral-500">A.</span>
-                    <p>
-                      <Jp parts={f.a} />
-                    </p>
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            {/* アコーディオン（トグル）: 既定は閉。クリックで開閉して LP を長くしない（260626 クライアント要望）。 */}
+            <div className="mt-8 max-w-4xl divide-y divide-white/10 border-y border-white/10">
+              {FAQS.map((f, i) => {
+                const isOpen = openFaqs.has(i);
+                const panelId = `faq-panel-${i}`;
+                return (
+                  <div key={f.q}>
+                    <h3>
+                      <button
+                        type="button"
+                        onClick={() => toggleFaq(i)}
+                        aria-expanded={isOpen}
+                        aria-controls={panelId}
+                        className="focus-ring group flex w-full items-start justify-between gap-3 py-4 text-left"
+                      >
+                        <span className="flex gap-2 text-sm font-bold text-emerald-300 transition-colors group-hover:text-emerald-200 sm:text-base">
+                          <span aria-hidden className="shrink-0">Q.</span>
+                          <span>{f.q}</span>
+                        </span>
+                        <ChevronDown
+                          aria-hidden
+                          className={`mt-0.5 h-5 w-5 shrink-0 text-neutral-400 transition-transform duration-300 group-hover:text-neutral-200 ${
+                            isOpen ? 'rotate-180' : ''
+                          }`}
+                        />
+                      </button>
+                    </h3>
+                    {/* grid-rows 0fr→1fr で高さを滑らかにアニメーション（固定高さ不要・内側を overflow-hidden で切り抜き） */}
+                    <div
+                      id={panelId}
+                      role="region"
+                      className={`grid transition-all duration-300 ease-out ${
+                        isOpen ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                      }`}
+                    >
+                      <div className="overflow-hidden">
+                        <p className="flex gap-2 pb-4 text-[13px] leading-relaxed text-neutral-400 sm:text-sm">
+                          <span aria-hidden className="shrink-0 font-bold text-neutral-500">A.</span>
+                          <span>
+                            <Jp parts={f.a} />
+                          </span>
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </section>
 
           {/* お客様からの声（導入事例・260626 クライアント支給） */}
