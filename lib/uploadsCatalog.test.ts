@@ -44,7 +44,8 @@ describe('uploadToFurnitureItem', () => {
     expect(item.name).toBe('chair');
     expect(item.url).toContain('1-chair.glb');
     expect(item.defaultScale).toBe(1);
-    expect(item.footprint2d).toEqual({ widthMm: 1000, depthMm: 1000 });
+    // 暫定 1m 角は付けない（260625）。未計測は undefined → ensureUploadFootprint が実測して埋める。
+    expect(item.footprint2d).toBeUndefined();
   });
 
   it('honors footprint/scale from metadata when present', () => {
@@ -59,7 +60,7 @@ describe('uploadToFurnitureItem', () => {
     const item = uploadToFurnitureItem(
       baseUpload({ metadata: { footprint2d: { widthMm: 'oops', depthMm: NaN }, defaultScale: null } }),
     );
-    expect(item.footprint2d).toEqual({ widthMm: 1000, depthMm: 1000 });
+    expect(item.footprint2d).toBeUndefined();
     expect(item.defaultScale).toBe(1);
   });
 });

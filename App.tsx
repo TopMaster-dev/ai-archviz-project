@@ -47,7 +47,7 @@ import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
-import { uploadToFurnitureItem, uploadToProduct, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -1807,9 +1807,20 @@ const App: React.FC = () => {
       const capMsg = checkStorageCapacity(currentTotal, file.size);
       if (capMsg) { alert(capMsg); return; }
       const row = await uploadUserFile(file, 'model');
-      const item = uploadToFurnitureItem(row);
-      setFurnitureCatalog((prev) => (prev.some((p) => p.id === item.id) ? prev : [...prev, item]));
+      const initialItem = uploadToFurnitureItem(row);
+      // 即座にカタログへ追加（この時点では footprint2d 未計測＝undefined のことがある）。
+      setFurnitureCatalog((prev) => (prev.some((p) => p.id === initialItem.id) ? prev : [...prev, initialItem]));
       setFurnitureCatalogFetchStatus('ready');
+      // バックグラウンドで寸法（バウンディングボックス）を実測し、footprint2d を反映＋永続化（260625・カタログと同様に2D/3Dへ）。
+      void ensureUploadFootprint(row)
+        .then((computed) => {
+          if (computed.footprint2d) {
+            setFurnitureCatalog((prev) =>
+              prev.map((p) => (p.id === initialItem.id ? { ...p, footprint2d: computed.footprint2d } : p)),
+            );
+          }
+        })
+        .catch((e) => console.warn('アップロードモデルの寸法計測に失敗:', e));
     } catch (e) {
       console.warn('3Dモデルのアップロードに失敗:', e);
       alert(e instanceof Error ? e.message : '3Dモデルのアップロードに失敗しました。');
@@ -1894,7 +1905,8 @@ const App: React.FC = () => {
       try {
         const uploads = await listUserUploads('model');
         if (!uploads.length) return;
-        const items = uploads.map(uploadToFurnitureItem);
+        // 既存アップロードも footprint2d を確保（metadata にあれば即時、無ければ実測＋永続化・260625）。
+        const items = await Promise.all(uploads.map((u) => ensureUploadFootprint(u)));
         setFurnitureCatalog((prev) => {
           const seen = new Set(prev.map((p) => p.id));
           const add = items.filter((i) => !seen.has(i.id));
@@ -1983,10 +1995,10 @@ const App: React.FC = () => {
     });
   }, [sketchPoints]);
 
-  // GLTF から家具足跡の基準寸法（未設定のアイテムのみ）
+  // GLTF から家具足跡の基準寸法（footprint2d 未設定のアイテムのみ＝実質ユーザーアップロード）。
+  // カタログ家具は footprint2d を持つため下の per-item フィルタで除外される。実測対象は少数かつ idle 実行なので、
+  // 2D ビューでも実行してアップロード家具のバウンディングボックスを 2D/3D 双方へ反映する（以前の sketch スキップを撤去・260625）。
   useEffect(() => {
-    // 2D軽量フローでは実行時計測を止める（フリーズ回避）
-    if (viewMode === 'sketch') return;
     let cancelled = false;
     const cleanupTasks: Array<() => void> = [];
     const pending = furnitureItemsRef.current.filter((item) => {
@@ -2263,10 +2275,15 @@ const App: React.FC = () => {
           position: [0, placeOnCeiling ? roomHeight / 1000 : defaultY, 0],
           rotation: [0, initialYaw, 0],
           scale: [defaultScale, defaultScale, defaultScale],
-          footprint2d: {
-            width: Number.isFinite(meta.widthMm ?? NaN) ? (meta.widthMm as number) : 1000,
-            depth: Number.isFinite(meta.depthMm ?? NaN) ? (meta.depthMm as number) : 700
-          },
+          // アップロード家具を寸法未計測(fallback)のまま配置した場合は footprint2d を付けない＝
+          // 下の実測効果が modelFootprintBaseMm を計測して 2D/3D に正しい寸法を反映する（配置レース対策・260625）。
+          footprint2d:
+            meta.source === 'fallback' && catalogItem.type === UPLOAD_FURNITURE_TYPE
+              ? undefined
+              : {
+                  width: Number.isFinite(meta.widthMm ?? NaN) ? (meta.widthMm as number) : 1000,
+                  depth: Number.isFinite(meta.depthMm ?? NaN) ? (meta.depthMm as number) : 700,
+                },
           modelForwardYawDeg: meta.forwardYawDeg ?? 0,
           ceilingMount: placeOnCeiling,
           customBrand: catalogItem.brand ?? productMeta.brand,
