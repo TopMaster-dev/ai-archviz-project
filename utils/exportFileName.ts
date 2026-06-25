@@ -26,3 +26,16 @@ export function buildPreviewFileName(projectName?: string | null, now: Date = ne
   const safe = sanitizeFileNamePart((projectName ?? '').trim()) || 'プロジェクト';
   return `${exportDateStamp(now)}_${safe}.png`;
 }
+
+/**
+ * 高解像度書き出しのファイル名 = 日付＋プロジェクト名＋DPI＋寸法＋.png（260625 クライアント要望 #1）。
+ * 複数プリセット（300/250/200/150 dpi）をダウンロードした際に、ファイル名で各種設定の違いが分かるようにする。
+ */
+export function buildHiResFileName(
+  projectName: string | null | undefined,
+  spec: { dpi: number; width: number; height: number },
+  now: Date = new Date(),
+): string {
+  const safe = sanitizeFileNamePart((projectName ?? '').trim()) || 'プロジェクト';
+  return `${exportDateStamp(now)}_${safe}_${spec.dpi}dpi_${spec.width}x${spec.height}.png`;
+}

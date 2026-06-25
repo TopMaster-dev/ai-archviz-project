@@ -26,7 +26,7 @@ import {
   incrementHiResDownloadCount,
   isOverHiResLimit,
 } from '../utils/freePlanHiResLimit.js';
-import { buildPreviewFileName } from '../utils/exportFileName.js';
+import { buildPreviewFileName, buildHiResFileName } from '../utils/exportFileName.js';
 
 const RENDER_PROMPT =
   'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。';
@@ -47,6 +47,9 @@ type Props = {
   projectName?: string | null;
 };
 
+/** 書き出し完了後に保持するダウンロード対象（再ダウンロード用・260625 #4）。 */
+type ExportResult = { url: string; fileName: string; kind: 'preview' | 'hiRes' };
+
 export function HighResExportDialog({
   open,
   onClose,
@@ -65,6 +68,9 @@ export function HighResExportDialog({
   const [selectedIndex, setSelectedIndex] = useState(PREVIEW_INDEX);
   const [sourceNatural, setSourceNatural] = useState<{ w: number; h: number } | null>(null);
   const [sourceNaturalLoading, setSourceNaturalLoading] = useState(false);
+  // #4: 書き出し完了後のダウンロード対象を保持し、保存をキャンセルしても再ダウンロードできるようにする
+  // （高コストな高解像度の再レンダを無駄にしない）。
+  const [result, setResult] = useState<ExportResult | null>(null);
 
   const isPreview = selectedIndex === PREVIEW_INDEX;
   const dpiPreset: ExportPreset16x9 | null = !isPreview
@@ -74,8 +80,16 @@ export function HighResExportDialog({
   useEffect(() => {
     if (open) {
       setSelectedIndex(PREVIEW_INDEX);
+      setResult(null);
+      setError(null);
     }
   }, [open]);
+
+  // プリセット変更時は前回のダウンロード結果をクリア（別設定の古い結果を再ダウンロードさせない）。
+  useEffect(() => {
+    setResult(null);
+    setError(null);
+  }, [selectedIndex]);
 
   useEffect(() => {
     if (!open || !sourceImageDataUrl) {
@@ -104,6 +118,19 @@ export function HighResExportDialog({
 
   const footerLines = isPreview ? exportPreviewFooterLines() : exportPresetFooterLines(dpiPreset!);
 
+  // #4: 保持済みの result を使ってダウンロードをトリガー（再生成・API 呼び出し・カウント消費なし）。
+  // ブラウザの「保存ダイアログ」をキャンセルしても、これで何度でも保存し直せる。
+  const triggerDownload = (res: ExportResult) => {
+    try {
+      const a = document.createElement('a');
+      a.href = res.url;
+      a.download = res.fileName;
+      a.click();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'ダウンロードエラー');
+    }
+  };
+
   const runExport = async () => {
     if (!sourceImageDataUrl) {
       setError('書き出す画像がありません。');
@@ -114,17 +141,15 @@ export function HighResExportDialog({
     const src = await ensureDataUrl(sourceImageDataUrl);
 
     if (isPreview) {
-      try {
-        const a = document.createElement('a');
-        a.href = src;
-        // ファイル名 = 日付＋プロジェクト名＋.png（260625 クライアント要望）。
-        a.download = buildPreviewFileName(projectName);
-        a.click();
-        onExported?.();
-        onClose();
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'エラー');
-      }
+      // プレビューは再生成しない＝即時。結果を保持してダイアログは閉じない（再ダウンロード可能・#4）。
+      const previewResult: ExportResult = {
+        url: src,
+        fileName: buildPreviewFileName(projectName), // 日付＋プロジェクト名＋.png
+        kind: 'preview',
+      };
+      setResult(previewResult);
+      triggerDownload(previewResult);
+      onExported?.();
       return;
     }
 
@@ -155,14 +180,18 @@ export function HighResExportDialog({
       if (isOverHiResLimit(userId, isFreePlan)) {
         url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
       }
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `archviz_print_${p.dpi}dpi_${p.width}x${p.height}.png`;
-      a.click();
-      // 成功した高解像度DLのみ1消費（API失敗/キャンセルでは消費しない）。
+      // #4: 高コストな再レンダ結果を保持し、保存をキャンセルしても再ダウンロードできるようにする（ダイアログは閉じない）。
+      // ファイル名 = 日付＋プロジェクト名＋dpi＋寸法＋.png（#1: プリセット毎に区別できる）。
+      const exportResult: ExportResult = {
+        url,
+        fileName: buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height }),
+        kind: 'hiRes',
+      };
+      setResult(exportResult);
+      triggerDownload(exportResult);
+      // 消費はレンダー1回につき1回だけ（再ダウンロードでは消費しない・成功時のみ）。
       incrementHiResDownloadCount(userId, isFreePlan);
       onExported?.();
-      onClose();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');
     } finally {
@@ -198,6 +227,17 @@ export function HighResExportDialog({
           </button>
         </div>
         <div className="p-4 space-y-3 text-xs text-neutral-300">
+          {result && (
+            <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3">
+              <p className="font-bold text-emerald-300">✓ ダウンロードを開始しました</p>
+              <p className="mt-1 break-all font-mono text-[11px] text-neutral-300">{result.fileName}</p>
+              <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">
+                ダウンロードが始まらない、または保存ダイアログをキャンセルした場合は、下の「再ダウンロード」から保存し直せます（再生成は行いません）。
+              </p>
+            </div>
+          )}
+          {!result && (
+            <>
           <p className="text-[10px] text-neutral-500 leading-relaxed">
             高解像（300–150 dpi 相当）はクラウド API で再レンダ後に目標ピクセルへ合わせます。プレビュー用は再生成しません。
           </p>
@@ -281,32 +321,55 @@ export function HighResExportDialog({
                 今月の無料高解像ダウンロード（{FREE_PLAN_HIRES_DL_PER_MONTH}回）を使い切りました。これ以降の高解像書き出しには「フリープラン サンプル」透かしが入ります。アップグレードで透かしなしに。
               </p>
             ))}
+            </>
+          )}
           {error && <p className="text-red-400 break-words">{error}</p>}
         </div>
         <div className="flex gap-2 justify-end px-4 py-3 border-t border-white/10 bg-black/20">
-          <button
-            type="button"
-            disabled={busy}
-            onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-zinc-800 text-sm font-bold text-white disabled:opacity-40"
-          >
-            キャンセル
-          </button>
-          <button
-            type="button"
-            disabled={busy || !sourceImageDataUrl || (isPreview && sourceNaturalLoading)}
-            onClick={() => void runExport()}
-            className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-bold text-white disabled:opacity-40 flex items-center gap-2"
-          >
-            {busy ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                処理中…
-              </>
-            ) : (
-              'PNG でダウンロード'
-            )}
-          </button>
+          {result ? (
+            <>
+              <button
+                type="button"
+                onClick={() => setResult(null)}
+                className="px-4 py-2 rounded-lg bg-zinc-800 text-sm font-bold text-white"
+              >
+                別の設定で書き出す
+              </button>
+              <button
+                type="button"
+                onClick={() => triggerDownload(result)}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-bold text-white"
+              >
+                再ダウンロード
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                type="button"
+                disabled={busy}
+                onClick={onClose}
+                className="px-4 py-2 rounded-lg bg-zinc-800 text-sm font-bold text-white disabled:opacity-40"
+              >
+                キャンセル
+              </button>
+              <button
+                type="button"
+                disabled={busy || !sourceImageDataUrl || (isPreview && sourceNaturalLoading)}
+                onClick={() => void runExport()}
+                className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-bold text-white disabled:opacity-40 flex items-center gap-2"
+              >
+                {busy ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    処理中…
+                  </>
+                ) : (
+                  'PNG でダウンロード'
+                )}
+              </button>
+            </>
+          )}
         </div>
       </div>
     </div>
