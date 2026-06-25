@@ -18,7 +18,7 @@ import LP_GALLERY_URLS from 'virtual:lp-gallery';
  * 未ログイン時のランディングページ（管理表 row 37/42/62/67）。
  * クライアント支給のLPデザイン（LPデザイン_キャッチコピー_1900.pdf）と原稿（_文字.txt）に基づく構成:
  * ヒーロー（キャッチコピー＋PR/操作デモ動画）→ ギャラリー → 主な機能 → 3ステップ（実例画像つき）→
- * 実績数値 → AIデザイン編集 → AIエージェント（各リードコピー＋デモ枠・260619 クライアントデザイン）→ クロージング（招待制）→ フッター。
+ * 実績数値 → AIデザイン編集 → AIエージェント（各リードコピー＋デモ枠・260619 クライアントデザイン）→ 比較表（Arise vs 汎用AI vs 3D/CAD・260625）→ クロージング（招待制）→ フッター。
  * 新規登録は招待制のため公開フォームは出さず、招待制である旨を案内し onLogin でログインへ。
  *
  * スクロール: #root が overflow:hidden（エディタの固定ビューポート用）のため、
@@ -477,6 +477,43 @@ export function LandingPage({
               <img
                 src="/lp/lp-ai-agent.webp"
                 alt="AIエージェント：和室を執務室に再提案している様子"
+                loading="lazy"
+                className="w-full"
+              />
+            </div>
+          </section>
+
+          {/* 圧倒的な効率（比較表）: Arise vs 汎用画像生成AI vs 3D・CADソフト（クライアント支給 lp-plan.jpg・260625） */}
+          <section className="pb-20">
+            <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">
+              <span className="inline-block">圧倒的な効率が、</span>
+              <br className="hidden sm:block" />
+              <span className="inline-block">「考える時間」を取り戻す</span>
+            </h2>
+            <p className="mb-6 mt-5 max-w-3xl text-sm leading-relaxed text-neutral-400 sm:text-base">
+              <Jp
+                parts={[
+                  '労働人口の減少と商談の長期化、',
+                  '建築・内装業界が抱える慢性的な課題に対し、',
+                  '私たちは「テクノロジーによる圧倒的な時短」で応えます。',
+                  '現在、世界のAI画像生成市場は',
+                  '2,000億円規模へと急成長を遂げていますが、',
+                  'その多くは「寸法を無視した非現実的な画像」しか生成できず、',
+                  'プロの実務には耐えられません。',
+                  'だからこそ私たちは、',
+                  'AIの表現力と建築の正確性を融合させた、',
+                  '実務特化型のプラットフォームを創りました。',
+                ]}
+              />
+            </p>
+            <p className="mb-10 max-w-3xl text-sm font-bold leading-relaxed text-emerald-300 sm:text-base">
+              <Jp parts={['Ariseは、単なる作画ツールではなく、', '業界の新たなインフラを目指します。']} />
+            </p>
+            {/* 比較表（クライアント支給画像・260625）。ギャラリー以外は拡大なし＝素の img。 */}
+            <div className="overflow-hidden rounded-3xl border border-white/10 bg-neutral-900">
+              <img
+                src="/lp/lp-plan.jpg"
+                alt="Arise・汎用画像生成AI・3D/CADソフトの比較表（寸法の正確さ／操作・導入難易度／実務・商談連携）"
                 loading="lazy"
                 className="w-full"
               />
