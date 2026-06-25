@@ -61,7 +61,7 @@ const STEPS = [
 
 // ギャラリー画像は assets/lp-gallery/ に格納し、フォルダ内の全画像を自動表示する（260625 クライアント要望）。
 // Vite の import.meta.glob でビルド時に全件取り込む＝フォルダへ画像を追加してビルドすれば自動でスライダーに増える。
-const GALLERY_IMAGE_MODULES = import.meta.glob('../../assets/lp-gallery/*.{jpg,jpeg,png,webp}', {
+const GALLERY_IMAGE_MODULES = import.meta.glob('../../public/assets/lp-gallery/*.{jpg,jpeg,png,webp}', {
   eager: true,
   import: 'default',
 }) as Record<string, string>;
