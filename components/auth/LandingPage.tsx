@@ -11,6 +11,8 @@ import {
   Wand2,
   X,
   ChevronDown,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 // LP ギャラリー画像（public/assets/lp-gallery/ の配信URL配列）。vite-plugins/lpGallery.ts が供給（260625）。
 import LP_GALLERY_URLS from 'virtual:lp-gallery';
@@ -319,6 +321,14 @@ export function LandingPage({
       return next;
     });
   }, []);
+  // お客様の声スライダー（260626）: 1件ずつ表示・前後/ドット/スワイプで移動（循環）。
+  const testimonialCount = TESTIMONIALS.length;
+  const [testimonialIdx, setTestimonialIdx] = useState(0);
+  const goTestimonial = useCallback(
+    (delta: number) => setTestimonialIdx((i) => (i + delta + testimonialCount) % testimonialCount),
+    [testimonialCount],
+  );
+  const swipeStartX = useRef<number | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   return (
     <div
@@ -683,17 +693,85 @@ export function LandingPage({
           {/* お客様からの声（導入事例・260626 クライアント支給） */}
           <section className="pb-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">お客様からの声</h2>
-            <div className="mt-8 max-w-4xl space-y-8">
-              {TESTIMONIALS.map((t) => (
-                <div key={t.label}>
-                  <p className="text-[12px] font-bold tracking-wide text-emerald-300">【{t.label}】</p>
-                  <p className="mt-1.5 text-base font-black leading-snug text-white sm:text-lg">「{t.quote}」</p>
-                  <p className="mt-3 text-[11px] font-bold text-neutral-500">■ {t.who}</p>
-                  <p className="mt-1.5 text-[13px] leading-relaxed text-neutral-400 sm:text-sm">
-                    <Jp parts={t.body} />
-                  </p>
+            {/* スライダー（260626）: 1件ずつ表示。track を translateX し、前後ボタン/ドット/スワイプで移動。 */}
+            <div
+              className="mt-8 max-w-4xl"
+              role="region"
+              aria-roledescription="カルーセル"
+              aria-label="お客様からの声"
+            >
+              <div
+                className="overflow-hidden"
+                onPointerDown={(e) => {
+                  swipeStartX.current = e.clientX;
+                }}
+                onPointerUp={(e) => {
+                  const start = swipeStartX.current;
+                  swipeStartX.current = null;
+                  if (start === null) return;
+                  const dx = e.clientX - start;
+                  if (dx > 50) goTestimonial(-1);
+                  else if (dx < -50) goTestimonial(1);
+                }}
+              >
+                <div
+                  className="flex transition-transform duration-500 ease-out"
+                  style={{ transform: `translateX(-${testimonialIdx * 100}%)` }}
+                >
+                  {TESTIMONIALS.map((t, i) => (
+                    <div
+                      key={t.label}
+                      className="w-full shrink-0 px-0.5"
+                      role="group"
+                      aria-roledescription="スライド"
+                      aria-label={`${i + 1} / ${testimonialCount}`}
+                      aria-hidden={i !== testimonialIdx}
+                    >
+                      <div className="h-full select-none rounded-2xl border border-white/10 bg-neutral-900/50 p-6 sm:p-8">
+                        <p className="text-[12px] font-bold tracking-wide text-emerald-300">【{t.label}】</p>
+                        <p className="mt-2 text-base font-black leading-snug text-white sm:text-xl">「{t.quote}」</p>
+                        <p className="mt-4 text-[11px] font-bold text-neutral-500">■ {t.who}</p>
+                        <p className="mt-2 text-[13px] leading-relaxed text-neutral-400 sm:text-sm">
+                          <Jp parts={t.body} />
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+              {/* 操作: 前へ / ドット / 次へ */}
+              <div className="mt-5 flex items-center justify-center gap-4">
+                <button
+                  type="button"
+                  onClick={() => goTestimonial(-1)}
+                  aria-label="前のお客様の声"
+                  className="focus-ring flex h-9 w-9 items-center justify-center rounded-full border border-white/15 text-neutral-300 transition hover:border-white/30 hover:text-white"
+                >
+                  <ChevronLeft className="h-5 w-5" />
+                </button>
+                <div className="flex items-center gap-2">
+                  {TESTIMONIALS.map((t, i) => (
+                    <button
+                      key={t.label}
+                      type="button"
+                      onClick={() => setTestimonialIdx(i)}
+                      aria-label={`${i + 1}件目を表示`}
+                      aria-current={i === testimonialIdx}
+                      className={`h-2 rounded-full transition-all ${
+                        i === testimonialIdx ? 'w-6 bg-emerald-400' : 'w-2 bg-white/25 hover:bg-white/40'
+                      }`}
+                    />
+                  ))}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => goTestimonial(1)}
+                  aria-label="次のお客様の声"
+                  className="focus-ring flex h-9 w-9 items-center justify-center rounded-full border border-white/15 text-neutral-300 transition hover:border-white/30 hover:text-white"
+                >
+                  <ChevronRight className="h-5 w-5" />
+                </button>
+              </div>
             </div>
           </section>
 
