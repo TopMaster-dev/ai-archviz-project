@@ -650,7 +650,7 @@ export function LandingPage({
           <section className="pb-20">
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">よくある質問</h2>
             {/* アコーディオン（トグル）: 既定は閉。クリックで開閉して LP を長くしない（260626 クライアント要望）。 */}
-            <div className="mt-8 max-w-4xl divide-y divide-white/10 border-y border-white/10">
+            <div className="mt-8 divide-y divide-white/10 border-y border-white/10">
               {FAQS.map((f, i) => {
                 const isOpen = openFaqs.has(i);
                 const panelId = `faq-panel-${i}`;
@@ -704,7 +704,7 @@ export function LandingPage({
             <h2 className="text-3xl font-black leading-snug sm:text-4xl lg:text-5xl">お客様からの声</h2>
             {/* スライダー（260626）: 1件ずつ表示。track を translateX し、前後ボタン/ドット/スワイプで移動。 */}
             <div
-              className="mt-8 max-w-4xl"
+              className="mt-8"
               role="region"
               aria-roledescription="カルーセル"
               aria-label="お客様からの声"
