@@ -329,6 +329,15 @@ export function LandingPage({
     [testimonialCount],
   );
   const swipeStartX = useRef<number | null>(null);
+  // 自動再生（260626）: 一定間隔で次へ。hover/フォーカス中は一時停止、操作で testimonialIdx が変わるとタイマー再起動、
+  // prefers-reduced-motion 尊重。setTimeout を testimonialIdx に紐付けることで「最後の遷移から N 秒後に次へ」を実現。
+  const [testimonialPaused, setTestimonialPaused] = useState(false);
+  useEffect(() => {
+    if (testimonialPaused || testimonialCount <= 1) return;
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) return;
+    const id = window.setTimeout(() => goTestimonial(1), 6000);
+    return () => window.clearTimeout(id);
+  }, [testimonialIdx, testimonialPaused, testimonialCount, goTestimonial]);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   return (
     <div
@@ -699,6 +708,10 @@ export function LandingPage({
               role="region"
               aria-roledescription="カルーセル"
               aria-label="お客様からの声"
+              onMouseEnter={() => setTestimonialPaused(true)}
+              onMouseLeave={() => setTestimonialPaused(false)}
+              onFocusCapture={() => setTestimonialPaused(true)}
+              onBlurCapture={() => setTestimonialPaused(false)}
             >
               <div
                 className="overflow-hidden"
