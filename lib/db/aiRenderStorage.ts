@@ -8,6 +8,11 @@ import { getSupabase } from './supabaseClient.js';
 //
 // すべてベストエフォート（失敗時は従来どおり base64 を保持＝動作を壊さない）。
 // 既存の 'user-uploads' バケット（所有者フォルダ書き込み可・公開読み取りのRLS）を再利用するため、新規マイグレ不要。
+//
+// 容量カウントについて（260626）: ここで保存する生成画像は {uid}/ai-render/... に置かれ、
+// ホーム画面の使用量表示・容量警告メール（storage_usage_self / storage_warning_targets が storage.objects を
+// 集計）に「含まれて」数えられる。ただし手動アップロード（uploads.ts の checkStorageCapacity）と異なり、
+// 生成自体は容量上限でブロックしない（生成フロー中断を避けるため意図的）。＝上限は AI生成に対しては soft。
 
 const BUCKET = 'user-uploads';
 

@@ -1,5 +1,5 @@
 import { getSupabase } from './supabaseClient.js';
-import { STORAGE_SOFT_LIMIT_BYTES } from '../storageLimits.js';
+import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION } from '../storageLimits.js';
 
 // ユーザーアップロード資産（3Dモデル / テクスチャ）の保存・一覧・削除。
 //
@@ -82,7 +82,41 @@ export function validateUpload(file: File, kind: UploadKind): string | null {
 
 // 容量上限（管理表 row 31）は lib/storageLimits.ts を単一の真実源とし、ここから再エクスポートする
 // （既存の import 互換: UploadPanel などは uploads.ts から取り込む）。
-export { STORAGE_SOFT_LIMIT_BYTES };
+export { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION };
+
+/** ホーム画面の使用量表示で扱う、種別ごと＋合計のバイト数。 */
+export interface StorageUsage {
+  totalBytes: number;
+  byKind: { model: number; texture: number; aiRender: number; other: number };
+}
+
+/**
+ * 本人の Storage 使用量（バケット実体の合計）を種別ごとに取得する。
+ * user_uploads 台帳ではなく storage.objects を数える RPC（storage_usage_self）を使うため、
+ * 台帳に記録しない AI生成画像（ai-render フォルダ）も含まれる。
+ * RPC 未適用 / 未構成 / 失敗時は null（呼び出し側は台帳合計にフォールバックして表示を壊さない）。
+ */
+export async function getStorageUsageSelf(): Promise<StorageUsage | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb.rpc('storage_usage_self');
+  if (error || !data) return null;
+  const d = data as { total?: unknown; by_kind?: Record<string, unknown> };
+  const rawTotal = Number(d.total);
+  if (!Number.isFinite(rawTotal) || rawTotal < 0) return null; // RPC の形が不正 → 台帳合計にフォールバック
+  const bk = d.by_kind ?? {};
+  const num = (v: unknown): number => {
+    const n = Number(v);
+    return Number.isFinite(n) && n > 0 ? n : 0;
+  };
+  const model = num(bk.model);
+  const texture = num(bk.texture);
+  const aiRender = num(bk['ai-render']);
+  return {
+    totalBytes: rawTotal,
+    byKind: { model, texture, aiRender, other: Math.max(0, rawTotal - (model + texture + aiRender)) },
+  };
+}
 
 /**
  * 追加アップロードが総容量のソフト上限を超えるか判定する（純粋関数・テスト対象）。

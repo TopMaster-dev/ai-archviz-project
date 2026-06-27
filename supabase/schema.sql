@@ -645,6 +645,28 @@ create policy "user_uploads_storage_select_own" on storage.objects
   for select to authenticated
   using (bucket_id = 'user-uploads' and (storage.foldername(name))[1] = auth.uid()::text);
 
+-- 本人の Storage 使用量（バケット実体の合計バイト）を種別ごとに返す（ホーム画面の使用量表示用・260626）。
+-- user_uploads 台帳ではなく storage.objects の実体を数えるため、台帳に記録しない AI生成画像（ai-render フォルダ）も含まれる。
+-- パス構造 {userId}/{kind}/...（kind = model / texture / ai-render）の第2フォルダを種別キーにする。
+-- SECURITY DEFINER（storage スキーマ参照のため）だが auth.uid() のフォルダに限定（他人分は集計しない）。
+create or replace function storage_usage_self()
+returns jsonb
+language sql security definer set search_path = public as $$
+  with per_kind as (
+    select coalesce((storage.foldername(name))[2], 'other') as kind,
+           sum(coalesce((metadata->>'size')::bigint, 0)) as bytes
+    from storage.objects
+    where bucket_id = 'user-uploads'
+      and (storage.foldername(name))[1] = auth.uid()::text
+    group by 1
+  )
+  select jsonb_build_object(
+    'total', coalesce((select sum(bytes) from per_kind), 0),
+    'by_kind', coalesce((select jsonb_object_agg(kind, bytes) from per_kind), '{}'::jsonb)
+  );
+$$;
+grant execute on function public.storage_usage_self() to authenticated;
+
 -- ---------------------------------------------------------------------------
 -- 11) pg_cron スケジュール（拡張が無い環境でも失敗しないよう例外を握りつぶす）
 -- ---------------------------------------------------------------------------
@@ -690,8 +712,8 @@ $$;
 revoke execute on function public.purge_warning_targets() from public, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 容量警告メール（管理表 row 31）。本人のアップロード総容量がしきい値（既定=上限500MBの80%=400MB）に
--- 達したユーザーへ日次でメール通知する（Vercel Cron → api/cron/storage-warning）。重複送信防止に
+-- 容量警告メール（管理表 row 31）。本人の Storage 使用量（バケット実体・AI生成画像含む）がしきい値
+-- （既定=上限100MBの70%=70MB）に達したユーザーへ日次でメール通知する（Vercel Cron → api/cron/storage-warning）。重複送信防止に
 -- storage_warnings へ最終通知時刻と通知時点の総容量を記録し、クールダウン期間内かつ容量が増えていなければ
 -- 再送しない。書き込みは cron の service_role のみ（INSERT/UPDATE ポリシーを作らない＝RLSで一般ユーザー不可）。
 -- ---------------------------------------------------------------------------
@@ -708,19 +730,24 @@ create policy "storage_warnings: read own" on storage_warnings
 -- 通知対象（本人の総容量がしきい値以上で、未通知 or クールダウン経過 or 前回通知時より容量増加）を返す。
 -- 個人情報（メール）を返すため anon/authenticated には公開しない（cron の service_role のみ）。
 create or replace function storage_warning_targets(
-  p_threshold_bytes bigint default 419430400,  -- 既定 400MB（= 500MB 上限の 80%）
+  p_threshold_bytes bigint default 73400320,  -- 既定 70MB（= 100MB 上限の 70%）
   p_cooldown_days   int    default 7
 )
 returns table (owner_id uuid, owner_email text, total_bytes bigint)
 language sql security definer set search_path = public as $$
-  select t.owner_id, u.email, t.total_bytes
+  -- 使用量は Storage バケット実体（storage.objects）の合計で判定する（台帳に無い AI生成画像も含めるため）。
+  -- フォルダ名(=ユーザーID)は uuid へキャストせず text のまま auth.users.id::text と突き合わせる
+  -- （想定外の非UUIDフォルダがあってもキャストエラーで cron 全体が落ちないようにする）。
+  select u.id, u.email, t.total_bytes
   from (
-    select owner_id, sum(coalesce(bytes, 0))::bigint as total_bytes
-    from user_uploads
-    group by owner_id
+    select (storage.foldername(o.name))[1] as owner_folder,
+           sum(coalesce((o.metadata->>'size')::bigint, 0))::bigint as total_bytes
+    from storage.objects o
+    where o.bucket_id = 'user-uploads'
+    group by 1
   ) t
-  join auth.users u on u.id = t.owner_id
-  left join storage_warnings w on w.owner_id = t.owner_id
+  join auth.users u on u.id::text = t.owner_folder
+  left join storage_warnings w on w.owner_id = u.id
   where t.total_bytes >= p_threshold_bytes
     and u.email is not null
     and (

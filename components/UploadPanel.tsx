@@ -4,10 +4,13 @@ import {
   ACCEPTED_EXT,
   checkStorageCapacity,
   deleteUserUpload,
+  getStorageUsageSelf,
   listUserUploads,
   STORAGE_SOFT_LIMIT_BYTES,
+  STORAGE_WARN_FRACTION,
   updateUserUploadMetadata,
   uploadUserFile,
+  type StorageUsage,
   type UploadKind,
   type UserUpload,
 } from '../lib/db/uploads.js';
@@ -87,6 +90,8 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   const { configured } = useAuth();
   const confirm = useConfirm();
   const [uploads, setUploads] = useState<UserUpload[]>([]);
+  // 使用量はバケット実体の合計（AI生成画像を含む・RPC）。未適用環境では null→台帳合計にフォールバック。
+  const [usage, setUsage] = useState<StorageUsage | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyKind, setBusyKind] = useState<UploadKind | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -101,10 +106,20 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const textureInputRef = useRef<HTMLInputElement | null>(null);
 
+  // 使用量（バケット実体）の再取得。アップロード/削除/初期表示後に呼ぶ。
+  const refreshUsage = async () => {
+    try {
+      setUsage(await getStorageUsageSelf());
+    } catch {
+      setUsage(null); // 失敗時は台帳合計にフォールバック
+    }
+  };
+
   const refresh = async () => {
     setLoading(true);
     try {
-      setUploads(await listUserUploads());
+      const [list] = await Promise.all([listUserUploads(), refreshUsage()]);
+      setUploads(list);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '一覧の取得に失敗しました。');
     } finally {
@@ -132,7 +147,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   // 実アップロード（モデルは即時、テクスチャはポップアップ確定後）。
   const doUpload = async (file: File, kind: UploadKind, category: MaterialCategory | null) => {
     // 容量警告プロセス（管理表 row 31）: 本人の総容量がソフト上限に達する/超える追加はブロックする。
-    const currentTotal = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+    const currentTotal = usage?.totalBytes ?? uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
     const capacityMsg = checkStorageCapacity(currentTotal, file.size);
     if (capacityMsg) {
       setMsg(capacityMsg);
@@ -145,6 +160,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       const metadata = kind === 'texture' && category ? { category } : undefined;
       const row = await uploadUserFile(file, kind, { metadata });
       setUploads((prev) => [row, ...prev]);
+      await refreshUsage(); // バケット実体の合計を更新（busy 解除前に最新化＝連続アップロードでも上限判定が古くならない）
       const catNote = kind === 'texture' ? `（${textureCategoryLabel(category)}）` : '';
       setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
       if (kind === 'texture') onUploadsChanged?.(); // エディタの素材一覧へ即時反映
@@ -165,7 +181,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   const onTexturePicked = (file: File | undefined) => {
     if (textureInputRef.current) textureInputRef.current.value = '';
     if (!file) return;
-    const currentTotal = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+    const currentTotal = usage?.totalBytes ?? uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
     const capacityMsg = checkStorageCapacity(currentTotal, file.size);
     if (capacityMsg) {
       setMsg(capacityMsg);
@@ -211,6 +227,7 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       // 削除したテクスチャが現在のプロジェクトの壁/床等に割り当て済みなら既定へ戻す。
       scrubDeletedTextureFromProject(u);
       setUploads((prev) => prev.filter((x) => x.id !== u.id));
+      await refreshUsage(); // バケット実体の合計を更新（バー/数値）
       if (u.kind === 'texture') onUploadsChanged?.(); // 削除を素材一覧から除去
     } catch (e) {
       setMsg(e instanceof Error ? e.message : '削除に失敗しました。');
@@ -228,12 +245,31 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   }
 
   const busy = busyKind != null;
-  // 容量警告（管理表 row 31）: 本人のアップロード合計と上限しきい値。接近で警告し、超過する追加はブロックする。
-  const totalBytes = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+  // 容量警告（管理表 row 31）: 使用量はバケット実体の合計（AI生成画像を含む・RPC）。
+  // RPC 未取得時は台帳合計にフォールバック（表示を壊さない）。接近で警告し、超過する追加はブロックする。
+  const ledgerTotal = uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+  const totalBytes = usage?.totalBytes ?? ledgerTotal;
   const usagePct = Math.min(100, Math.round((totalBytes / STORAGE_SOFT_LIMIT_BYTES) * 100));
   const overLimit = totalBytes >= STORAGE_SOFT_LIMIT_BYTES;
-  const nearLimit = !overLimit && usagePct >= 80;
+  const nearLimit = !overLimit && usagePct >= STORAGE_WARN_FRACTION * 100;
   const fmtMB = (b: number) => (b / (1024 * 1024)).toFixed(1);
+
+  // 色分けバー（260626 クライアント要望）: 種別ごとのバイト数を1本のバーに積む（iPhone のストレージ表示風）。
+  // RPC 未取得時は台帳から model/texture のみ算出（AI生成画像は 0 表示）。
+  const byKind = usage?.byKind ?? {
+    model: uploads.filter((u) => u.kind === 'model').reduce((s, u) => s + (u.bytes ?? 0), 0),
+    texture: uploads.filter((u) => u.kind === 'texture').reduce((s, u) => s + (u.bytes ?? 0), 0),
+    aiRender: 0,
+    other: 0,
+  };
+  const segments = [
+    { key: 'model', label: '3Dモデル', bytes: byKind.model, color: 'bg-emerald-500' },
+    { key: 'texture', label: 'テクスチャ画像', bytes: byKind.texture, color: 'bg-sky-500' },
+    { key: 'ai', label: 'AI生成画像', bytes: byKind.aiRender, color: 'bg-violet-500' },
+    { key: 'other', label: 'その他', bytes: byKind.other, color: 'bg-neutral-400' },
+  ].filter((s) => s.bytes > 0);
+  // バー幅の分母: 上限超過時は実合計（=セグメント合計）でフルバー、通常は上限基準。
+  const barDenom = Math.max(STORAGE_SOFT_LIMIT_BYTES, totalBytes, 1);
 
   return (
     <div className="rounded-lg bg-neutral-900/60 p-3 text-xs text-neutral-200">
@@ -251,12 +287,28 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
             {fmtMB(totalBytes)} / {fmtMB(STORAGE_SOFT_LIMIT_BYTES)} MB
           </span>
         </div>
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-          <div
-            className={`h-full rounded-full transition-all ${overLimit ? 'bg-red-500' : nearLimit ? 'bg-amber-500' : 'bg-emerald-500'}`}
-            style={{ width: `${Math.max(2, usagePct)}%` }}
-          />
+        {/* 色分けバー: 種別ごとに色を変えて1本に積む（AI生成画像も含む） */}
+        <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
+          {segments.map((s) => (
+            <div
+              key={s.key}
+              className={`h-full ${s.color}`}
+              style={{ width: `${(s.bytes / barDenom) * 100}%` }}
+              title={`${s.label} ${fmtMB(s.bytes)}MB`}
+            />
+          ))}
         </div>
+        {/* 凡例: 色・ラベル・容量 */}
+        {segments.length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-neutral-400">
+            {segments.map((s) => (
+              <span key={s.key} className="inline-flex items-center gap-1">
+                <span className={`inline-block h-2 w-2 rounded-sm ${s.color}`} />
+                {s.label} {fmtMB(s.bytes)}MB
+              </span>
+            ))}
+          </div>
+        )}
         {(overLimit || nearLimit) && (
           <p className={`mt-1 text-[10px] leading-snug ${overLimit ? 'text-red-300' : 'text-amber-300'}`}>
             {overLimit
