@@ -8,6 +8,13 @@ import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
 import { OnboardingGuide, ONBOARDING_SEEN_KEY } from './OnboardingGuide.js';
 import { useConfirm } from './ConfirmDialog.js';
+import {
+  SURVEY_FORM_URL,
+  recordAriseUse,
+  shouldShowSurveyPrompt,
+  markSurveyPrompted,
+  dismissSurveyForever,
+} from '../utils/surveyPrompt.js';
 
 /**
  * ログインと2Dスケッチ（エディタ）の間に表示する独立した「ホーム画面」。
@@ -149,14 +156,22 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     ? projects.filter((p) => p.name.toLowerCase().includes(normalizedQuery))
     : projects;
 
+  // アンケート促しポップアップ（260626）: 一定回数の利用ごとに表示。判定はホーム表示時に1回。
+  const [showSurvey, setShowSurvey] = useState(false);
+  useEffect(() => {
+    if (shouldShowSurveyPrompt()) setShowSurvey(true);
+  }, []);
+
   const openProject = async (id: string) => {
     if (id !== projectId) await switchProject(id);
+    recordAriseUse(); // 「Arise を1回使った」＝プロジェクトを開いた、として記録（アンケート促し用）
     onEnter();
   };
   const confirmCreate = async () => {
     const name = newName.trim() || 'マイプロジェクト';
     setCreatingNew(false);
     await createNewProject(name, newKind);
+    recordAriseUse();
     onEnter();
   };
 
@@ -290,8 +305,23 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const photoProjects = filteredProjects.filter((p) => p.kind === 'photo');
 
   return (
-    <div className="h-screen w-screen overflow-y-auto bg-neutral-950 text-neutral-100">
-      <header className="flex items-center justify-between border-b border-white/10 px-6 py-4">
+    <div className="relative h-screen w-screen overflow-y-auto bg-neutral-950 text-neutral-100">
+      {/* 背景の装飾グラデーション（LP と同じモヤッとした演出・260626 クライアント要望: 余白を埋める）。pointer-events-none で操作を妨げない。 */}
+      <div className="pointer-events-none fixed inset-0 overflow-hidden">
+        <div
+          className="absolute -top-32 -left-24 h-[28rem] w-[28rem] rounded-full bg-emerald-500/20 blur-3xl animate-pulse"
+          style={{ animationDuration: '7s' }}
+        />
+        <div
+          className="absolute top-1/3 -right-24 h-[26rem] w-[26rem] rounded-full bg-sky-500/15 blur-3xl animate-pulse"
+          style={{ animationDuration: '9s', animationDelay: '1s' }}
+        />
+        <div
+          className="absolute bottom-0 left-1/3 h-[24rem] w-[24rem] rounded-full bg-purple-500/10 blur-3xl animate-pulse"
+          style={{ animationDuration: '11s', animationDelay: '2s' }}
+        />
+      </div>
+      <header className="relative flex items-center justify-between border-b border-white/10 px-6 py-4">
         <div>
           <h1 className="text-xl font-bold">Arise</h1>
           <p className="text-[11px] text-neutral-400">建築・内装向け AI 空間デザイン</p>
@@ -328,7 +358,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
         </div>
       </header>
 
-      <main className="mx-auto max-w-5xl px-6 py-8">
+      <main className="relative mx-auto max-w-5xl px-6 py-8">
         <section className="mb-8">
           <div className="mb-3 flex items-center justify-between">
             <h2 className="text-lg font-semibold">
@@ -337,15 +367,27 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 {usage}
               </span>
             </h2>
-            <button
-              type="button"
-              onClick={() => { setNewName('マイプロジェクト'); setNewKind('full'); setCreatingNew(true); }}
-              disabled={busy || atLimit}
-              title={atLimit ? 'フリープランの保存上限に達しています' : '新しいプロジェクトを作成して開く'}
-              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-            >
-              ＋ 新規作成
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => { setNewName('マイプロジェクト'); setNewKind('full'); setCreatingNew(true); }}
+                disabled={busy || atLimit}
+                title={atLimit ? 'フリープランの保存上限に達しています' : '新しいプロジェクトを作成して開く'}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+              >
+                ＋ 新規作成
+              </button>
+              {/* ご意見・ご要望（Google フォーム）への導線（260626 クライアント要望）。別タブで開く。 */}
+              <a
+                href={SURVEY_FORM_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                title="ご意見・ご要望フォーム（Google フォーム）を開く"
+                className="rounded-lg border border-white/15 px-4 py-2 text-sm font-semibold text-neutral-200 transition hover:border-white/30 hover:text-white"
+              >
+                ご意見・ご要望はこちら
+              </a>
+            </div>
           </div>
 
           {atLimit && (
@@ -598,6 +640,55 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
       {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 
       <OnboardingGuide open={onboardingOpen} onClose={() => setOnboardingOpen(false)} />
+
+      {/* アンケート促しポップアップ（260626 クライアント要望）。一定回数の利用ごとに表示。 */}
+      {showSurvey && (
+        <div
+          className="fixed inset-0 z-[10050] flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="survey-title"
+          onClick={() => { markSurveyPrompted(); setShowSurvey(false); }}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-6 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="survey-title" className="text-base font-black text-white">
+              アンケートご協力のお願い
+            </h2>
+            <p className="mt-2 text-sm leading-relaxed text-neutral-300">
+              Arise をご利用いただきありがとうございます。よりよいサービスづくりのため、使用感アンケート（Google
+              フォーム）へのご記入にご協力いただけますと幸いです。
+            </p>
+            <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => { dismissSurveyForever(); setShowSurvey(false); }}
+                className="rounded-lg px-3 py-2 text-xs font-semibold text-neutral-400 transition hover:text-neutral-200"
+              >
+                今後表示しない
+              </button>
+              <button
+                type="button"
+                onClick={() => { markSurveyPrompted(); setShowSurvey(false); }}
+                className="rounded-lg border border-white/15 px-4 py-2 text-sm font-bold text-neutral-200 transition hover:bg-white/10"
+              >
+                後で
+              </button>
+              <a
+                href={SURVEY_FORM_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() => { markSurveyPrompted(); setShowSurvey(false); }}
+                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-emerald-500"
+              >
+                フォームを開く
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
