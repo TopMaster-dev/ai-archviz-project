@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, getSupabaseConfig } from './supabaseClient.js';
-import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION } from '../storageLimits.js';
+import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION, STORAGE_WARN_THRESHOLD_BYTES } from '../storageLimits.js';
 
 // ユーザーアップロード資産（3Dモデル / テクスチャ）の保存・一覧・削除。
 //
@@ -83,7 +83,28 @@ export function validateUpload(file: File, kind: UploadKind): string | null {
 
 // 容量上限（管理表 row 31）は lib/storageLimits.ts を単一の真実源とし、ここから再エクスポートする
 // （既存の import 互換: UploadPanel などは uploads.ts から取り込む）。
-export { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION };
+export { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION, STORAGE_WARN_THRESHOLD_BYTES };
+
+/**
+ * 容量がしきい値（70MB）を超えた本人へ、警告メールを「即時」送るようサーバへ依頼する（ベストエフォート）。
+ * 日次 cron を待たずに通知するため、アップロードで上限に近づいた直後に呼ぶ。
+ * 未ログイン/SMTP未設定/サーバ未構成では送られない（サーバ側で判定）。再送はサーバのクールダウンで防止。
+ * 例外は投げない（通知の失敗で操作を妨げない）。
+ */
+export async function notifyStorageWarningSelf(): Promise<void> {
+  try {
+    const sb = getSupabase();
+    if (!sb) return;
+    const token = (await sb.auth.getSession()).data.session?.access_token;
+    if (!token) return;
+    await fetch('/api/storage-warning-self', {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}` },
+    });
+  } catch {
+    /* ベストエフォート */
+  }
+}
 
 /** ホーム画面の使用量表示で扱う、種別ごと＋合計のバイト数。 */
 export interface StorageUsage {

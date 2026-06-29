@@ -471,6 +471,60 @@ export default defineConfig(({ mode }) => {
                 return;
             }
 
+            // 容量警告メールの即時送信（row 31・260629）。本番 api/storage-warning-self.ts のローカル版。
+            // ログイン中ユーザーの access token（Authorization: Bearer）で本人特定し、その本人だけに送る。
+            if (req.url === '/api/storage-warning-self' && req.method === 'POST') {
+                void (async () => {
+                    res.setHeader('Content-Type', 'application/json');
+                    const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || env.SUPABASE_URL || env.VITE_SUPABASE_URL || '';
+                    const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '';
+                    if (!url || !serviceKey) {
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: false, reason: 'server-not-configured' }));
+                    }
+                    const auth = (req.headers['authorization'] as string) || '';
+                    const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+                    if (!token) {
+                        res.statusCode = 401;
+                        return res.end(JSON.stringify({ error: 'Unauthorized' }));
+                    }
+                    try {
+                        const { createClient } = await import('@supabase/supabase-js');
+                        const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+                        const { data: userData, error: userErr } = await admin.auth.getUser(token);
+                        const ownerId = userData?.user?.id;
+                        if (userErr || !ownerId) {
+                            res.statusCode = 401;
+                            return res.end(JSON.stringify({ error: 'Unauthorized' }));
+                        }
+                        const { runStorageWarning } = await import('./lib/server/storageWarning.js');
+                        const result = await runStorageWarning(
+                            {
+                                url,
+                                serviceKey,
+                                smtpHost: process.env.SMTP_HOST || env.SMTP_HOST || '',
+                                smtpPort: Number(process.env.SMTP_PORT || env.SMTP_PORT || 587),
+                                smtpSecure: String(process.env.SMTP_SECURE || env.SMTP_SECURE || '').toLowerCase() === 'true',
+                                smtpUser: process.env.SMTP_USER || env.SMTP_USER || undefined,
+                                smtpPass: process.env.SMTP_PASS || env.SMTP_PASS || undefined,
+                                smtpFrom: process.env.SMTP_FROM || env.SMTP_FROM || process.env.SMTP_USER || env.SMTP_USER || '',
+                                thresholdBytes: Number(process.env.STORAGE_WARN_BYTES || env.STORAGE_WARN_BYTES || STORAGE_WARN_THRESHOLD_BYTES),
+                                limitBytes: Number(process.env.STORAGE_LIMIT_BYTES || env.STORAGE_LIMIT_BYTES || STORAGE_SOFT_LIMIT_BYTES),
+                            },
+                            new Date().toISOString(),
+                            { ownerId },
+                        );
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify(result));
+                    } catch (e: any) {
+                        console.error('storage-warning-self local error:', e?.message || e);
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: false, reason: 'error' }));
+                    }
+                })();
+                return;
+            }
+
             // Mock the Vercel API Route locally
             if (req.url?.startsWith('/api/materials') && req.method === 'GET') {
               try {

@@ -69,7 +69,11 @@ function buildMail(from: string, to: string, totalBytes: number, limitBytes: num
  * 通知対象を取得し、ユーザーごとに1通の SMTP メールを送り、送信成功分の storage_warnings を upsert する。
  * 失敗は次回再送できるよう記録しない。ベストエフォート（例外で落とさない）。
  */
-export async function runStorageWarning(env: StorageWarningEnv, nowIso: string): Promise<StorageWarningResult> {
+export async function runStorageWarning(
+  env: StorageWarningEnv,
+  nowIso: string,
+  opts: { ownerId?: string } = {},
+): Promise<StorageWarningResult> {
   if (!env.url || !env.serviceKey) return { success: false, reason: 'server-not-configured' };
   const admin = createClient(env.url, env.serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -81,7 +85,9 @@ export async function runStorageWarning(env: StorageWarningEnv, nowIso: string):
     console.error('[storage-warning] query failed:', error.message); // 詳細はログのみ
     return { success: false, reason: 'query-failed' };
   }
-  const rows = (data ?? []) as TargetRow[];
+  const allRows = (data ?? []) as TargetRow[];
+  // ownerId 指定時はその本人だけに送る（アップロード直後の即時通知用）。未指定なら全対象（日次 cron）。
+  const rows = opts.ownerId ? allRows.filter((r) => r.owner_id === opts.ownerId) : allRows;
   if (rows.length === 0) return { success: true, warned: 0, failed: 0 };
 
   // 通知対象はあるが SMTP 未設定: DB は変更せず保留（設定後の次回に送れる）。

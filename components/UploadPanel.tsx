@@ -7,8 +7,10 @@ import {
   deleteUserUpload,
   getStorageUsageSelf,
   listUserUploads,
+  notifyStorageWarningSelf,
   STORAGE_SOFT_LIMIT_BYTES,
   STORAGE_WARN_FRACTION,
+  STORAGE_WARN_THRESHOLD_BYTES,
   updateUserUploadMetadata,
   uploadUserFile,
   type StorageUsage,
@@ -110,12 +112,15 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const textureInputRef = useRef<HTMLInputElement | null>(null);
 
-  // 使用量（バケット実体）の再取得。アップロード/削除/初期表示後に呼ぶ。
-  const refreshUsage = async () => {
+  // 使用量（バケット実体）の再取得。アップロード/削除/初期表示後に呼ぶ。最新値を返す。
+  const refreshUsage = async (): Promise<StorageUsage | null> => {
     try {
-      setUsage(await getStorageUsageSelf());
+      const u = await getStorageUsageSelf();
+      setUsage(u);
+      return u;
     } catch {
       setUsage(null); // 失敗時は台帳合計にフォールバック
+      return null;
     }
   };
 
@@ -166,7 +171,10 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       const metadata = kind === 'texture' && category ? { category } : undefined;
       const row = await uploadUserFile(file, kind, { metadata, onProgress: setProgress });
       setUploads((prev) => [row, ...prev]);
-      await refreshUsage(); // バケット実体の合計を更新（busy 解除前に最新化＝連続アップロードでも上限判定が古くならない）
+      const fresh = await refreshUsage(); // バケット実体の合計を更新（busy 解除前に最新化＝連続アップロードでも上限判定が古くならない）
+      if (fresh && fresh.totalBytes >= STORAGE_WARN_THRESHOLD_BYTES) {
+        void notifyStorageWarningSelf(); // 日次 cron を待たず即時に警告メールを依頼（サーバが SMTP/しきい値/クールダウンを判定）
+      }
       const catNote = kind === 'texture' ? `（${textureCategoryLabel(category)}）` : '';
       setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
       if (kind === 'texture') onUploadsChanged?.(); // エディタの素材一覧へ即時反映
