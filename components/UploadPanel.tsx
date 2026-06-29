@@ -89,7 +89,10 @@ function fmtDate(iso: string): string {
 
 const KIND_LABEL: Record<UploadKind, string> = { model: '3Dモデル', texture: 'テクスチャ' };
 
-export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => void } = {}) {
+export function UploadPanel({
+  onUploadsChanged,
+  refreshSignal,
+}: { onUploadsChanged?: () => void; refreshSignal?: number } = {}) {
   const { configured } = useAuth();
   const confirm = useConfirm();
   const [uploads, setUploads] = useState<UserUpload[]>([]);
@@ -139,8 +142,9 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   useEffect(() => {
     if (!configured) return;
     void refresh();
+    // refreshSignal が変わったら（完全削除等の後）一覧＋使用量を取り直す。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configured]);
+  }, [configured, refreshSignal]);
 
   // ポップアップを閉じる/差し替える/アンマウント時にプレビュー用 ObjectURL を解放する。
   useEffect(() => {

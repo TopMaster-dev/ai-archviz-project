@@ -1,4 +1,5 @@
 import { getSupabase } from './supabaseClient.js';
+import { deleteAiRenderImagesForProject } from './aiRenderStorage.js';
 import type { ProjectState } from '../project/projectState.js';
 import type { ProjectRow, ProjectSummary, DeletedProjectSummary, SharedProject } from './types.js';
 
@@ -127,6 +128,18 @@ export async function restoreProject(id: string): Promise<void> {
     .from('projects')
     .update({ deleted_at: null, scheduled_purge_at: null })
     .eq('id', id);
+  if (error) throw error;
+}
+
+/**
+ * プロジェクトを「完全に削除」する（猶予を待たず即時・260629 クライアント要望）。
+ * 先にこのプロジェクトの AI生成画像（Storage 実体）を削除して容量を解放し、その後に行を物理削除する。
+ * 素材（model/texture）は user_uploads 側で project_id が null 化されるだけで消えない（再利用資産のため）。
+ */
+export async function purgeProject(id: string): Promise<void> {
+  const sb = requireClient();
+  await deleteAiRenderImagesForProject(id); // 容量解放（ベストエフォート・行削除前に）
+  const { error } = await sb.from('projects').delete().eq('id', id);
   if (error) throw error;
 }
 

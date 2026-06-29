@@ -73,6 +73,66 @@ export async function toStoredImage(image: string, projectId?: string | null): P
 }
 
 /**
+ * 公開URLから user-uploads 内の ai-render パスを取り出す（該当しなければ null）。
+ * 安全策として ai-render フォルダのオブジェクトのみ対象にし、素材（model/texture）は決して消さない。
+ */
+function aiRenderStoragePathFromUrl(url: string | null | undefined): string | null {
+  if (!url || typeof url !== 'string' || url.startsWith('data:')) return null;
+  const marker = '/storage/v1/object/public/user-uploads/';
+  const i = url.indexOf(marker);
+  if (i < 0) return null;
+  let path = url.slice(i + marker.length);
+  const q = path.indexOf('?');
+  if (q >= 0) path = path.slice(0, q);
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* デコード不能ならそのまま */
+  }
+  return path.includes('/ai-render/') ? path : null; // ai-render 以外（素材等）は対象外
+}
+
+/**
+ * 生成画像（ai-render）の Storage 実体を削除して容量を解放する（ベストエフォート・260629）。
+ * data: URL や user-uploads 以外 / ai-render 以外のURLは無視する（誤削除防止）。
+ * RLS により本人フォルダ（先頭=auth.uid）のみ削除可能。
+ */
+export async function deleteAiRenderImages(urls: Array<string | null | undefined>): Promise<void> {
+  const sb = getSupabase();
+  if (!sb) return;
+  const paths = Array.from(
+    new Set(urls.map(aiRenderStoragePathFromUrl).filter((p): p is string => !!p)),
+  );
+  if (paths.length === 0) return;
+  try {
+    await sb.storage.from(BUCKET).remove(paths);
+  } catch {
+    /* ベストエフォート（容量解放の失敗で操作を妨げない） */
+  }
+}
+
+/**
+ * あるプロジェクトの生成画像（{uid}/ai-render/{projectId}/...）の Storage 実体をまとめて削除する。
+ * プロジェクトの完全削除時に容量を解放するため（ベストエフォート）。素材（model/texture）は対象外。
+ */
+export async function deleteAiRenderImagesForProject(projectId: string): Promise<void> {
+  const sb = getSupabase();
+  if (!sb || !projectId) return;
+  try {
+    const { data: userData } = await sb.auth.getUser();
+    const uid = userData.user?.id;
+    if (!uid) return;
+    const prefix = `${uid}/ai-render/${projectId}`;
+    const { data: files } = await sb.storage.from(BUCKET).list(prefix, { limit: 1000 });
+    if (!files || files.length === 0) return;
+    const paths = files.filter((f) => f.name).map((f) => `${prefix}/${f.name}`);
+    if (paths.length > 0) await sb.storage.from(BUCKET).remove(paths);
+  } catch {
+    /* ベストエフォート */
+  }
+}
+
+/**
  * 画像参照を「base64 データURL」に戻す（編集/書き出しでバイト列が必要なため）。
  *  - 既に data: URL ならそのまま返す。
  *  - http(s) URL（保存済み履歴）なら fetch してデータURL化（クロスオリジンの canvas 汚染を避けるため

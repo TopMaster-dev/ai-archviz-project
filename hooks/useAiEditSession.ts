@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { normalizeStoredVersions } from '../lib/aiEditNormalize.js';
+import { deleteAiRenderImages } from '../lib/db/aiRenderStorage.js';
 
 function newObjectId() {
   return `obj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -309,7 +310,24 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   const deleteVersion = useCallback((idToDelete: string) => {
     setVersions((prev) => {
       const remove = collectVersionsToDelete(prev, idToDelete);
-      return prev.filter((v) => !remove.has(v.id));
+      const survivors = prev.filter((v) => !remove.has(v.id));
+      // 容量解放（260629）: 削除する版が参照していた Storage 画像のうち、生き残る版が
+      // まだ参照していないものだけを物理削除する（連鎖編集の base/styleRef を誤って消さない）。
+      const keep = new Set<string>();
+      for (const v of survivors) {
+        for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl]) {
+          if (u) keep.add(u);
+        }
+      }
+      const orphaned: string[] = [];
+      for (const v of prev) {
+        if (!remove.has(v.id)) continue;
+        for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl]) {
+          if (u && !keep.has(u)) orphaned.push(u);
+        }
+      }
+      if (orphaned.length > 0) void deleteAiRenderImages(orphaned); // 非同期・ベストエフォート
+      return survivors;
     });
   }, []);
 

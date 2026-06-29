@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Settings, Image as ImageIcon, HelpCircle } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
-import { createShareLink, getDeletedProjects } from '../lib/db/projects.js';
+import { createShareLink, getDeletedProjects, purgeProject } from '../lib/db/projects.js';
 import type { DeletedProjectSummary, ProjectSummary } from '../lib/db/types.js';
 import { UploadPanel } from './UploadPanel.js';
 import { SettingsModal } from './SettingsModal.js';
@@ -82,6 +82,9 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   // 削除済み（猶予期間内）プロジェクトの復元メニュー（管理表 row 109/110）。
   const [showDeleted, setShowDeleted] = useState(false);
   const [deletedProjects, setDeletedProjects] = useState<DeletedProjectSummary[]>([]);
+  // 完全削除/AI画像削除後に UploadPanel の使用量バーを再取得させるためのシグナル（260629）。
+  const [usageRefreshKey, setUsageRefreshKey] = useState(0);
+  const [purgingId, setPurgingId] = useState<string | null>(null);
   const [deletedQuery, setDeletedQuery] = useState('');
   const [deletedLoading, setDeletedLoading] = useState(false);
   const [deletedError, setDeletedError] = useState<string | null>(null);
@@ -123,6 +126,27 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     await restoreDeletedProject(id);
     // 復元したものは削除済み一覧から消え、アクティブ一覧へ戻る。
     await loadDeleted();
+  };
+  // 完全削除（260629）: 猶予を待たず即時に物理削除＋AI生成画像の容量解放。確認必須。
+  const handlePurge = async (id: string, name: string) => {
+    const ok = await confirm({
+      title: 'プロジェクトを完全に削除',
+      message: `「${name}」を完全に削除しますか？\nAI生成画像も削除され、空き容量に反映されます。元に戻せません。`,
+      confirmLabel: '完全に削除',
+      danger: true,
+    });
+    if (!ok) return;
+    setPurgingId(id);
+    setDeletedError(null);
+    try {
+      await purgeProject(id);
+      setDeletedProjects((prev) => prev.filter((p) => p.id !== id));
+      setUsageRefreshKey((k) => k + 1); // 使用量バーを再取得（容量解放を反映）
+    } catch {
+      setDeletedError('完全削除に失敗しました。時間をおいて再度お試しください。');
+    } finally {
+      setPurgingId(null);
+    }
   };
   const daysUntilPurge = (iso: string | null) => {
     if (!iso) return null;
@@ -505,11 +529,20 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                               <span className="text-[11px] text-amber-300/90">
                                 {left === null ? '猶予期間内' : `あと ${left} 日で完全削除`}
                               </span>
-                              <div className="mt-auto flex items-center justify-end pt-1">
+                              <div className="mt-auto flex items-center justify-end gap-2 pt-1">
+                                <button
+                                  type="button"
+                                  onClick={() => void handlePurge(p.id, p.name)}
+                                  disabled={busy || purgingId === p.id}
+                                  title="猶予を待たず今すぐ削除し、空き容量に反映します"
+                                  className="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:bg-red-500/10 disabled:opacity-50"
+                                >
+                                  {purgingId === p.id ? '削除中…' : '完全に削除'}
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => void handleRestore(p.id)}
-                                  disabled={busy}
+                                  disabled={busy || purgingId === p.id}
                                   className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
                                 >
                                   復元
@@ -530,7 +563,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
         <section>
           <h2 className="mb-3 text-lg font-semibold">アップロード</h2>
           <div className="grid grid-cols-1 gap-3">
-            <UploadPanel />
+            <UploadPanel refreshSignal={usageRefreshKey} />
           </div>
         </section>
       </main>
