@@ -309,23 +309,24 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
    */
   const deleteVersion = useCallback((idToDelete: string) => {
     setVersions((prev) => {
-      const remove = collectVersionsToDelete(prev, idToDelete);
-      const survivors = prev.filter((v) => !remove.has(v.id));
+      // 親保護（260630・クライアント要望）: この版から派生した子孫（AI生成画像）が残っている間は
+      // 元画像（親）を削除しない（UI でもゴミ箱を非表示）。先に子を削除すれば親も削除できる。
+      // 判定は連鎖ユーティリティで単一ソース化（size>1 = 自分以外に子孫が居る = ブロック）。
+      if (collectVersionsToDelete(prev, idToDelete).size > 1) return prev;
+      const target = prev.find((v) => v.id === idToDelete);
+      if (!target) return prev;
+      const survivors = prev.filter((v) => v.id !== idToDelete);
       // 容量解放（260629）: 削除する版が参照していた Storage 画像のうち、生き残る版が
-      // まだ参照していないものだけを物理削除する（連鎖編集の base/styleRef を誤って消さない）。
+      // まだ参照していないものだけを物理削除する（親の output= 子の base 等は残す）。
       const keep = new Set<string>();
       for (const v of survivors) {
         for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl]) {
           if (u) keep.add(u);
         }
       }
-      const orphaned: string[] = [];
-      for (const v of prev) {
-        if (!remove.has(v.id)) continue;
-        for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl]) {
-          if (u && !keep.has(u)) orphaned.push(u);
-        }
-      }
+      const orphaned = [target.outputImageDataUrl, target.baseImageDataUrl, target.styleRefDataUrl].filter(
+        (u): u is string => !!u && !keep.has(u),
+      );
       if (orphaned.length > 0) void deleteAiRenderImages(orphaned); // 非同期・ベストエフォート
       return survivors;
     });

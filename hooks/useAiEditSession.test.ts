@@ -99,4 +99,31 @@ describe('useAiEditSession deleteVersion', () => {
     expect(result.current.versions).toHaveLength(0);
     expect(result.current.activeVersionId).toBeNull();
   });
+
+  it('親保護: 子が残っている間は親を削除できない（先に子を削除すれば親も削除可）', () => {
+    const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
+    act(() => result.current.addVersionFromRender('data:image/png;base64,ROOT'));
+    const rootId = result.current.versions[0].id;
+    act(() =>
+      result.current.appendVersionAfterEdit({
+        parentId: rootId,
+        baseImageDataUrl: 'data:image/png;base64,ROOT',
+        outputImageDataUrl: 'data:image/png;base64,CHILD',
+        styleRefDataUrl: null,
+        styleMemo: '',
+        objects: [],
+      }),
+    );
+    const childId = result.current.versions[1].id;
+    // 子がいる親は削除しても no-op（ゴミ箱はUIで非表示・ロジックでもブロック）。
+    act(() => result.current.deleteVersion(rootId));
+    expect(result.current.versions).toHaveLength(2);
+    expect(result.current.versions.some((v) => v.id === rootId)).toBe(true);
+    // 子を削除 → 子だけ消える。
+    act(() => result.current.deleteVersion(childId));
+    expect(result.current.versions.map((v) => v.id)).toEqual([rootId]);
+    // 親が葉になったので削除できる。
+    act(() => result.current.deleteVersion(rootId));
+    expect(result.current.versions).toHaveLength(0);
+  });
 });

@@ -1,5 +1,5 @@
 import { getSupabase } from './supabaseClient.js';
-import { deleteAiRenderImagesForProject } from './aiRenderStorage.js';
+import { deleteAiRenderImagesForProject, ensureDataUrl, toStoredImage } from './aiRenderStorage.js';
 import type { ProjectState } from '../project/projectState.js';
 import type { ProjectRow, ProjectSummary, DeletedProjectSummary, SharedProject } from './types.js';
 
@@ -86,10 +86,56 @@ export async function saveProject(
   if (error) throw error;
 }
 
+/**
+ * 複製したプロジェクトの AI生成画像を、新しいプロジェクトID配下へ複製して URL を貼り替える（260630）。
+ * 元プロジェクトと Storage を共有しないようにする（元を完全削除/purge してもコピーの画像が消えない）。
+ * data 内の ai-render 公開URLを download→新IDで再upload→全置換。ベストエフォート（失敗したURLは元のまま=共有）。
+ * 変更があれば新しい data を、無ければ null を返す。
+ */
+async function rehomeAiImages(data: ProjectState, newProjectId: string): Promise<ProjectState | null> {
+  let json: string;
+  try {
+    json = JSON.stringify(data);
+  } catch {
+    return null;
+  }
+  const urls = Array.from(new Set(json.match(/https?:\/\/[^"\s\\]+\/ai-render\/[^"\s\\]+/g) ?? []));
+  if (urls.length === 0) return null;
+  let result = json;
+  let changed = false;
+  for (const url of urls) {
+    try {
+      const dataUrl = await ensureDataUrl(url); // 元画像をダウンロード
+      if (!dataUrl.startsWith('data:')) continue; // 取得失敗→元のまま（共有）
+      const newUrl = await toStoredImage(dataUrl, newProjectId); // 新ID配下へ保存
+      if (newUrl && newUrl !== url && newUrl.startsWith('http')) {
+        result = result.split(url).join(newUrl); // 同一URLの全出現を新URLへ
+        changed = true;
+      }
+    } catch {
+      /* このURLはスキップ（元のまま） */
+    }
+  }
+  if (!changed) return null;
+  try {
+    return JSON.parse(result) as ProjectState;
+  } catch {
+    return null;
+  }
+}
+
 export async function duplicateProject(id: string): Promise<string> {
   const src = await getProject(id);
   if (!src) throw new Error('複製元のプロジェクトが見つかりません。');
-  return createProject(`${src.name} のコピー`, src.data);
+  const newId = await createProject(`${src.name} のコピー`, src.data);
+  // コピーのAI生成画像を新ID配下へ複製し、元と Storage を共有しないようにする（260630・ベストエフォート）。
+  try {
+    const rehomed = await rehomeAiImages(src.data, newId);
+    if (rehomed) await saveProject(newId, { data: rehomed });
+  } catch (e) {
+    console.warn('[duplicate] AI画像の複製に失敗（元と共有のまま）', e);
+  }
+  return newId;
 }
 
 /** 論理削除（deleted_at セット）＋ 猶予後に物理削除されるよう purge 予約。 */

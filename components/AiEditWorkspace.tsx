@@ -871,37 +871,40 @@ export function AiEditWorkspace({
                     >
                       <ThumbsDown className="h-3.5 w-3.5" />
                     </button>
-                    {/* 削除: 生成結果を消す。同時に「削除＝強いbad」の暗黙的フィードバックを記録する（260625）。 */}
-                    <button
-                      type="button"
-                      title="この生成結果を削除"
-                      aria-label="生成結果を削除"
-                      onClick={async () => {
-                        // アプリ共通の確認モーダル（ダーク UI）。OK で true・キャンセル/ESC/背景クリックで false。
-                        const ok = await confirm({
-                          title: '生成結果の削除',
-                          message: 'この生成結果を削除しますか？\n（元に戻せません）',
-                          confirmLabel: '削除',
-                          danger: true,
-                        });
-                        if (!ok) return;
-                        // 暗黙的フィードバック（260625）: 削除＝強い bad シグナル。styleMemo も学習用に残す。
-                        void recordImplicitFeedback('delete', {
-                          verdict: 'bad',
-                          imageRef: v.id,
-                          styleMemo: v.styleMemo,
-                        }).catch((e) => console.warn('[ai feedback] 削除シグナルの記録に失敗', e));
-                        // UI 評価状態の掃除（削除済み版の孤立エントリを残さない）。
-                        feedbackRef.current = Object.fromEntries(
-                          Object.entries(feedbackRef.current).filter(([id]) => id !== v.id),
-                        );
-                        setFeedbackByVersion({ ...feedbackRef.current });
-                        onDeleteVersion(v.id);
-                      }}
-                      className="ml-auto rounded-full p-1 text-neutral-400 transition hover:scale-110 hover:bg-red-500/20 hover:text-red-300"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    {/* 削除（親保護260630・クライアント要望）: この画像から作成した子（AI生成画像）が残っている間は
+                        元画像（親）を削除させない＝ゴミ箱マークを非表示にする。先に子を削除すると表示される。 */}
+                    {!versions.some((x) => x.parentId === v.id) && (
+                      <button
+                        type="button"
+                        title="この生成結果を削除"
+                        aria-label="生成結果を削除"
+                        onClick={async () => {
+                          // アプリ共通の確認モーダル（ダーク UI）。OK で true・キャンセル/ESC/背景クリックで false。
+                          const ok = await confirm({
+                            title: '生成結果の削除',
+                            message: 'この生成結果を削除しますか？\n（元に戻せません）',
+                            confirmLabel: '削除',
+                            danger: true,
+                          });
+                          if (!ok) return;
+                          // 暗黙的フィードバック（260625）: 削除＝強い bad シグナル。styleMemo も学習用に残す。
+                          void recordImplicitFeedback('delete', {
+                            verdict: 'bad',
+                            imageRef: v.id,
+                            styleMemo: v.styleMemo,
+                          }).catch((e) => console.warn('[ai feedback] 削除シグナルの記録に失敗', e));
+                          // UI 評価状態の掃除（削除済み版の孤立エントリを残さない）。
+                          feedbackRef.current = Object.fromEntries(
+                            Object.entries(feedbackRef.current).filter(([id]) => id !== v.id),
+                          );
+                          setFeedbackByVersion({ ...feedbackRef.current });
+                          onDeleteVersion(v.id);
+                        }}
+                        className="ml-auto rounded-full p-1 text-neutral-400 transition hover:scale-110 hover:bg-red-500/20 hover:text-red-300"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}
