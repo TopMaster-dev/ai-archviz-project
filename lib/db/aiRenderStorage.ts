@@ -44,6 +44,10 @@ function extOf(mime: string): string {
 export async function uploadAiRenderImage(image: string, projectId?: string | null): Promise<string | null> {
   if (!image) return null;
   if (!image.startsWith('data:')) return image; // 既にURL
+  // プロジェクト未確定（projectId 無し）の画像はクラウド保存しない（{uid}/ai-render/unsaved/ は
+  // プロジェクト削除時の容量解放で拾えず孤児化するため・260629）。base64 のまま保持し、保存時に
+  // 正規の projectId で改めてアップロードされる（App.tsx の保存フロー）。
+  if (!projectId) return null;
   const parsed = parseDataUrl(image);
   if (!parsed) return null;
   const sb = getSupabase();
@@ -52,7 +56,7 @@ export async function uploadAiRenderImage(image: string, projectId?: string | nu
     const { data: userData } = await sb.auth.getUser();
     const uid = userData.user?.id;
     if (!uid) return null;
-    const path = `${uid}/ai-render/${projectId ?? 'unsaved'}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extOf(parsed.mime)}`;
+    const path = `${uid}/ai-render/${projectId}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extOf(parsed.mime)}`;
     const blob = new Blob([parsed.bytes as BlobPart], { type: parsed.mime });
     const { error } = await sb.storage.from(BUCKET).upload(path, blob, {
       contentType: parsed.mime,

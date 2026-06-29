@@ -772,7 +772,9 @@ do $$ begin perform cron.unschedule('arise_flag_expired'); exception when others
 do $$ begin perform cron.unschedule('arise_purge_deleted'); exception when others then null; end $$;
 do $$ begin perform cron.unschedule('arise_ai_feedback_aggregate'); exception when others then null; end $$;
 do $$ begin perform cron.schedule('arise_flag_expired',  '0 18 * * *',  $c$ select flag_expired_free_data(); $c$); exception when others then null; end $$;
-do $$ begin perform cron.schedule('arise_purge_deleted', '30 18 * * *', $c$ select purge_soft_deleted_projects(); $c$); exception when others then null; end $$;
+-- arise_purge_deleted（行のみ削除＝AI生成画像の Storage が残る）は廃止し、Vercel Cron
+-- api/cron/purge-projects（Storage 解放→行削除）へ移行（260629）。上の unschedule で既存ジョブを解除し、
+-- ここでは再スケジュールしない。purge_soft_deleted_projects() 関数は手動実行用に残置する。
 do $$ begin perform cron.schedule('arise_ai_feedback_aggregate', '0 17 * * *', $c$ select aggregate_ai_feedback(); $c$); exception when others then null; end $$;
 do $$ begin perform cron.schedule('arise_learned_hints', '15 17 * * *', $c$ select aggregate_learned_hints(); $c$); exception when others then null; end $$;
 

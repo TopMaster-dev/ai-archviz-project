@@ -535,9 +535,9 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                                   onClick={() => void handlePurge(p.id, p.name)}
                                   disabled={busy || purgingId === p.id}
                                   title="猶予を待たず今すぐ削除し、空き容量に反映します"
-                                  className="rounded-lg border border-red-500/40 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:bg-red-500/10 disabled:opacity-50"
+                                  className="rounded-lg bg-amber-300 px-3 py-1.5 text-xs font-bold text-neutral-900 transition hover:bg-amber-200 disabled:opacity-50"
                                 >
-                                  {purgingId === p.id ? '削除中…' : '完全に削除'}
+                                  {purgingId === p.id ? '削除中…' : '今すぐ完全削除'}
                                 </button>
                                 <button
                                   type="button"
