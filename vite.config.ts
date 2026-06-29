@@ -432,6 +432,36 @@ export default defineConfig(({ mode }) => {
                 return;
             }
 
+            // 孤児 AI生成画像の一回限りの掃除（260629）。本番 api/admin/orphan-cleanup.ts のローカル版。
+            // 確認: curl -H "Authorization: Bearer <CRON_SECRET>" -X POST http://localhost:3000/api/admin/orphan-cleanup
+            // 実削除: 末尾に ?execute=1 を付ける。
+            if (req.url?.split('?')[0] === '/api/admin/orphan-cleanup' && (req.method === 'GET' || req.method === 'POST')) {
+                void (async () => {
+                    res.setHeader('Content-Type', 'application/json');
+                    const secret = process.env.CRON_SECRET || env.CRON_SECRET || '';
+                    const auth = (req.headers['authorization'] as string) || '';
+                    if (!secret || auth !== `Bearer ${secret}`) {
+                        res.statusCode = 401;
+                        return res.end(JSON.stringify({ error: 'Unauthorized' }));
+                    }
+                    const execute = /(?:[?&])execute=1(?:&|$)/.test(req.url || '');
+                    try {
+                        const { runOrphanCleanup } = await import('./lib/server/orphanCleanup.js');
+                        const result = await runOrphanCleanup({
+                            url: process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || env.SUPABASE_URL || env.VITE_SUPABASE_URL || '',
+                            serviceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || env.SUPABASE_SERVICE_ROLE_KEY || '',
+                        }, { dryRun: !execute });
+                        res.statusCode = result.success ? 200 : 500;
+                        return res.end(JSON.stringify(result));
+                    } catch (e: any) {
+                        console.error('orphan-cleanup local error:', e?.message || e);
+                        res.statusCode = 500;
+                        return res.end(JSON.stringify({ success: false, reason: 'error' }));
+                    }
+                })();
+                return;
+            }
+
             // 猶予超過プロジェクトの物理削除＋容量解放（260629）。本番 api/cron/purge-projects.ts のローカル版。
             // ローカル検証: curl -H "Authorization: Bearer <CRON_SECRET>" -X POST http://localhost:3000/api/cron/purge-projects
             if (req.url === '/api/cron/purge-projects' && (req.method === 'GET' || req.method === 'POST')) {
