@@ -1,4 +1,5 @@
-import { getSupabase } from './supabaseClient.js';
+import type { SupabaseClient } from '@supabase/supabase-js';
+import { getSupabase, getSupabaseConfig } from './supabaseClient.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION } from '../storageLimits.js';
 
 // ユーザーアップロード資産（3Dモデル / テクスチャ）の保存・一覧・削除。
@@ -164,13 +165,87 @@ function mapRow(row: UploadRow): UserUpload {
 const SELECT_COLS = 'id, kind, storage_url, public_id, original_name, bytes, metadata, created_at';
 
 /**
+ * Storage バケットへファイルをアップロードする（大きいファイルの進捗表示のための内部ヘルパ・260629）。
+ * 可能なら XHR で進捗（onProgress: 0〜1）を通知しつつ送信する。SDK の upload と同じマルチパート形式
+ * （FormData に cacheControl と、空フィールド名でファイルを append）を厳密に再現するため、サーバ側の
+ * 受け口・できあがるオブジェクト（storage.objects.metadata.size 等）は SDK 経由と同一になる。
+ * URL/anonキー/アクセストークン/XHR/onProgress のいずれかが無い環境では SDK アップロードへフォールバック（進捗なし）。
+ */
+async function uploadFileToBucket(
+  sb: SupabaseClient,
+  bucket: string,
+  path: string,
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<void> {
+  const cfg = getSupabaseConfig();
+  let token: string | undefined;
+  try {
+    token = (await sb.auth.getSession()).data.session?.access_token;
+  } catch {
+    token = undefined;
+  }
+
+  if (typeof XMLHttpRequest !== 'undefined' && cfg && token && onProgress) {
+    onProgress(0); // XHR 経路に入った時点で確定的な 0% を表示（SDK フォールバック時は呼ばれず＝不確定バー）
+    await new Promise<void>((resolve, reject) => {
+      const form = new FormData();
+      form.append('cacheControl', '3600');
+      form.append('', file); // SDK と同一: 空フィールド名でファイル本体を送る
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${cfg.url}/storage/v1/object/${bucket}/${path}`);
+      xhr.setRequestHeader('authorization', `Bearer ${token}`);
+      xhr.setRequestHeader('apikey', cfg.anonKey);
+      xhr.setRequestHeader('x-upsert', 'false');
+      // Content-Type はブラウザが multipart boundary 付きで自動設定する（手動設定しない）。
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && e.total > 0) onProgress(Math.min(1, e.loaded / e.total));
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress(1);
+          resolve();
+        } else {
+          let msg = `アップロードに失敗しました（HTTP ${xhr.status}）。`;
+          try {
+            const j = JSON.parse(xhr.responseText);
+            if (j?.message) msg = String(j.message);
+          } catch {
+            /* レスポンスが JSON でない場合は既定メッセージ */
+          }
+          reject(new Error(msg));
+        }
+      };
+      xhr.onerror = () => reject(new Error('アップロード中に通信エラーが発生しました。'));
+      xhr.onabort = () => reject(new Error('アップロードが中断されました。'));
+      xhr.send(form);
+    });
+    return;
+  }
+
+  // フォールバック（XHR/設定が使えない環境）: SDK アップロード（進捗なし）。
+  const { error } = await sb.storage.from(bucket).upload(path, file, {
+    upsert: false,
+    contentType: file.type || undefined,
+    cacheControl: '3600',
+  });
+  if (error) throw error;
+}
+
+/**
  * ファイルを Supabase Storage へアップロードし、user_uploads 台帳に記録する。
  * Storage 書き込み成功後に台帳 INSERT に失敗した場合は、孤児オブジェクトを掃除する。
+ * onProgress（0〜1）を渡すと、可能な環境では進捗を通知する（大きいファイルのアップロード表示用）。
  */
 export async function uploadUserFile(
   file: File,
   kind: UploadKind,
-  options: { projectId?: string | null; metadata?: Record<string, unknown>; timestamp?: number } = {},
+  options: {
+    projectId?: string | null;
+    metadata?: Record<string, unknown>;
+    timestamp?: number;
+    onProgress?: (fraction: number) => void;
+  } = {},
 ): Promise<UserUpload> {
   const invalid = validateUpload(file, kind);
   if (invalid) throw new Error(invalid);
@@ -184,12 +259,7 @@ export async function uploadUserFile(
   const ts = options.timestamp ?? Date.now();
   const path = buildStoragePath(userId, kind, file.name, ts);
 
-  const { error: upErr } = await sb.storage.from(BUCKET).upload(path, file, {
-    upsert: false,
-    contentType: file.type || undefined,
-    cacheControl: '3600',
-  });
-  if (upErr) throw upErr;
+  await uploadFileToBucket(sb, BUCKET, path, file, options.onProgress);
 
   const { data: pub } = sb.storage.from(BUCKET).getPublicUrl(path);
   const storageUrl = pub.publicUrl;

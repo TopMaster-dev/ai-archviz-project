@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import {
   ACCEPTED_EXT,
@@ -92,6 +93,9 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   const [uploads, setUploads] = useState<UserUpload[]>([]);
   // 使用量はバケット実体の合計（AI生成画像を含む・RPC）。未適用環境では null→台帳合計にフォールバック。
   const [usage, setUsage] = useState<StorageUsage | null>(null);
+  // アップロード進捗（0〜1・取得不可な環境では null=不確定表示）と対象ファイル名（大きいファイルのローディング表示・260629）。
+  const [progress, setProgress] = useState<number | null>(null);
+  const [uploadingName, setUploadingName] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [busyKind, setBusyKind] = useState<UploadKind | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
@@ -154,11 +158,13 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       return;
     }
     setBusyKind(kind);
+    setUploadingName(file.name);
+    setProgress(null); // 進捗が取れる環境（XHR）では onProgress が数値をセット、取れない場合は null のまま＝不確定バー
     setMsg(null);
     try {
       // テクスチャは選択したカテゴリを metadata.category に保存（共通=未設定）。
       const metadata = kind === 'texture' && category ? { category } : undefined;
-      const row = await uploadUserFile(file, kind, { metadata });
+      const row = await uploadUserFile(file, kind, { metadata, onProgress: setProgress });
       setUploads((prev) => [row, ...prev]);
       await refreshUsage(); // バケット実体の合計を更新（busy 解除前に最新化＝連続アップロードでも上限判定が古くならない）
       const catNote = kind === 'texture' ? `（${textureCategoryLabel(category)}）` : '';
@@ -168,6 +174,8 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       setMsg(e instanceof Error ? e.message : 'アップロードに失敗しました。');
     } finally {
       setBusyKind(null);
+      setProgress(null);
+      setUploadingName(null);
     }
   };
 
@@ -271,6 +279,15 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
   // バー幅の分母: 上限超過時は実合計（=セグメント合計）でフルバー、通常は上限基準。
   const barDenom = Math.max(STORAGE_SOFT_LIMIT_BYTES, totalBytes, 1);
 
+  // アップロード中ボタンのラベル（スピナー＋進捗%）。進捗取得不可なら % は省略（260629）。
+  const pctText = progress != null ? ` ${Math.round(progress * 100)}%` : '';
+  const uploadingLabel = (
+    <span className="inline-flex items-center justify-center gap-1.5">
+      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      アップロード中…{pctText}
+    </span>
+  );
+
   return (
     <div className="rounded-lg bg-neutral-900/60 p-3 text-xs text-neutral-200">
       <p className="mb-1 font-semibold text-neutral-300">マイアップロード</p>
@@ -321,21 +338,49 @@ export function UploadPanel({ onUploadsChanged }: { onUploadsChanged?: () => voi
       <div className="mb-3 flex gap-1.5">
         <button
           type="button"
-          disabled={busy || overLimit}
+          disabled={busy || overLimit || pendingTexture != null}
           onClick={() => handlePick('model')}
           className="flex-1 rounded bg-emerald-600 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
         >
-          {busyKind === 'model' ? 'アップロード中…' : '＋ 3Dモデル'}
+          {busyKind === 'model' ? uploadingLabel : '＋ 3Dモデル'}
         </button>
         <button
           type="button"
-          disabled={busy || overLimit}
+          disabled={busy || overLimit || pendingTexture != null}
           onClick={() => handlePick('texture')}
           className="flex-1 rounded bg-neutral-700 py-1.5 font-semibold text-white transition hover:bg-neutral-600 disabled:opacity-50"
         >
-          {busyKind === 'texture' ? 'アップロード中…' : '＋ 建材を追加（画像）'}
+          {busyKind === 'texture' ? uploadingLabel : '＋ 建材を追加（画像）'}
         </button>
       </div>
+
+      {/* アップロード進捗（260629 クライアント要望: 大きいファイルで「進行中/完了」が分かるように）。 */}
+      {busy && (
+        <div className="mb-3 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2">
+          <div className="mb-1 flex items-center justify-between gap-2 text-[11px]">
+            <span className="inline-flex min-w-0 items-center gap-1.5 text-emerald-300">
+              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+              <span className="truncate">アップロード中…{uploadingName ? `「${uploadingName}」` : ''}</span>
+            </span>
+            {progress != null && (
+              <span className="shrink-0 font-mono text-emerald-300">{Math.round(progress * 100)}%</span>
+            )}
+          </div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+            {progress != null ? (
+              <div
+                className="h-full rounded-full bg-emerald-500 transition-all"
+                style={{ width: `${Math.min(100, Math.max(3, Math.round(progress * 100)))}%` }}
+              />
+            ) : (
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-emerald-500/80" />
+            )}
+          </div>
+          <p className="mt-1 text-[10px] leading-snug text-neutral-500">
+            大きいファイルは時間がかかります。完了までこのままお待ちください。
+          </p>
+        </div>
+      )}
 
       <input
         ref={modelInputRef}

@@ -12,6 +12,15 @@ export function isSupabaseConfigured(): boolean {
   return Boolean(supabaseUrl && supabaseAnonKey);
 }
 
+/**
+ * Storage への直接 XHR アップロード（進捗取得）で必要な URL / anon キー。
+ * 未構成なら null（呼び出し側は SDK アップロード＝進捗なしにフォールバック）。
+ */
+export function getSupabaseConfig(): { url: string; anonKey: string } | null {
+  if (!supabaseUrl || !supabaseAnonKey) return null;
+  return { url: supabaseUrl, anonKey: supabaseAnonKey };
+}
+
 let client: SupabaseClient | null = null;
 
 /** 構成済みなら Supabase クライアント（シングルトン）を返す。未構成なら null。 */
