@@ -526,7 +526,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                               <span className="block truncate text-sm font-semibold" title={p.name}>
                                 {p.name}
                               </span>
-                              <span className="text-[11px] text-amber-300/90">
+                              <span className="text-[11px] font-semibold text-red-400">
                                 {left === null ? '猶予期間内' : `あと ${left} 日で完全削除`}
                               </span>
                               <div className="mt-auto flex items-center justify-end gap-2 pt-1">
@@ -535,7 +535,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                                   onClick={() => void handlePurge(p.id, p.name)}
                                   disabled={busy || purgingId === p.id}
                                   title="猶予を待たず今すぐ削除し、空き容量に反映します"
-                                  className="rounded-lg bg-amber-300 px-3 py-1.5 text-xs font-bold text-neutral-900 transition hover:bg-amber-200 disabled:opacity-50"
+                                  className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-red-500 disabled:opacity-50"
                                 >
                                   {purgingId === p.id ? '削除中…' : '今すぐ完全削除'}
                                 </button>
