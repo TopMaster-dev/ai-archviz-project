@@ -280,12 +280,15 @@ export function UploadPanel({
     model: uploads.filter((u) => u.kind === 'model').reduce((s, u) => s + (u.bytes ?? 0), 0),
     texture: uploads.filter((u) => u.kind === 'texture').reduce((s, u) => s + (u.bytes ?? 0), 0),
     aiRender: 0,
+    deleted: 0,
     other: 0,
   };
+  // カテゴリ表示順（クライアント要望 260629b）: ①テクスチャ ②3D ③AI生成画像 ④削除済(一時保管中)。
   const segments = [
+    { key: 'texture', label: 'テクスチャ', bytes: byKind.texture, color: 'bg-sky-500' },
     { key: 'model', label: '3Dモデル', bytes: byKind.model, color: 'bg-emerald-500' },
-    { key: 'texture', label: 'テクスチャ画像', bytes: byKind.texture, color: 'bg-sky-500' },
     { key: 'ai', label: 'AI生成画像', bytes: byKind.aiRender, color: 'bg-violet-500' },
+    { key: 'deleted', label: '削除済（一時保管中）', bytes: byKind.deleted, color: 'bg-amber-500' },
     { key: 'other', label: 'その他', bytes: byKind.other, color: 'bg-neutral-400' },
   ].filter((s) => s.bytes > 0);
   // バー幅の分母: 上限超過時は実合計（=セグメント合計）でフルバー、通常は上限基準。

@@ -106,10 +106,10 @@ export async function notifyStorageWarningSelf(): Promise<void> {
   }
 }
 
-/** ホーム画面の使用量表示で扱う、種別ごと＋合計のバイト数。 */
+/** ホーム画面の使用量表示で扱う、種別ごと＋合計のバイト数。deleted=削除済(一時保管中)のAI生成画像。 */
 export interface StorageUsage {
   totalBytes: number;
-  byKind: { model: number; texture: number; aiRender: number; other: number };
+  byKind: { model: number; texture: number; aiRender: number; deleted: number; other: number };
 }
 
 /**
@@ -134,9 +134,16 @@ export async function getStorageUsageSelf(): Promise<StorageUsage | null> {
   const model = num(bk.model);
   const texture = num(bk.texture);
   const aiRender = num(bk['ai-render']);
+  const deleted = num(bk.deleted);
   return {
     totalBytes: rawTotal,
-    byKind: { model, texture, aiRender, other: Math.max(0, rawTotal - (model + texture + aiRender)) },
+    byKind: {
+      model,
+      texture,
+      aiRender,
+      deleted,
+      other: Math.max(0, rawTotal - (model + texture + aiRender + deleted)),
+    },
   };
 }
 

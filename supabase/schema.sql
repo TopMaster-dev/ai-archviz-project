@@ -649,20 +649,42 @@ create policy "user_uploads_storage_select_own" on storage.objects
 -- user_uploads 台帳ではなく storage.objects の実体を数えるため、台帳に記録しない AI生成画像（ai-render フォルダ）も含まれる。
 -- パス構造 {userId}/{kind}/...（kind = model / texture / ai-render）の第2フォルダを種別キーにする。
 -- SECURITY DEFINER（storage スキーマ参照のため）だが auth.uid() のフォルダに限定（他人分は集計しない）。
+-- カテゴリ（260629b クライアント要望）: texture / model / ai-render / deleted（削除済=一時保管中）。
+-- ai-render（{uid}/ai-render/{projectId}/...）は、その projectId が「論理削除済み（deleted_at not null）の
+-- 本人プロジェクト」なら 'deleted'、生存なら 'ai-render' に振り分ける。projectId は第3フォルダ。
+-- join は本人(owner_id=auth.uid())のプロジェクトに限定（他人の projectId を置いても deleted 判定に漏れない）。
 create or replace function storage_usage_self()
 returns jsonb
 language sql security definer set search_path = public as $$
-  with per_kind as (
-    select coalesce((storage.foldername(name))[2], 'other') as kind,
-           sum(coalesce((metadata->>'size')::bigint, 0)) as bytes
+  with objs as (
+    select
+      coalesce((storage.foldername(name))[2], 'other') as kind,
+      (storage.foldername(name))[3]                    as project_folder,
+      coalesce((metadata->>'size')::bigint, 0)         as size
     from storage.objects
     where bucket_id = 'user-uploads'
       and (storage.foldername(name))[1] = auth.uid()::text
-    group by 1
+  ),
+  classified as (
+    select
+      case
+        when o.kind = 'ai-render' and p.deleted_at is not null then 'deleted'   -- 削除済(一時保管中)
+        when o.kind = 'ai-render' then 'ai-render'                              -- 生存プロジェクトのAI生成画像
+        else o.kind                                                            -- model / texture / other
+      end as cat,
+      o.size
+    from objs o
+    left join projects p
+      on o.kind = 'ai-render'
+     and p.id::text = o.project_folder   -- uuid へキャストせず text 比較（'unsaved' 等でキャストエラーにしない）
+     and p.owner_id = auth.uid()         -- 本人のプロジェクトのみ（他人の projectId を置いても deleted 判定しない）
+  ),
+  per_cat as (
+    select cat, sum(size) as bytes from classified group by cat
   )
   select jsonb_build_object(
-    'total', coalesce((select sum(bytes) from per_kind), 0),
-    'by_kind', coalesce((select jsonb_object_agg(kind, bytes) from per_kind), '{}'::jsonb)
+    'total', coalesce((select sum(bytes) from per_cat), 0),
+    'by_kind', coalesce((select jsonb_object_agg(cat, bytes) from per_cat), '{}'::jsonb)
   );
 $$;
 grant execute on function public.storage_usage_self() to authenticated;
