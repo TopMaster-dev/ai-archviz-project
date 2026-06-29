@@ -439,8 +439,13 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
             />
           )}
 
-          {status === 'loading' && projects.length === 0 ? (
+          {(status === 'loading' || status === 'idle') && projects.length === 0 ? (
+            // 認証復元中(idle)や読込中(loading)は「無い」ではなく「読み込み中」を出す（初回ログイン/リロードの取りこぼし防止・260630）。
             <p className="text-sm text-neutral-500">読み込み中…</p>
+          ) : status === 'error' && projects.length === 0 ? (
+            <p className="text-sm text-red-300">
+              プロジェクトの読み込みに失敗しました。ページを再読み込みしてお試しください。
+            </p>
           ) : projects.length === 0 ? (
             <p className="text-sm text-neutral-500">
               プロジェクトがありません。「＋ 新規作成」から始めてください。

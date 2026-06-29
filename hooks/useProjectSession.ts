@@ -145,24 +145,36 @@ export function useProjectSession(): ProjectSession {
       void refreshGeminiKey();
       try {
         const list = await listProjects();
+        if (!active) return;
+        // プロジェクト一覧は、エディタ用の「先頭プロジェクト先読み」と独立して、取得でき次第すぐ表示する。
+        // 先読み（getProject）が失敗すると効果全体が catch に落ち、一覧が一切セットされず「アップロードしか
+        // 表示されない」不具合になっていた（ログイン/リロード初回）。一覧を先に出すことで防ぐ（260630）。
+        setProjects(list);
         let id: string | null = null;
         let name = '';
         if (list.length > 0) {
-          const proj = await getProject(list[0].id);
-          if (proj) {
-            useProjectStore.getState().loadProjectState(proj.data);
-            id = proj.id;
-            name = proj.name;
+          try {
+            const proj = await getProject(list[0].id);
+            if (proj) {
+              useProjectStore.getState().loadProjectState(proj.data);
+              id = proj.id;
+              name = proj.name;
+            }
+          } catch (e) {
+            // 先頭プロジェクトの先読み失敗は一覧表示を妨げない（「開く」時に個別ロードする）。
+            console.error('[project session] first project preload failed', e);
           }
         }
-        if (!id) {
+        // プロジェクトが1件も無いときだけ既定プロジェクトを自動作成する
+        // （先読み失敗で id が無いだけのときに、余計な空プロジェクトを作らない）。
+        if (!id && list.length === 0) {
           id = await createProject(DEFAULT_PROJECT_NAME, useProjectStore.getState().toProjectState());
           name = DEFAULT_PROJECT_NAME;
+          if (active) setProjects(await listProjects());
         }
         if (!active) return;
         // 読み込み直後を Undo の起点にし、autosave の初回上書きも防ぐ。
         useProjectStore.temporal.getState().clear();
-        setProjects(await listProjects());
         setProjectId(id);
         setProjectName(name);
         setStatus('ready');
