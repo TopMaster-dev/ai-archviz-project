@@ -126,6 +126,13 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     await restoreDeletedProject(id);
     // 復元したものは削除済み一覧から消え、アクティブ一覧へ戻る。
     await loadDeleted();
+    setUsageRefreshKey((k) => k + 1); // 復元でAI画像が「削除済」→「AI生成画像」へ戻るのを使用量バーに反映
+  };
+  // 論理削除（アクティブカードの「削除」）後に、削除済一覧と使用量バー（削除済カテゴリ）を更新する。
+  const handleSoftDelete = async () => {
+    await deleteCurrentProject();
+    setUsageRefreshKey((k) => k + 1); // AI画像が「AI生成画像」→「削除済(一時保管中)」へ移るのを反映
+    void loadDeleted();
   };
   // 完全削除（260629）: 猶予を待たず即時に物理削除＋AI生成画像の容量解放。確認必須。
   const handlePurge = async (id: string, name: string) => {
@@ -301,7 +308,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                         danger: true,
                       })
                     ) {
-                      void deleteCurrentProject();
+                      void handleSoftDelete();
                     }
                   }}
                   disabled={busy || projects.length <= 1}
