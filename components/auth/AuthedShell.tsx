@@ -5,6 +5,8 @@ import { ProjectSaveIndicator } from '../ProjectSaveIndicator.js';
 import { UndoRedoBar } from '../UndoRedoBar.js';
 import { ShellNavProvider } from '../../lib/shell/shellNavContext.js';
 import { useProjectSessionContext } from '../../lib/project/projectSessionContext.js';
+import { LoadingOverlay } from '../LoadingOverlay.js';
+import { useLoadingStore } from '../../lib/store/loadingStore.js';
 
 /**
  * ログイン後のシェル。ホーム画面（プロジェクト管理）とエディタ（2D/3D）を切り替える。
@@ -50,13 +52,33 @@ export function AuthedShell({ children }: { children: ReactNode }) {
     if (session.status === 'ready') setSaveError(false);
   }, [session.status]);
 
+  // 複製・プロジェクト切替などの非同期処理中はローディング・オーバーレイを表示（260630・クライアント要望）。
+  // 速い処理でのちらつきを避けるため、250ms 以上かかる場合のみ表示する（複製は AI画像再アップロードで重い）。
+  useEffect(() => {
+    if (!session.busy) {
+      useLoadingStore.getState().hide('session');
+      return;
+    }
+    const t = window.setTimeout(() => useLoadingStore.getState().show('session', '処理しています…'), 250);
+    return () => {
+      window.clearTimeout(t);
+      useLoadingStore.getState().hide('session');
+    };
+  }, [session.busy]);
+
   if (!entered) {
-    return <HomeScreen onEnter={() => setEntered(true)} />;
+    return (
+      <>
+        <LoadingOverlay />
+        <HomeScreen onEnter={() => setEntered(true)} />
+      </>
+    );
   }
 
   return (
     <ShellNavProvider goHome={goHome} homeBusy={leavingHome}>
       {children}
+      <LoadingOverlay />
       {/* 「ホームに戻る」は 2D/3D/AI 各ビューの ModeToggleBar 左端に統一（260623）。右上固定ボタンは廃止。 */}
       <ProjectSaveIndicator />
       <UndoRedoBar />

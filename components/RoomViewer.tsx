@@ -9,6 +9,7 @@ import { ModelRoot } from './ModelRoot.js';
 import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
 import { useStore } from 'zustand';
 import { useProjectStore } from '../lib/store/projectStore.js';
+import { useLoadingStore } from '../lib/store/loadingStore.js';
 import { EffectComposer as ThreeEffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { OutlinePass } from 'three/examples/jsm/postprocessing/OutlinePass.js';
@@ -3188,6 +3189,8 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
           // AIレンダリングのスナップショットが、隠しサムネイル生成用キャンバス等ではなく
           // このメイン3Dルームキャンバスを確実に選べるよう目印を付ける（useAiRenderer 参照）。
           gl.domElement.dataset.ariseRoom = '1';
+          // 2D→3D のローディング・オーバーレイを解除（3Dキャンバス生成後、数フレーム描画してから隠す・260630）。
+          requestAnimationFrame(() => requestAnimationFrame(() => useLoadingStore.getState().hide('view')));
         }}
         onPointerMissed={(e) => {
             if (isInteractionSuppressed()) return;

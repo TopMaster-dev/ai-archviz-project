@@ -35,6 +35,7 @@ import { RenderAdColumn } from './components/AdSlot.js';
 import { useStore } from 'zustand';
 import { useProjectStore } from './lib/store/projectStore.js';
 import { useRenderOverlayStore } from './lib/store/renderOverlayStore.js';
+import { useLoadingStore } from './lib/store/loadingStore.js';
 import { useOptionalProjectSession } from './lib/project/projectSessionContext.js';
 import { useAuth } from './lib/auth/AuthContext.js';
 import { maybeApplyFreePlanOutputLimits } from './utils/freePlanImage.js';
@@ -2355,17 +2356,33 @@ const App: React.FC = () => {
     return () => registerBeforeSave?.(null);
   }, [registerBeforeSave, commitPendingSketchToStore]);
 
+  // 2D→3D 切替（260630・クライアント要望）: 3Dビューのマウントは一瞬固まるため、ローディング・
+  // オーバーレイ（円形スピナー）を表示してから切り替える。setViewMode は即時に行う（遅延すると
+  // 連打で「2Dへ戻ったのに3Dへ戻される」競合が起きるため）。解除は RoomViewer の onCreated（3D準備完了）
+  // と、下の「3D以外になったら hide」effect の両方。WebGLエラー等で onCreated が来ない場合のセーフティ付き。
+  const enter3DView = useCallback(() => {
+    if (viewMode === '3D') return;
+    useLoadingStore.getState().show('view', '3Dビューを準備しています…');
+    setViewMode('3D');
+    window.setTimeout(() => useLoadingStore.getState().hide('view'), 8000);
+  }, [viewMode]);
+
+  // 3D以外（2D/AI へ戻った/連打）になったら 3D 準備中オーバーレイは必ず消す（固着防止）。
+  useEffect(() => {
+    if (viewMode !== '3D') useLoadingStore.getState().hide('view');
+  }, [viewMode]);
+
   const handleSketchApply = (points: SketchPoint[]) => {
     commitSketchPointsToRoomState(points);
-    setViewMode('3D');
+    enter3DView();
   };
 
   /** ヘッダー「3Dビュー」: 2D で編集した内容を pending からコミットしてから切り替え */
   const handleSwitchTo3DView = useCallback(() => {
     const pts = pendingPoints.length >= 3 ? pendingPoints : sketchPoints;
     if (pts.length >= 3) commitSketchPointsToRoomState(pts);
-    setViewMode('3D');
-  }, [pendingPoints, sketchPoints, commitSketchPointsToRoomState]);
+    enter3DView();
+  }, [pendingPoints, sketchPoints, commitSketchPointsToRoomState, enter3DView]);
   const canNavigateTo3D = pendingPoints.length >= 3 || sketchPoints.length >= 3;
   const navigateToSketch = useCallback(() => {
     setAiEditOpen(false);
@@ -3003,7 +3020,7 @@ const App: React.FC = () => {
             const ext = dot >= 0 ? file.name.slice(dot + 1).toLowerCase() : '';
             const objectUrl = URL.createObjectURL(file);
             setCustomModelUrl(ext ? `${objectUrl}#${ext}` : objectUrl);
-            setViewMode('3D');
+            enter3DView();
           }
         }}
       />
