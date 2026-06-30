@@ -90,6 +90,22 @@ function fmtDate(iso: string): string {
 
 const KIND_LABEL: Record<UploadKind, string> = { model: '3Dモデル', texture: 'テクスチャ' };
 
+/** 一覧の表示名: アップロード時に入力した「データ名称」(metadata.name) を優先し、無ければ元ファイル名（260630）。 */
+function uploadDisplayName(u: UserUpload): string {
+  const m = (u.metadata ?? {}) as Record<string, unknown>;
+  const name = typeof m.name === 'string' ? m.name.trim() : '';
+  return name || u.originalName || '(無題)';
+}
+/** 一覧の補足行: 入力したメーカー名・品番・商品金額をまとめる（無ければ空文字）。 */
+function uploadMetaSummary(u: UserUpload): string {
+  const m = (u.metadata ?? {}) as Record<string, unknown>;
+  const s = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : '');
+  const price = typeof m.price === 'number' && Number.isFinite(m.price) ? m.price : null;
+  return [s(m.brand) && `メーカー: ${s(m.brand)}`, s(m.modelNumber) && `品番: ${s(m.modelNumber)}`, price != null && `¥${price.toLocaleString()}`]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 export function UploadPanel({
   onUploadsChanged,
   refreshSignal,
@@ -193,7 +209,7 @@ export function UploadPanel({
       }
       const catNote =
         kind === 'texture' ? `（${textureCategoryLabel((metadata?.category as MaterialCategory) ?? null)}）` : '';
-      setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
+      setMsg(`「${uploadDisplayName(row)}」${catNote}をアップロードしました。`);
       if (kind === 'texture') onUploadsChanged?.(); // 素材一覧へ即時反映（モデルはエディタ側が再取得・削除/変更と挙動を統一）
       return true;
     } catch (e) {
@@ -497,11 +513,18 @@ export function UploadPanel({
                       >
                         {KIND_LABEL[u.kind]}
                       </span>
-                      <span className="truncate text-[11px] text-neutral-200" title={u.originalName ?? ''}>
-                        {u.originalName ?? '(無題)'}
+                      <span className="truncate text-[11px] text-neutral-200" title={uploadDisplayName(u)}>
+                        {uploadDisplayName(u)}
                       </span>
                     </div>
+                    {uploadMetaSummary(u) && (
+                      <span className="block truncate text-[10px] text-neutral-400" title={uploadMetaSummary(u)}>
+                        {uploadMetaSummary(u)}
+                      </span>
+                    )}
                     <span className="text-[10px] text-neutral-500">
+                      {/* データ名称で表示名を上書きした場合に元ファイル名も併記（どのファイルか分かるように）。 */}
+                      {uploadDisplayName(u) !== (u.originalName ?? '') && u.originalName ? `${u.originalName} · ` : ''}
                       {fmtBytes(u.bytes)}
                       {u.bytes != null ? ' · ' : ''}
                       {fmtDate(u.createdAt)}
