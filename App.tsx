@@ -2397,9 +2397,10 @@ const App: React.FC = () => {
     setAiEditOpen(true);
   }, []);
 
-  // 「?」はトグルから独立した別ボタンとして、トグルの隣に常設する（260630・クライアント要望/ホームと共通仕様）。
+  // 「?」はトグルから独立した別ボタンとして、トグルの「隣」に常設する（260630・クライアント要望/ホームと共通仕様）。
+  // toggle と ? を1つの div にまとめる＝親が justify-between でも分離せず常に隣り合う（AIビューでの右寄り誤配置を防ぐ）。
   const renderGlobalModeToggle = (active: 'sketch' | '3D' | 'ai') => (
-    <>
+    <div className="flex items-start gap-2">
       <ModeToggleBar
         activeMode={active}
         onSwitchToSketch={navigateToSketch}
@@ -2412,7 +2413,7 @@ const App: React.FC = () => {
         homeBusy={shellNav?.homeBusy}
       />
       <EditorHelpButton onClick={() => setEditorOnboardingOpen(true)} />
-    </>
+    </div>
   );
 
   const calculateArea = (points: SketchPoint[]) => {

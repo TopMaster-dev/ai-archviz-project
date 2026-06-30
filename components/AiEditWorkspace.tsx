@@ -350,7 +350,7 @@ export function AiEditWorkspace({
 
   // 上部左のバー: 通常は 2D/3D/AI のモード切替、写真専用モードでは「ホームに戻る」ボタン（2a）。
   const renderModeBarOrHome = () => (
-    <>
+    <div className="flex items-start gap-2">
       {photoOnly ? (
       <button
         type="button"
@@ -382,7 +382,7 @@ export function AiEditWorkspace({
       />
       )}
       <EditorHelpButton onClick={onOpenGuide} />
-    </>
+    </div>
   );
 
   const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
