@@ -100,7 +100,7 @@ describe('useAiEditSession deleteVersion', () => {
     expect(result.current.activeVersionId).toBeNull();
   });
 
-  it('親保護: 子が残っている間は親を削除できない（先に子を削除すれば親も削除可）', () => {
+  it('任意削除（安全）: 親を削除しても子は残り、子の親は祖先へ繋ぎ替えられる', () => {
     const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
     act(() => result.current.addVersionFromRender('data:image/png;base64,ROOT'));
     const rootId = result.current.versions[0].id;
@@ -115,15 +115,33 @@ describe('useAiEditSession deleteVersion', () => {
       }),
     );
     const childId = result.current.versions[1].id;
-    // 子がいる親は削除しても no-op（ゴミ箱はUIで非表示・ロジックでもブロック）。
+    // 親（root）を削除 → 親だけ消え、子は残る（連鎖削除しない）。
     act(() => result.current.deleteVersion(rootId));
-    expect(result.current.versions).toHaveLength(2);
-    expect(result.current.versions.some((v) => v.id === rootId)).toBe(true);
-    // 子を削除 → 子だけ消える。
-    act(() => result.current.deleteVersion(childId));
-    expect(result.current.versions.map((v) => v.id)).toEqual([rootId]);
-    // 親が葉になったので削除できる。
-    act(() => result.current.deleteVersion(rootId));
-    expect(result.current.versions).toHaveLength(0);
+    expect(result.current.versions.map((v) => v.id)).toEqual([childId]);
+    // 子の親は root の親（=null）へ繋ぎ替え（迷子の版を残さない）。
+    expect(result.current.versions[0].parentId).toBeNull();
+  });
+
+  it('任意削除（安全）: 中間版を削除すると子は祖父へ繋ぎ替わる', () => {
+    const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
+    act(() => result.current.addVersionFromRender('data:image/png;base64,A'));
+    const a = result.current.versions[0].id;
+    const mk = (parentId: string, out: string) =>
+      result.current.appendVersionAfterEdit({
+        parentId,
+        baseImageDataUrl: 'data:image/png;base64,X',
+        outputImageDataUrl: out,
+        styleRefDataUrl: null,
+        styleMemo: '',
+        objects: [],
+      });
+    act(() => mk(a, 'data:image/png;base64,B'));
+    const b = result.current.versions[1].id;
+    act(() => mk(b, 'data:image/png;base64,C'));
+    const c = result.current.versions[2].id;
+    // 中間 B を削除 → A と C が残り、C の親は祖父 A へ。
+    act(() => result.current.deleteVersion(b));
+    expect(result.current.versions.map((v) => v.id).sort()).toEqual([a, c].sort());
+    expect(result.current.versions.find((v) => v.id === c)?.parentId).toBe(a);
   });
 });

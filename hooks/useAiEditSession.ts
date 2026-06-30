@@ -309,15 +309,16 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
    */
   const deleteVersion = useCallback((idToDelete: string) => {
     setVersions((prev) => {
-      // 親保護（260630・クライアント要望）: この版から派生した子孫（AI生成画像）が残っている間は
-      // 元画像（親）を削除しない（UI でもゴミ箱を非表示）。先に子を削除すれば親も削除できる。
-      // 判定は連鎖ユーティリティで単一ソース化（size>1 = 自分以外に子孫が居る = ブロック）。
-      if (collectVersionsToDelete(prev, idToDelete).size > 1) return prev;
+      // 任意削除・安全版（260630・クライアント要望）: 親子関係に依らず、どの版でも単体で削除できる。
+      //  - 連鎖削除しない（対象1件だけ消す）。
+      //  - 対象の子は対象の親へ繋ぎ替え（親リンク切れ＝迷子の版を残さない。親が居なければルート化）。
+      //  - 容量解放は「生き残る版が参照しない画像」だけ物理削除＝子の base(=親の output) は keep され
+      //    画像が壊れない（＝安全に親を消せる）。
       const target = prev.find((v) => v.id === idToDelete);
       if (!target) return prev;
-      const survivors = prev.filter((v) => v.id !== idToDelete);
-      // 容量解放（260629）: 削除する版が参照していた Storage 画像のうち、生き残る版が
-      // まだ参照していないものだけを物理削除する（親の output= 子の base 等は残す）。
+      const survivors = prev
+        .filter((v) => v.id !== idToDelete)
+        .map((v) => (v.parentId === idToDelete ? { ...v, parentId: target.parentId } : v));
       const keep = new Set<string>();
       for (const v of survivors) {
         for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl]) {
