@@ -1289,35 +1289,38 @@ export function AiEditWorkspace({
                         boxShadow: isActiveObject ? `inset 0 0 0 1px ${pal.border}33` : undefined,
                       }}
                     >
-                      <div className="flex items-start gap-2 cursor-pointer">
-                        <div
-                          className="w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center"
-                          style={{ borderColor: pal.border }}
-                        >
-                          {objectImageDataUrl ? (
-                            <img src={objectImageDataUrl} alt="" className="w-full h-full object-cover" />
-                          ) : (
-                            <span className="text-[9px] font-bold text-neutral-400 px-1">no image</span>
-                          )}
+                      {/* 縦積みレイアウト（260630・クライアントUI準拠）: ヘッダ→画像→指示文→範囲リストをカード幅いっぱいに。 */}
+                      <div className="cursor-pointer space-y-1.5">
+                        {/* ヘッダ: 領域件数（左）＋削除（右）をカード幅いっぱいに */}
+                        <div className="flex items-center justify-between gap-1">
+                          <span className="text-[10px] font-bold text-neutral-400">
+                            領域 {o.placements.length} 件
+                          </span>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              onRemoveObject(o.id);
+                            }}
+                            className="p-1 text-red-400 hover:bg-red-500/10 rounded"
+                            aria-label="削除"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
-                        <div className="flex-1 min-w-0 space-y-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <span className="text-[10px] font-bold text-neutral-400">
-                              領域 {o.placements.length} 件
-                            </span>
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                onRemoveObject(o.id);
-                              }}
-                              className="p-1 text-red-400 hover:bg-red-500/10 rounded"
-                              aria-label="削除"
-                            >
-                              <Trash2 className="w-4 h-4" />
-                            </button>
+                        {/* 参照画像: サムネ＋選択ボタン */}
+                        <div className="flex items-center gap-2">
+                          <div
+                            className="w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center"
+                            style={{ borderColor: pal.border }}
+                          >
+                            {objectImageDataUrl ? (
+                              <img src={objectImageDataUrl} alt="" className="w-full h-full object-cover" />
+                            ) : (
+                              <span className="text-[9px] font-bold text-neutral-400 px-1">no image</span>
+                            )}
                           </div>
-                          <div className="flex gap-1">
+                          <div className="flex flex-wrap gap-1">
                             <button
                               type="button"
                               onClick={(e) => {
@@ -1345,65 +1348,66 @@ export function AiEditWorkspace({
                               </button>
                             ) : null}
                           </div>
-                          <textarea
-                            value={o.memo}
-                            onClick={(e) => e.stopPropagation()}
-                            onChange={(e) => onUpdateObjectMemo(o.id, e.target.value)}
-                            placeholder="このエリア内にどのような編集を加えたいですか？"
-                            rows={2}
-                            className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] resize-none"
-                          />
-
-                          <ul className="space-y-1 mt-1">
-                            {o.placements.map((_, pi) => {
-                              const slotActive = isActiveObject && placementEditIndex === pi;
-                              return (
-                                <li
-                                  key={pi}
-                                  className={`rounded px-1.5 py-1 space-y-1 ${
-                                    slotActive ? 'bg-white/10' : 'bg-black/25'
-                                  }`}
-                                >
-                                  <div className="flex items-center justify-between gap-1">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onSetReplacePlacementMode(o.id, pi);
-                                      }}
-                                      className="text-[10px] text-left truncate flex-1 underline-offset-2 hover:underline"
-                                      style={{ color: pal.border }}
-                                    >
-                                      範囲 {pi + 1} — {maskMode === 'polygon' ? '再作図で上書き' : '再ドラッグで上書き'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        onRemovePlacementAt(o.id, pi);
-                                      }}
-                                      className="p-0.5 text-neutral-500 hover:text-red-400 rounded"
-                                      aria-label="領域を削除"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  </div>
-                                </li>
-                              );
-                            })}
-                          </ul>
-
-                          {appendMode && (
-                            <p className="text-[9px] text-amber-400/90">
-                              {maskMode === 'polygon'
-                                ? '画像上をクリックして頂点を打ち、新しい範囲を作図します'
-                                : '次のドラッグで新しい範囲を追加します'}
-                            </p>
-                          )}
-                          {o.placements.length === 0 && (
-                            <p className="text-[9px] text-amber-500">範囲未指定（生成不可）</p>
-                          )}
                         </div>
+                        {/* 指示プロンプト（カード幅いっぱい） */}
+                        <textarea
+                          value={o.memo}
+                          onClick={(e) => e.stopPropagation()}
+                          onChange={(e) => onUpdateObjectMemo(o.id, e.target.value)}
+                          placeholder="このエリア内にどのような編集を加えたいですか？"
+                          rows={2}
+                          className="w-full bg-black/40 border border-white/10 rounded px-2 py-1 text-[11px] resize-none"
+                        />
+                        {/* 範囲リスト（カード幅いっぱい） */}
+                        <ul className="space-y-1">
+                          {o.placements.map((_, pi) => {
+                            const slotActive = isActiveObject && placementEditIndex === pi;
+                            return (
+                              <li
+                                key={pi}
+                                className={`rounded px-1.5 py-1 space-y-1 ${
+                                  slotActive ? 'bg-white/10' : 'bg-black/25'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between gap-1">
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onSetReplacePlacementMode(o.id, pi);
+                                    }}
+                                    className="text-[10px] text-left truncate flex-1 underline-offset-2 hover:underline"
+                                    style={{ color: pal.border }}
+                                  >
+                                    範囲 {pi + 1} — {maskMode === 'polygon' ? '再作図で上書き' : '再ドラッグで上書き'}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onRemovePlacementAt(o.id, pi);
+                                    }}
+                                    className="p-0.5 text-neutral-500 hover:text-red-400 rounded"
+                                    aria-label="領域を削除"
+                                  >
+                                    <X className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </li>
+                            );
+                          })}
+                        </ul>
+
+                        {appendMode && (
+                          <p className="text-[9px] text-amber-400/90">
+                            {maskMode === 'polygon'
+                              ? '画像上をクリックして頂点を打ち、新しい範囲を作図します'
+                              : '次のドラッグで新しい範囲を追加します'}
+                          </p>
+                        )}
+                        {o.placements.length === 0 && (
+                          <p className="text-[9px] text-amber-500">範囲未指定（生成不可）</p>
+                        )}
                       </div>
                     </li>
                   );
