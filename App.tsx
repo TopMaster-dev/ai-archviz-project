@@ -1,12 +1,13 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback, Suspense, startTransition, memo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, Environment } from '@react-three/drei';
-import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download, ChevronLeft, Box } from 'lucide-react';
+import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download, ChevronLeft } from 'lucide-react';
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
 import { MaterialCategory, Product, RenderState, FurnitureItem, FurnitureCatalogItem, Opening, ToolMode, AddKind, CameraPreset, CameraBlendRequest, AiEstimateItem, AgentRecommendation } from './types.js';
 import { NumericField } from './components/NumericField.js';
 import { RoomViewer } from './components/RoomViewer.js';
 import { ModelRoot } from './components/ModelRoot.js';
+import { ModelFilePreview } from './components/ModelFilePreview.js';
 import { CameraPresetBar } from './components/CameraPresetBar.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
@@ -1838,7 +1839,7 @@ const App: React.FC = () => {
     // 金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。0/空/不正は未入力＝undefined。
     const priceNum = Math.round(Number(pendingModelPrice));
     const price = pendingModelPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : undefined;
-    closeModelPopup();
+    // ポップアップは「成功時のみ」閉じる（失敗時は入力を保ったまま再試行できる。アップロード中はオーバーレイが覆う）。
     useLoadingStore.getState().show('model-upload', '3Dモデルをアップロード中…');
     try {
       // 容量のソフト上限チェック（ホームのアップロードパネルと同じ挙動で迂回を防ぐ）。
@@ -1856,6 +1857,7 @@ const App: React.FC = () => {
       // 即座にカタログへ追加（この時点では footprint2d 未計測＝undefined のことがある）。
       setFurnitureCatalog((prev) => (prev.some((p) => p.id === initialItem.id) ? prev : [...prev, initialItem]));
       setFurnitureCatalogFetchStatus('ready');
+      closeModelPopup(); // 成功時のみ閉じる
       // バックグラウンドで寸法（バウンディングボックス）を実測し、footprint2d を反映＋永続化（260625・カタログと同様に2D/3Dへ）。
       void ensureUploadFootprint(row)
         .then((computed) => {
@@ -3082,10 +3084,7 @@ const App: React.FC = () => {
             <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
             <div className="mt-4 flex gap-4">
-              <div className="flex h-28 w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-neutral-800 text-neutral-400">
-                <Box className="h-8 w-8" />
-                <span className="line-clamp-2 break-all px-1.5 text-center text-[9px] leading-tight">{pendingModelFile.name}</span>
-              </div>
+              <ModelFilePreview file={pendingModelFile} className="h-28 w-28 shrink-0 rounded-lg border border-white/10" />
               <div className="grid flex-1 grid-cols-1 gap-2.5 self-center">
                 <div>
                   <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>

@@ -115,10 +115,15 @@ export async function ensureUploadFootprint(upload: UserUpload): Promise<Furnitu
 export function uploadToProduct(upload: UserUpload): Product {
   const meta = (upload.metadata ?? {}) as Record<string, unknown>;
   const assigned = normalizeTextureCategory(meta.category);
+  // 建材アップロード時に入力したメーカー名・品番（260630）。メーカー名があればブランド表示に使う。
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  const metaBrand = str(meta.brand);
+  const metaModelNumber = str(meta.modelNumber);
   return {
     id: `upload-tex-${upload.id}`,
     name: deriveUploadName(upload.originalName, 'テクスチャ'),
-    brand: USER_UPLOAD_BRAND,
+    brand: metaBrand || USER_UPLOAD_BRAND, // メーカー名未入力時は識別用の既定ブランド
+    modelNumber: metaModelNumber || undefined,
     category: assigned ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
     crossCategory: assigned === null,
     pricePerUnit: 0,
@@ -131,7 +136,10 @@ export function uploadToProduct(upload: UserUpload): Product {
   };
 }
 
-/** その素材がユーザーアップロード由来か（素材パレットのカテゴリ横断表示に使用）。 */
-export function isUserUploadProduct(p: Pick<Product, 'brand'>): boolean {
-  return p.brand === USER_UPLOAD_BRAND;
+/**
+ * その素材がユーザーアップロード由来か（素材パレットのカテゴリ横断表示等に使用）。
+ * メーカー名入力でブランドが任意値になり得るため、ブランドではなく id 接頭辞で判定する（260630）。
+ */
+export function isUserUploadProduct(p: Pick<Product, 'id'>): boolean {
+  return typeof p.id === 'string' && p.id.startsWith('upload-tex-');
 }

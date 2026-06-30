@@ -25,6 +25,7 @@ import {
 } from '../lib/uploadsCatalog.js';
 import { useProjectStore } from '../lib/store/projectStore.js';
 import { useConfirm } from './ConfirmDialog.js';
+import { ModelFilePreview } from './ModelFilePreview.js';
 
 /**
  * 削除したテクスチャを壁/床/天井などに割り当て済みなら、その割当を既定（null）へ戻す。
@@ -111,9 +112,20 @@ export function UploadPanel({
   // 建材画像（テクスチャ）追加: ファイル選択後にカテゴリ選択ポップアップで使う一時状態。
   const [pendingTexture, setPendingTexture] = useState<{ file: File; previewUrl: string } | null>(null);
   const [pendingCategory, setPendingCategory] = useState<MaterialCategory | null>(null);
+  // 建材ポップアップのメーカー名・品番（任意・260630。エディタの建材ポップアップと同一に）。
+  const [ptBrand, setPtBrand] = useState('');
+  const [ptModelNumber, setPtModelNumber] = useState('');
+  // 3Dモデル追加: ファイル選択後に情報入力ポップアップ（データ名称/品番/メーカー名/商品金額）を出す（260630）。
+  const [pendingModel, setPendingModel] = useState<{ file: File } | null>(null);
+  const [pmName, setPmName] = useState('');
+  const [pmBrand, setPmBrand] = useState('');
+  const [pmModelNumber, setPmModelNumber] = useState('');
+  const [pmPrice, setPmPrice] = useState('');
 
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const textureInputRef = useRef<HTMLInputElement | null>(null);
+  // 二重送信ガード（確認ボタン連打で同一ファイルを2回アップロードしないように・同期判定）。
+  const uploadBusyRef = useRef(false);
 
   // 使用量（バケット実体）の再取得。アップロード/削除/初期表示後に呼ぶ。最新値を返す。
   const refreshUsage = async (): Promise<StorageUsage | null> => {
@@ -157,58 +169,92 @@ export function UploadPanel({
     (kind === 'model' ? modelInputRef : textureInputRef).current?.click();
   };
 
-  // 実アップロード（モデルは即時、テクスチャはポップアップ確定後）。
-  const doUpload = async (file: File, kind: UploadKind, category: MaterialCategory | null) => {
-    // 容量警告プロセス（管理表 row 31）: 本人の総容量がソフト上限に達する/超える追加はブロックする。
-    const currentTotal = usage?.totalBytes ?? uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
-    const capacityMsg = checkStorageCapacity(currentTotal, file.size);
-    if (capacityMsg) {
-      setMsg(capacityMsg);
-      return;
-    }
-    setBusyKind(kind);
-    setUploadingName(file.name);
-    setProgress(null); // 進捗が取れる環境（XHR）では onProgress が数値をセット、取れない場合は null のまま＝不確定バー
-    setMsg(null);
+  // 実アップロード（いずれもポップアップ確定後）。metadata はそのまま user_uploads へ保存する。成否を返す。
+  const doUpload = async (file: File, kind: UploadKind, metadata?: Record<string, unknown>): Promise<boolean> => {
+    if (uploadBusyRef.current) return false; // 連打による二重アップロード防止（同期ガード＝再描画前の二度押しも塞ぐ）。
+    uploadBusyRef.current = true; // 容量チェックより前に立て、容量NGの早期return含め finally で必ず解除（再入の隙を作らない）。
     try {
-      // テクスチャは選択したカテゴリを metadata.category に保存（共通=未設定）。
-      const metadata = kind === 'texture' && category ? { category } : undefined;
+      // 容量警告プロセス（管理表 row 31）: 本人の総容量がソフト上限に達する/超える追加はブロックする。
+      const currentTotal = usage?.totalBytes ?? uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+      const capacityMsg = checkStorageCapacity(currentTotal, file.size);
+      if (capacityMsg) {
+        setMsg(capacityMsg);
+        return false;
+      }
+      setBusyKind(kind);
+      setUploadingName(file.name);
+      setProgress(null); // 進捗が取れる環境（XHR）では onProgress が数値をセット、取れない場合は null のまま＝不確定バー
+      setMsg(null);
       const row = await uploadUserFile(file, kind, { metadata, onProgress: setProgress });
       setUploads((prev) => [row, ...prev]);
       const fresh = await refreshUsage(); // バケット実体の合計を更新（busy 解除前に最新化＝連続アップロードでも上限判定が古くならない）
       if (fresh && fresh.totalBytes >= STORAGE_WARN_THRESHOLD_BYTES) {
         void notifyStorageWarningSelf(); // 日次 cron を待たず即時に警告メールを依頼（サーバが SMTP/しきい値/クールダウンを判定）
       }
-      const catNote = kind === 'texture' ? `（${textureCategoryLabel(category)}）` : '';
+      const catNote =
+        kind === 'texture' ? `（${textureCategoryLabel((metadata?.category as MaterialCategory) ?? null)}）` : '';
       setMsg(`「${row.originalName ?? file.name}」${catNote}をアップロードしました。`);
-      if (kind === 'texture') onUploadsChanged?.(); // エディタの素材一覧へ即時反映
+      if (kind === 'texture') onUploadsChanged?.(); // 素材一覧へ即時反映（モデルはエディタ側が再取得・削除/変更と挙動を統一）
+      return true;
     } catch (e) {
       setMsg(e instanceof Error ? e.message : 'アップロードに失敗しました。');
+      return false;
     } finally {
       setBusyKind(null);
       setProgress(null);
       setUploadingName(null);
+      uploadBusyRef.current = false;
     }
   };
 
-  // 3Dモデルは選択後すぐにアップロード。
+  // 容量の事前チェック（ポップアップを開く前に弾く）。OK なら true。
+  const passesCapacityPrecheck = (file: File): boolean => {
+    const currentTotal = usage?.totalBytes ?? uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+    const capacityMsg = checkStorageCapacity(currentTotal, file.size);
+    if (capacityMsg) {
+      setMsg(capacityMsg);
+      return false;
+    }
+    return true;
+  };
+
+  // 3Dモデルは選択後、情報入力ポップアップを開く（建材と同じ流れ・260630）。データ名称はファイル名で初期化。
   const onModelPicked = (file: File | undefined) => {
     if (modelInputRef.current) modelInputRef.current.value = '';
-    if (file) void doUpload(file, 'model', null);
+    if (!file || !passesCapacityPrecheck(file)) return;
+    setMsg(null);
+    setPmName(file.name.replace(/\.[^./\\]+$/, '').trim());
+    setPmBrand('');
+    setPmModelNumber('');
+    setPmPrice('');
+    setPendingModel({ file });
+  };
+  const cancelPendingModel = () => setPendingModel(null);
+  const confirmPendingModel = async () => {
+    const pending = pendingModel;
+    if (!pending) return;
+    const name = pmName.trim();
+    const brand = pmBrand.trim();
+    const modelNumber = pmModelNumber.trim();
+    const priceNum = Math.round(Number(pmPrice));
+    const price = pmPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : undefined;
+    const metadata: Record<string, unknown> = {};
+    if (name) metadata.name = name;
+    if (brand) metadata.brand = brand;
+    if (modelNumber) metadata.modelNumber = modelNumber;
+    if (price !== undefined) metadata.price = price;
+    const ok = await doUpload(pending.file, 'model', metadata);
+    if (ok) setPendingModel(null); // 成功時のみ閉じる（失敗時は入力を保ったまま再試行できる）
   };
 
   // 建材画像（テクスチャ）は選択後、カテゴリ選択ポップアップを開く（260623）。
   const onTexturePicked = (file: File | undefined) => {
     if (textureInputRef.current) textureInputRef.current.value = '';
-    if (!file) return;
-    const currentTotal = usage?.totalBytes ?? uploads.reduce((sum, u) => sum + (u.bytes ?? 0), 0);
-    const capacityMsg = checkStorageCapacity(currentTotal, file.size);
-    if (capacityMsg) {
-      setMsg(capacityMsg);
-      return;
-    }
+    if (!file || !passesCapacityPrecheck(file)) return;
     setMsg(null);
     setPendingCategory(null); // 既定=共通
+    setPtBrand('');
+    setPtModelNumber('');
     setPendingTexture({ file, previewUrl: URL.createObjectURL(file) });
   };
 
@@ -216,8 +262,14 @@ export function UploadPanel({
   const confirmPendingTexture = async () => {
     const pending = pendingTexture;
     if (!pending) return;
-    setPendingTexture(null); // ポップアップを閉じる（ObjectURL は effect が解放）
-    await doUpload(pending.file, 'texture', pendingCategory);
+    const brand = ptBrand.trim();
+    const modelNumber = ptModelNumber.trim();
+    const metadata: Record<string, unknown> = {};
+    if (pendingCategory) metadata.category = pendingCategory; // 共通=未設定
+    if (brand) metadata.brand = brand;
+    if (modelNumber) metadata.modelNumber = modelNumber;
+    const ok = await doUpload(pending.file, 'texture', metadata);
+    if (ok) setPendingTexture(null); // 成功時のみ閉じる（ObjectURL は effect が解放・失敗時は再試行可）
   };
 
   // テクスチャのカテゴリ割当を変更（既存 metadata にマージして保存）。
@@ -353,7 +405,7 @@ export function UploadPanel({
       <div className="mb-3 flex gap-1.5">
         <button
           type="button"
-          disabled={busy || overLimit || pendingTexture != null}
+          disabled={busy || overLimit || pendingTexture != null || pendingModel != null}
           onClick={() => handlePick('model')}
           className="flex-1 rounded bg-emerald-600 py-1.5 font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
         >
@@ -361,7 +413,7 @@ export function UploadPanel({
         </button>
         <button
           type="button"
-          disabled={busy || overLimit || pendingTexture != null}
+          disabled={busy || overLimit || pendingTexture != null || pendingModel != null}
           onClick={() => handlePick('texture')}
           className="flex-1 rounded bg-neutral-700 py-1.5 font-semibold text-white transition hover:bg-neutral-600 disabled:opacity-50"
         >
@@ -488,64 +540,133 @@ export function UploadPanel({
         </div>
       )}
 
-      {/* 建材画像のカテゴリ選択ポップアップ（260623）。ファイル選択後にカテゴリを決めて追加する。 */}
+      {/* 建材画像のカテゴリ選択ポップアップ（260623）。エディタの建材ポップアップと同一レイアウト（260630）。 */}
       {pendingTexture && (
         <div
           className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4"
           onClick={cancelPendingTexture}
         >
           <div
-            className="w-full max-w-lg rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-2xl"
+            className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
             role="dialog"
             aria-modal="true"
             aria-label="建材画像のカテゴリ選択"
           >
             <h3 className="text-base font-bold text-neutral-100">追加した建材画像のカテゴリを選択してください。</h3>
-            <p className="mt-1 text-[11px] text-neutral-400">
-              ※複数のカテゴリに属する場合は共通を選択してください。
-            </p>
-
+            <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。</p>
+            {/* メーカー名・品番（任意）。最上部に配置し、見積もりへ反映する。 */}
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-[10px] text-neutral-400">メーカー名（任意）</label>
+                <input
+                  value={ptBrand}
+                  onChange={(e) => setPtBrand(e.target.value)}
+                  placeholder="例: 〇〇建材"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] text-neutral-400">品番（任意）</label>
+                <input
+                  value={ptModelNumber}
+                  onChange={(e) => setPtModelNumber(e.target.value)}
+                  placeholder="例: ABC-123"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              </div>
+            </div>
             <div className="mt-4 flex gap-4">
-              <div className="h-32 w-32 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
+              <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
                 <img src={pendingTexture.previewUrl} alt="選択された建材画像" className="h-full w-full object-cover" />
               </div>
-              <div className="flex-1">
-                <div className="grid grid-cols-2 gap-2">
-                  {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
-                    <button
-                      key={opt.label}
-                      type="button"
-                      onClick={() => setPendingCategory(opt.value)}
-                      className={`rounded-lg py-2.5 text-sm font-semibold transition ${
-                        pendingCategory === opt.value
-                          ? 'bg-sky-600 text-white'
-                          : 'bg-neutral-800 text-neutral-300 hover:bg-neutral-700'
-                      }`}
-                    >
-                      {opt.label}
-                    </button>
-                  ))}
+              <div className="grid flex-1 grid-cols-2 gap-2 self-center">
+                {TEXTURE_CATEGORY_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.label}
+                    type="button"
+                    onClick={() => setPendingCategory(opt.value)}
+                    className={`rounded-lg px-3 py-2.5 text-xs font-bold transition ${pendingCategory === opt.value ? 'bg-emerald-600 text-white' : 'bg-white/5 text-neutral-300 hover:bg-white/10'}`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {busy ? (
+              <p className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-emerald-300"><Loader2 className="h-3.5 w-3.5 animate-spin" />アップロード中…</p>
+            ) : msg ? (
+              <p className="mt-3 text-[11px] text-red-300">{msg}</p>
+            ) : null}
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" disabled={busy} onClick={cancelPendingTexture} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5 disabled:opacity-50">キャンセル</button>
+              <button type="button" disabled={busy} onClick={() => void confirmPendingTexture()} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50">{busy ? 'アップロード中…' : '選択したカテゴリに追加'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 3Dモデルの情報入力ポップアップ（260630）。エディタの 3Dモデルポップアップと同一。 */}
+      {pendingModel && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onClick={cancelPendingModel}>
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="3Dモデルの情報入力">
+            <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
+            <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
+            <div className="mt-4 flex gap-4">
+              <ModelFilePreview file={pendingModel.file} className="h-28 w-28 shrink-0 rounded-lg border border-white/10" />
+              <div className="grid flex-1 grid-cols-1 gap-2.5 self-center">
+                <div>
+                  <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
+                  <input
+                    value={pmName}
+                    onChange={(e) => setPmName(e.target.value)}
+                    placeholder="例: ソファ A"
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="mb-1 block text-[10px] text-neutral-400">品番（任意）</label>
+                    <input
+                      value={pmModelNumber}
+                      onChange={(e) => setPmModelNumber(e.target.value)}
+                      placeholder="例: ABC-123"
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] text-neutral-400">メーカー名（任意）</label>
+                    <input
+                      value={pmBrand}
+                      onChange={(e) => setPmBrand(e.target.value)}
+                      placeholder="例: 〇〇家具"
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={pmPrice}
+                    onChange={(e) => setPmPrice(e.target.value)}
+                    placeholder="例: 45000"
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                  />
                 </div>
               </div>
             </div>
-
+            {busy ? (
+              <p className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-emerald-300"><Loader2 className="h-3.5 w-3.5 animate-spin" />アップロード中…</p>
+            ) : msg ? (
+              <p className="mt-3 text-[11px] text-red-300">{msg}</p>
+            ) : null}
             <div className="mt-5 flex justify-end gap-2">
-              <button
-                type="button"
-                onClick={cancelPendingTexture}
-                className="rounded-lg bg-neutral-800 px-4 py-2 text-sm transition hover:bg-neutral-700"
-              >
-                キャンセル
-              </button>
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => void confirmPendingTexture()}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
-              >
-                選択したカテゴリに追加
-              </button>
+              <button type="button" disabled={busy} onClick={cancelPendingModel} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5 disabled:opacity-50">キャンセル</button>
+              <button type="button" disabled={busy} onClick={() => void confirmPendingModel()} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50">{busy ? 'アップロード中…' : 'この内容で追加'}</button>
             </div>
           </div>
         </div>

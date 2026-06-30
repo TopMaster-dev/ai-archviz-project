@@ -63,6 +63,22 @@ describe('uploadToFurnitureItem', () => {
     expect(item.footprint2d).toBeUndefined();
     expect(item.defaultScale).toBe(1);
   });
+
+  it('reads data name / maker / model number / price from metadata (260630)', () => {
+    const item = uploadToFurnitureItem(
+      baseUpload({ originalName: 'raw.glb', metadata: { name: 'ソファA', brand: '〇〇家具', modelNumber: 'ABC-1', price: 45000 } }),
+    );
+    expect(item.name).toBe('ソファA'); // データ名称があればファイル名より優先
+    expect(item.brand).toBe('〇〇家具');
+    expect(item.modelNumber).toBe('ABC-1');
+    expect(item.price).toBe(45000);
+  });
+  it('blank data name → falls back to file name; missing meta → undefined', () => {
+    const item = uploadToFurnitureItem(baseUpload({ originalName: 'chair.glb', metadata: { name: '   ' } }));
+    expect(item.name).toBe('chair');
+    expect(item.brand).toBeUndefined();
+    expect(item.price).toBeUndefined();
+  });
 });
 
 describe('uploadToProduct', () => {
@@ -90,6 +106,18 @@ describe('uploadToProduct', () => {
     expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: { category: 'Furniture' } })).crossCategory).toBe(true);
     expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: { category: 'Bogus' } })).crossCategory).toBe(true);
   });
+
+  it('reads maker name + model number from metadata (260630)', () => {
+    const p = uploadToProduct(baseUpload({ kind: 'texture', metadata: { brand: '〇〇建材', modelNumber: 'XY-9' } }));
+    expect(p.brand).toBe('〇〇建材');
+    expect(p.modelNumber).toBe('XY-9');
+    expect(isUserUploadProduct(p)).toBe(true); // ブランドが任意値でも id 判定で true
+  });
+  it('blank maker name → falls back to the default brand', () => {
+    const p = uploadToProduct(baseUpload({ kind: 'texture', metadata: { brand: '  ' } }));
+    expect(p.brand).toBe(USER_UPLOAD_BRAND);
+    expect(p.modelNumber).toBeUndefined();
+  });
 });
 
 describe('texture category helpers', () => {
@@ -110,8 +138,9 @@ describe('texture category helpers', () => {
 });
 
 describe('isUserUploadProduct', () => {
-  it('detects by brand', () => {
-    expect(isUserUploadProduct({ brand: USER_UPLOAD_BRAND })).toBe(true);
-    expect(isUserUploadProduct({ brand: 'Daiken' })).toBe(false);
+  it('detects by id prefix (brand may be a real maker name)', () => {
+    expect(isUserUploadProduct({ id: 'upload-tex-u1' })).toBe(true);
+    expect(isUserUploadProduct({ id: 'upload-tex-u1', brand: '〇〇建材' } as never)).toBe(true);
+    expect(isUserUploadProduct({ id: 'mat-floor-1' })).toBe(false);
   });
 });
