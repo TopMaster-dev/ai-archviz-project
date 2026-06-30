@@ -946,27 +946,8 @@ export function AiEditWorkspace({
                   : 'ベース画像（オブジェクトを選択し、領域をドラッグ）'}
               </div>
               <div className="flex shrink-0 items-center gap-1">
-                {/* マスク方式の切替（260623）。多角形＝クリックで頂点、矩形＝従来のドラッグ。 */}
-                <div className="glass flex rounded-lg border border-white/10 p-0.5">
-                  <button
-                    type="button"
-                    onClick={() => setMaskMode('polygon')}
-                    className={`rounded-md px-2 py-1 text-[10px] font-black tracking-wider transition-colors ${
-                      maskMode === 'polygon' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
-                    }`}
-                  >
-                    多角形
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setMaskMode('rect')}
-                    className={`rounded-md px-2 py-1 text-[10px] font-black tracking-wider transition-colors ${
-                      maskMode === 'rect' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
-                    }`}
-                  >
-                    矩形
-                  </button>
-                </div>
+                {/* マスク方式の切替（多角形/矩形）はエリア編集パネル上部へ移動（260630・クライアントUI準拠）。
+                    描画中の「確定/取消」だけはキャンバス側に残す（その場の操作のため）。 */}
                 {maskMode === 'polygon' && polygonPoints.length > 0 && (
                   <>
                     <button
@@ -1264,6 +1245,29 @@ export function AiEditWorkspace({
 
             {activeTool === 'area' && (
             <div>
+              {/* マスク方式の切替（260630・クライアントUI準拠でパネル上部へ移動）。多角形＝クリックで頂点、矩形＝ドラッグ。 */}
+              <div className="mb-2 flex items-center gap-1.5">
+                <div className="glass flex rounded-lg border border-white/10 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setMaskMode('polygon')}
+                    className={`rounded-md px-3 py-1 text-[10px] font-black tracking-wider transition-colors ${
+                      maskMode === 'polygon' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
+                    }`}
+                  >
+                    多角形
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMaskMode('rect')}
+                    className={`rounded-md px-3 py-1 text-[10px] font-black tracking-wider transition-colors ${
+                      maskMode === 'rect' ? 'bg-white text-black' : 'text-white/55 hover:text-white'
+                    }`}
+                  >
+                    矩形
+                  </button>
+                </div>
+              </div>
               {draftObjects.length === 0 && (
                 <p className="text-[11px] leading-relaxed text-neutral-500 py-2">
                   「＋範囲を追加」を押して、編集したい範囲（領域）を追加してください。
