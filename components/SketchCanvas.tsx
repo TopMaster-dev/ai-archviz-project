@@ -332,7 +332,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   isClosedRef.current = isClosed;
   const [isGridSnapEnabled, setIsGridSnapEnabled] = useState(true);
   // 寸法/頂点スナップ（既存ジオメトリの頂点・X/Y整列に吸着）。
-  const [isVertexSnapEnabled, setIsVertexSnapEnabled] = useState(true);
+  // 頂点スナップは UI トグルを撤去（260630・クライアント要望）。機能は常時 ON のまま維持。
+  const [isVertexSnapEnabled] = useState(true);
   // 下絵スナップ（背景画像の枠・辺・中心へ吸着）。既定OFF・任意。
   const [isUnderlaySnapEnabled, setIsUnderlaySnapEnabled] = useState(false);
 
@@ -2513,11 +2514,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               天伏図
             </button>
           </div>
-        </div>
-
-        {/* オブジェクト管理（平面=ドア/窓・床家具／天伏=梁・天井家具）＋非アクティブ濃度・260623 */}
-        <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
-          <div className="flex items-center gap-2 text-[10px] text-neutral-400">
+          {/* 天伏図の透明度を平面/天伏トグルと同じグループ（同一カード）内へ（260630・クライアント要望） */}
+          <div className="mt-2 flex items-center gap-2 border-t border-white/5 px-1 pt-2 text-[10px] text-neutral-400">
             <span title="非アクティブな図面（平面/天伏）の表示濃度">天伏図の透明度</span>
             <input
               type="range"
@@ -2529,8 +2527,11 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               className="w-24"
             />
           </div>
+        </div>
 
-          <div className="mt-2 border-t border-white/5 pt-2">
+        {/* オブジェクト管理（平面=ドア/窓・床家具／天伏=梁・天井家具）・260623。透明度はトグルと同グループへ移動(260630) */}
+        <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
+          <div>
             <div className="mb-1 text-[10px] font-bold text-neutral-500">
               {isCeilingView ? '天伏オブジェクト' : '平面オブジェクト'}
             </div>
@@ -2788,10 +2789,6 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               </select>
               <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
             </div>
-          </div>
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] font-bold text-neutral-400" title="ON で、新しい点を既存の頂点や、既存頂点と同じX/Y位置（整列）に自動で吸着させます">頂点スナップ</span>
-            <ToggleSwitch enabled={isVertexSnapEnabled} onChange={() => setIsVertexSnapEnabled(!isVertexSnapEnabled)} />
           </div>
         </div>
         <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
