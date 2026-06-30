@@ -48,7 +48,9 @@ export interface ProjectSession {
   /** 直近の操作エラー（上限超過の案内などを含む）。 */
   error: string | null;
   switchProject(id: string): Promise<void>;
-  createNewProject(name?: string, kind?: ProjectKind): Promise<void>;
+  createNewProject(name?: string, kind?: ProjectKind, memo?: string): Promise<void>;
+  /** 任意プロジェクトの自由メモを更新（260630）。 */
+  updateProjectMemo(id: string, memo: string): Promise<void>;
   duplicateCurrentProject(): Promise<void>;
   renameCurrentProject(name: string): Promise<void>;
   deleteCurrentProject(): Promise<void>;
@@ -250,7 +252,7 @@ export function useProjectSession(): ProjectSession {
   );
 
   const createNewProject = useCallback(
-    async (name: string = DEFAULT_PROJECT_NAME, kind: ProjectKind = 'full') => {
+    async (name: string = DEFAULT_PROJECT_NAME, kind: ProjectKind = 'full', memo?: string) => {
       if (busy) return;
       setBusy(true);
       setError(null);
@@ -260,7 +262,7 @@ export function useProjectSession(): ProjectSession {
         const blank = createEmptyProjectState();
         blank.kind = kind; // 2a: 写真AI編集専用('photo') か 空間デザイン('full')。
         // 先に行を作成（ここで上限トリガが発火しうる）。失敗時はエディタ状態を変えない。
-        const id = await createProject(name, blank);
+        const id = await createProject(name, blank, memo);
         loadInto(blank);
         setProjectId(id);
         setProjectName(name);
@@ -275,6 +277,17 @@ export function useProjectSession(): ProjectSession {
       }
     },
     [projectId, busy, flush, loadInto, refreshList],
+  );
+
+  // 任意プロジェクトの自由メモを更新（260630・クライアント要望）。memo は独立カラムのため、
+  // 設計データの autosave とは衝突せず（上書きされず）に保存できる。一覧へ即時反映する。
+  const updateProjectMemo = useCallback(
+    async (id: string, memo: string) => {
+      const trimmed = memo.trim();
+      await saveProject(id, { memo: trimmed ? trimmed : null });
+      await refreshList();
+    },
+    [refreshList],
   );
 
   const duplicateCurrentProject = useCallback(async () => {
@@ -477,6 +490,7 @@ export function useProjectSession(): ProjectSession {
     error,
     switchProject,
     createNewProject,
+    updateProjectMemo,
     duplicateCurrentProject,
     renameCurrentProject,
     deleteCurrentProject,

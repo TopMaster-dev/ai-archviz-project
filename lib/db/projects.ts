@@ -40,7 +40,7 @@ export async function listProjects(): Promise<ProjectSummary[]> {
   const { data, error } = await sb
     .from('projects')
     // kind は data(jsonb) 内に保持しているため、軽量に種別だけ抽出する（260623 カテゴリ分け）。
-    .select('id, name, thumbnail_url, updated_at, kind:data->>kind')
+    .select('id, name, thumbnail_url, updated_at, memo, kind:data->>kind')
     .is('deleted_at', null)
     .order('updated_at', { ascending: false });
   if (error) throw error;
@@ -59,14 +59,15 @@ export async function getProject(id: string): Promise<ProjectRow | null> {
   return (data as ProjectRow | null) ?? null;
 }
 
-export async function createProject(name: string, data: ProjectState): Promise<string> {
+export async function createProject(name: string, data: ProjectState, memo?: string): Promise<string> {
   const sb = requireClient();
   const { data: userData } = await sb.auth.getUser();
   const ownerId = userData.user?.id;
   if (!ownerId) throw new Error('未ログインのためプロジェクトを作成できません。');
+  const trimmedMemo = memo?.trim();
   const { data: row, error } = await sb
     .from('projects')
-    .insert({ owner_id: ownerId, name, data })
+    .insert({ owner_id: ownerId, name, data, memo: trimmedMemo ? trimmedMemo : null })
     .select('id')
     .single();
   if (error) throw error;
@@ -75,7 +76,7 @@ export async function createProject(name: string, data: ProjectState): Promise<s
 
 export async function saveProject(
   id: string,
-  patch: { name?: string; data?: ProjectState; thumbnail_url?: string | null },
+  patch: { name?: string; data?: ProjectState; thumbnail_url?: string | null; memo?: string | null },
   options?: { signal?: AbortSignal },
 ): Promise<void> {
   const sb = requireClient();
@@ -127,7 +128,7 @@ async function rehomeAiImages(data: ProjectState, newProjectId: string): Promise
 export async function duplicateProject(id: string): Promise<string> {
   const src = await getProject(id);
   if (!src) throw new Error('複製元のプロジェクトが見つかりません。');
-  const newId = await createProject(`${src.name} のコピー`, src.data);
+  const newId = await createProject(`${src.name} のコピー`, src.data, src.memo ?? undefined);
   // コピーのAI生成画像を新ID配下へ複製し、元と Storage を共有しないようにする（260630・ベストエフォート）。
   try {
     const rehomed = await rehomeAiImages(src.data, newId);

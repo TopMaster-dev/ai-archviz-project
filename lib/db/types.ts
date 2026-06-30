@@ -41,6 +41,7 @@ export interface ProjectRow {
   data: ProjectState;
   thumbnail_url: string | null;
   is_template: boolean;
+  memo: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -53,6 +54,8 @@ export interface ProjectSummary {
   updated_at: string;
   /** プロジェクト種別（data.kind 由来・260623 カテゴリ分け用）。'full'=空間デザイン / 'photo'=写真をAI編集。 */
   kind?: string | null;
+  /** 各プロジェクトの自由メモ（260630・クライアント要望）。 */
+  memo?: string | null;
 }
 
 /** 論理削除済み（猶予期間内）プロジェクトのサマリ。復元メニュー用（管理表 row 109/110）。 */

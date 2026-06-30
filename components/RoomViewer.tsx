@@ -485,7 +485,7 @@ interface RoomViewerProps {
   walkInitialYaw: number;
   walkInitialPitch: number;
   walkSpawnXZ: [number, number] | null;
-  walkDigitalInputRef: React.MutableRefObject<{ forward: number; strafe: number }>;
+  walkDigitalInputRef: React.MutableRefObject<{ forward: number; strafe: number; rotate: number; reset: boolean }>;
   cameraWalkStateRef: React.MutableRefObject<{ yaw: number; pitch: number }>;
 }
 
@@ -2668,7 +2668,7 @@ const WalkthroughController: React.FC<{
   walkInitialYaw: number;
   walkInitialPitch: number;
   walkSpawnXZ: [number, number] | null;
-  digitalInputRef: React.MutableRefObject<{ forward: number; strafe: number }>;
+  digitalInputRef: React.MutableRefObject<{ forward: number; strafe: number; rotate: number; reset: boolean }>;
   cameraWalkStateRef: React.MutableRefObject<{ yaw: number; pitch: number }>;
   isDraggingRef: React.MutableRefObject<boolean>;
   disabled: boolean;
@@ -2808,6 +2808,13 @@ const WalkthroughController: React.FC<{
 
     if (keys.current.has('q')) yaw.current += 1.3 * delta;
     if (keys.current.has('e')) yaw.current -= 1.3 * delta;
+    // 移動操作パネルの左右旋回ボタン（Q/E と同じ・260630 クライアント要望）。
+    yaw.current += (digitalInputRef.current.rotate || 0) * 1.3 * delta;
+    // 移動操作パネルの「視点を正面に戻す」ボタン（マウスホイールクリック相当）: 上下の傾きを水平へ（向き=yaw は維持）。
+    if (digitalInputRef.current.reset) {
+      pitch.current = 0;
+      digitalInputRef.current.reset = false;
+    }
 
     const fwd = walkForward(yaw.current);
     const right = walkRight(yaw.current);

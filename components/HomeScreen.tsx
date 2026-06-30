@@ -43,6 +43,27 @@ function ProjectThumb({ url, name }: { url: string | null; name: string }) {
   );
 }
 
+/** プロジェクトカードの自由メモ欄（260630・クライアント要望）。フォーカスを外すと変更分のみ保存する。 */
+function ProjectMemoField({ memo, onSave }: { memo: string; onSave: (memo: string) => void }) {
+  const [draft, setDraft] = useState(memo);
+  useEffect(() => {
+    setDraft(memo);
+  }, [memo]);
+  return (
+    <textarea
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={() => {
+        if (draft.trim() !== (memo ?? '').trim()) onSave(draft);
+      }}
+      placeholder="メモ（自由記入）"
+      rows={2}
+      aria-label="プロジェクトのメモ"
+      className="w-full resize-none rounded-md border border-white/10 bg-neutral-950/60 px-2 py-1 text-[11px] leading-snug text-neutral-300 outline-none transition placeholder:text-neutral-600 focus:border-emerald-500/60"
+    />
+  );
+}
+
 export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const { email, signOut } = useAuth();
   const confirm = useConfirm();
@@ -59,6 +80,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
     status,
     switchProject,
     createNewProject,
+    updateProjectMemo,
     duplicateCurrentProject,
     deleteCurrentProject,
     renameCurrentProject,
@@ -70,6 +92,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   // 新規作成: まず名前と種別を選んでから遷移（2c-iii / 2a）。
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('マイプロジェクト');
+  const [newMemo, setNewMemo] = useState('');
   const [newKind, setNewKind] = useState<'full' | 'photo'>('full');
   const [settingsOpen, setSettingsOpen] = useState(false);
   // 操作ガイド（オンボーディング）。初回のみ自動表示し、以降は右上の「?」から見返せる（260623）。
@@ -201,7 +224,8 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const confirmCreate = async () => {
     const name = newName.trim() || 'マイプロジェクト';
     setCreatingNew(false);
-    await createNewProject(name, newKind);
+    await createNewProject(name, newKind, newMemo);
+    setNewMemo('');
     recordAriseUse();
     onEnter();
   };
@@ -266,6 +290,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
             </span>
           )}
           <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
+          <ProjectMemoField memo={p.memo ?? ''} onSave={(m) => void updateProjectMemo(p.id, m)} />
 
           <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1 text-xs">
             {active && (
@@ -600,7 +625,20 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 if (e.key === 'Escape') setCreatingNew(false);
               }}
               placeholder="マイプロジェクト"
-              className="mb-6 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-4 py-3 text-base text-neutral-100 outline-none focus:border-emerald-500"
+              className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-4 py-3 text-base text-neutral-100 outline-none focus:border-emerald-500"
+            />
+
+            {/* メモ欄（260630・クライアント要望）。作成時に任意で記入でき、後から各カードでも編集可。 */}
+            <label className="mb-1.5 block text-sm text-neutral-400">メモ（任意）</label>
+            <textarea
+              value={newMemo}
+              onChange={(e) => setNewMemo(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') setCreatingNew(false);
+              }}
+              placeholder="このプロジェクトのメモ（自由記入）"
+              rows={2}
+              className="mb-6 w-full resize-none rounded-lg border border-neutral-700 bg-neutral-950 px-4 py-2.5 text-sm text-neutral-100 outline-none focus:border-emerald-500"
             />
 
             <label className="mb-1.5 block text-sm text-neutral-400">種類</label>

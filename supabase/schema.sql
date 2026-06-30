@@ -258,6 +258,7 @@ create table if not exists projects (
 -- 既存DBへの安全網（idempotent）。
 alter table projects add column if not exists auto_expired    boolean not null default false;
 alter table projects add column if not exists purge_warned_at timestamptz;
+alter table projects add column if not exists memo            text;            -- 各プロジェクトの自由メモ（260630・クライアント要望）
 create index if not exists idx_projects_owner on projects (owner_id) where deleted_at is null;
 create index if not exists idx_projects_purge on projects (scheduled_purge_at) where deleted_at is not null;
 -- 事前通知メールの対象抽出用（自動失効・未通知のみ）。

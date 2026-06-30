@@ -32,7 +32,7 @@ export function SharedProjectViewer({ token }: { token: string }) {
   // RoomViewer が要求する各種 ref（ビューア専用に都度生成。エディタとは共有しない）。
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const orbitControlsRef = useRef<OrbitControlsImpl | null>(null);
-  const walkDigitalInputRef = useRef({ forward: 0, strafe: 0 });
+  const walkDigitalInputRef = useRef({ forward: 0, strafe: 0, rotate: 0, reset: false });
   const cameraWalkStateRef = useRef({ yaw: 0, pitch: 0 });
 
   useEffect(() => {
