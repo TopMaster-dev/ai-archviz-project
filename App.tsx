@@ -30,6 +30,7 @@ import { useAiRenderer } from './hooks/useAiRenderer.js';
 import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
+import { EditorHelpButton } from './components/EditorHelpButton.js';
 import { OnboardingGuide } from './components/OnboardingGuide.js';
 import { RenderAdColumn } from './components/AdSlot.js';
 import { useStore } from 'zustand';
@@ -2396,19 +2397,22 @@ const App: React.FC = () => {
     setAiEditOpen(true);
   }, []);
 
+  // 「?」はトグルから独立した別ボタンとして、トグルの隣に常設する（260630・クライアント要望/ホームと共通仕様）。
   const renderGlobalModeToggle = (active: 'sketch' | '3D' | 'ai') => (
-    <ModeToggleBar
-      activeMode={active}
-      onSwitchToSketch={navigateToSketch}
-      onSwitchTo3D={navigateTo3D}
-      onSwitchToAi={navigateToAiEdit}
-      canSwitchTo3D={canNavigateTo3D}
-      canSwitchToAi={!!renderState.resultImageUrl}
-      aiDisabledTitle="AIレンダリング完了後に利用できます"
-      onHelp={() => setEditorOnboardingOpen(true)}
-      onGoHome={shellNav?.goHome}
-      homeBusy={shellNav?.homeBusy}
-    />
+    <>
+      <ModeToggleBar
+        activeMode={active}
+        onSwitchToSketch={navigateToSketch}
+        onSwitchTo3D={navigateTo3D}
+        onSwitchToAi={navigateToAiEdit}
+        canSwitchTo3D={canNavigateTo3D}
+        canSwitchToAi={!!renderState.resultImageUrl}
+        aiDisabledTitle="AIレンダリング完了後に利用できます"
+        onGoHome={shellNav?.goHome}
+        homeBusy={shellNav?.homeBusy}
+      />
+      <EditorHelpButton onClick={() => setEditorOnboardingOpen(true)} />
+    </>
   );
 
   const calculateArea = (points: SketchPoint[]) => {

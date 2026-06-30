@@ -33,6 +33,7 @@ import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
+import { EditorHelpButton } from './EditorHelpButton.js';
 import { RenderAdColumn } from './AdSlot.js';
 
 function normalizeImageDataUrl(raw: string | null | undefined): string | null {
@@ -348,8 +349,9 @@ export function AiEditWorkspace({
   };
 
   // 上部左のバー: 通常は 2D/3D/AI のモード切替、写真専用モードでは「ホームに戻る」ボタン（2a）。
-  const renderModeBarOrHome = () =>
-    photoOnly ? (
+  const renderModeBarOrHome = () => (
+    <>
+      {photoOnly ? (
       <button
         type="button"
         onClick={onExitToHome}
@@ -376,10 +378,12 @@ export function AiEditWorkspace({
         canSwitchTo3D={canSwitchTo3D}
         onGoHome={onExitToHome}
         homeBusy={exitToHomeBusy}
-        onHelp={onOpenGuide}
         className="shrink-0"
       />
-    );
+      )}
+      <EditorHelpButton onClick={onOpenGuide} />
+    </>
+  );
 
   const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
   const hasSituationInput =
