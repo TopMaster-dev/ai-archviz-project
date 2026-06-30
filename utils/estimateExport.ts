@@ -10,6 +10,7 @@ export interface CostBreakdownEntry {
   lossFactor?: number;
   prodName: string;
   brand: string;
+  modelNumber?: string; // 品番（建材アップロード時に任意入力・260630）
   textureUrl?: string;
   productId: string;
 }
@@ -140,6 +141,7 @@ type AggRow = {
   unitPrice: number;
   brand: string;
   prodName: string;
+  modelNumber?: string;
   productId: string;
   memo?: string;
 };
@@ -160,7 +162,11 @@ function buildSectionRows(
       unit: '㎡',
       unitPrice: roundYen(row.unitPrice),
       amount: roundYen(row.cost),
-      remark: row.memo ?? '',
+      // 品番（任意入力）を備考へ。家具/AI項目の備考表記（品番:…）と統一（260630）。
+      remark: [row.memo, row.modelNumber ? `品番:${row.modelNumber}` : '']
+        .map((s) => (s ?? '').trim())
+        .filter(Boolean)
+        .join(' / '),
       sectionType: '3D確定',
       inputStatus: '完了',
     });
@@ -200,6 +206,7 @@ export function buildEstimateExportPayload(
         unitPrice: item.unitPrice ?? 0,
         brand: item.brand,
         prodName: item.prodName,
+        modelNumber: item.modelNumber,
         productId: item.productId,
         memo: options.materialMemoByProductId?.[item.productId],
       });

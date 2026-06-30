@@ -546,6 +546,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     <div className="min-w-0 flex-1">
                       <div className={`text-[8px] font-black uppercase truncate ${isHighlighted ? 'text-emerald-400' : 'text-neutral-500'}`}>{item.brand}</div>
                       <div className="text-[9px] text-white font-bold leading-tight truncate">{item.prodName}</div>
+                      {item.modelNumber && <div className="text-[8px] text-neutral-400 leading-tight truncate">品番: {item.modelNumber}</div>}
                     </div>
                   </div>
                   <div className="flex justify-between items-end border-t border-white/5 pt-1.5 mt-1">
@@ -2174,10 +2175,15 @@ const App: React.FC = () => {
   const [pendingMaterialFiles, setPendingMaterialFiles] = useState<File[]>([]);
   const [pendingMaterialPreview, setPendingMaterialPreview] = useState<string | null>(null);
   const [pendingMaterialCategory, setPendingMaterialCategory] = useState<MaterialCategory | null>(null);
+  // 建材アップロード時に任意で入力するメーカー名・品番（260630・クライアント要望）。見積もりへ流す。
+  const [pendingMaterialBrand, setPendingMaterialBrand] = useState('');
+  const [pendingMaterialModelNumber, setPendingMaterialModelNumber] = useState('');
   const closeMaterialPopup = () => {
     setPendingMaterialPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
     setPendingMaterialFiles([]);
     setPendingMaterialCategory(null);
+    setPendingMaterialBrand('');
+    setPendingMaterialModelNumber('');
   };
   const onMaterialFilesPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
@@ -2197,7 +2203,8 @@ const App: React.FC = () => {
           const newProduct: Product = {
             id: `custom-${Date.now()}-${Math.random()}`,
             name: file.name.split('.')[0],
-            brand: 'Custom',
+            brand: pendingMaterialBrand.trim() || 'Custom',
+            modelNumber: pendingMaterialModelNumber.trim() || undefined,
             category: chosen ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
             crossCategory: chosen === null,
             pricePerUnit: 0,
@@ -2547,8 +2554,9 @@ const App: React.FC = () => {
                 lossFactor: prod.lossFactor,
                 cost: (materialUnitPriceOverrides[prod.id] ?? prod.pricePerUnit) * area * (1 + prod.lossFactor), 
                 area, 
-                prodName: prod.name, 
-                brand: prod.brand, 
+                prodName: prod.name,
+                brand: prod.brand,
+                modelNumber: prod.modelNumber,
                 textureUrl: prod.textureUrl,
                 productId: prod.id,
             });
@@ -2976,6 +2984,27 @@ const App: React.FC = () => {
           <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-bold text-neutral-100">追加した建材画像のカテゴリを選択してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。</p>
+            {/* メーカー名・品番（任意）。最上部に配置し、見積もりへ反映する（260630・クライアント要望）。 */}
+            <div className="mt-4 grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-[10px] text-neutral-400">メーカー名（任意）</label>
+                <input
+                  value={pendingMaterialBrand}
+                  onChange={(e) => setPendingMaterialBrand(e.target.value)}
+                  placeholder="例: 〇〇建材"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] text-neutral-400">品番（任意）</label>
+                <input
+                  value={pendingMaterialModelNumber}
+                  onChange={(e) => setPendingMaterialModelNumber(e.target.value)}
+                  placeholder="例: ABC-123"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              </div>
+            </div>
             <div className="mt-4 flex gap-4">
               <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
                 {pendingMaterialPreview && <img src={pendingMaterialPreview} alt="選択された建材画像" className="h-full w-full object-cover" />}

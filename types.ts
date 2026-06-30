@@ -60,6 +60,8 @@ export interface Product {
   id: string;
   name: string;
   brand: string;
+  /** 品番（任意・建材アップロード時に入力）。見積もりに表示する（260630・クライアント要望）。 */
+  modelNumber?: string;
   category: MaterialCategory;
   pricePerUnit: number;
   unit: string;
