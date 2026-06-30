@@ -30,8 +30,16 @@ export interface UserUpload {
 /** 種別ごとの受け入れ拡張子（バリデーションと file input accept に使用）。 */
 export const ACCEPTED_EXT: Record<UploadKind, string[]> = {
   model: ['.glb', '.gltf', '.fbx', '.obj'],
-  texture: ['.png', '.jpg', '.jpeg', '.webp'],
+  texture: ['.png', '.jpg', '.jpeg', '.webp'], // 代表例（説明文用）。実際の受け入れは validateUpload の画像判定で広い。
 };
+
+/**
+ * 建材画像で受け入れる拡張子（MIME 欠落環境でのフォールバック判定用）。
+ * 3Dビューの素材取り込み（input accept="image/*"）に合わせ、画像ファイル全般を許可する（260630・クライアント要望）。
+ */
+export const IMAGE_EXT = [
+  '.png', '.jpg', '.jpeg', '.webp', '.gif', '.bmp', '.avif', '.svg', '.tif', '.tiff', '.ico', '.heic', '.heif',
+];
 
 /** 種別ごとのサイズ上限（バイト）。Supabase の既定オブジェクト上限内に収める。 */
 export const MAX_BYTES: Record<UploadKind, number> = {
@@ -71,7 +79,12 @@ function extOf(name: string): string {
 /** アップロード前のクライアント側バリデーション。問題があればメッセージを返す（無ければ null）。 */
 export function validateUpload(file: File, kind: UploadKind): string | null {
   const ext = extOf(file.name);
-  if (!ACCEPTED_EXT[kind].includes(ext)) {
+  if (kind === 'texture') {
+    // 建材画像は 3Dビューの素材取り込み（accept="image/*"）に合わせ、画像ファイル全般を受け入れる（260630）。
+    // MIME が image/* なら許可。MIME が取れない環境では既知の画像拡張子で判定する。
+    const isImage = (file.type || '').startsWith('image/') || IMAGE_EXT.includes(ext);
+    if (!isImage) return '対応していない形式です（画像ファイルを選択してください）。';
+  } else if (!ACCEPTED_EXT[kind].includes(ext)) {
     return `対応していない形式です（${ACCEPTED_EXT[kind].join(' / ')} のみ）。`;
   }
   if (file.size > MAX_BYTES[kind]) {

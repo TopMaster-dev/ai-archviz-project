@@ -62,6 +62,20 @@ describe('validateUpload', () => {
     expect(validateUpload(fakeFile('noext', 1000), 'model')).toMatch(/対応していない/);
   });
 
+  it('texture accepts image files broadly (3Dビュー取り込みと同等・260630)', () => {
+    // 3Dビューの accept="image/*" に合わせ、png/jpg/webp 以外の画像も受け入れる。
+    for (const ext of ['gif', 'bmp', 'avif', 'svg', 'tif', 'tiff', 'ico', 'heic']) {
+      expect(validateUpload(fakeFile(`tex.${ext}`, 1000), 'texture')).toBeNull();
+    }
+    // MIME が image/* なら拡張子が変則でも許可（例: 拡張子なしでも type で判定）。
+    const typed = { name: 'blob', size: 1000, type: 'image/png' } as unknown as File;
+    expect(validateUpload(typed, 'texture')).toBeNull();
+    // 画像でないものは拒否（拡張子・MIME とも非画像）。
+    expect(validateUpload(fakeFile('doc.pdf', 1000), 'texture')).toMatch(/対応していない/);
+    const pdf = { name: 'doc', size: 1000, type: 'application/pdf' } as unknown as File;
+    expect(validateUpload(pdf, 'texture')).toMatch(/対応していない/);
+  });
+
   it('rejects files over the size limit', () => {
     expect(validateUpload(fakeFile('big.glb', MAX_BYTES.model + 1), 'model')).toMatch(/大きすぎます/);
     expect(validateUpload(fakeFile('big.png', MAX_BYTES.texture + 1), 'texture')).toMatch(/大きすぎます/);

@@ -375,8 +375,8 @@ export function UploadPanel({
     <div className="rounded-lg bg-neutral-900/60 p-3 text-xs text-neutral-200">
       <p className="mb-1 font-semibold text-neutral-300">マイアップロード</p>
       <p className="mb-2 text-[11px] leading-snug text-neutral-500">
-        独自の 3D モデル（{ACCEPTED_EXT.model.join(' / ')}）や建材画像（
-        {ACCEPTED_EXT.texture.join(' / ')}）を保存できます。
+        独自の 3D モデル（{ACCEPTED_EXT.model.join(' / ')}）や建材画像（png / jpg / webp
+        など画像ファイル全般）を保存できます。
       </p>
 
       {/* 容量警告（管理表 row 31）: 使用量バー＋接近/超過時の警告 */}
@@ -475,7 +475,7 @@ export function UploadPanel({
       <input
         ref={textureInputRef}
         type="file"
-        accept={ACCEPTED_EXT.texture.join(',')}
+        accept="image/*"
         className="hidden"
         onChange={(e) => onTexturePicked(e.target.files?.[0])}
       />
