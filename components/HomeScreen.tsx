@@ -586,11 +586,11 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           onClick={() => setCreatingNew(false)}
         >
           <div
-            className="w-full max-w-lg rounded-2xl border border-white/10 bg-neutral-900 p-6 shadow-2xl"
+            className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/10 bg-neutral-900 p-8 shadow-2xl"
             onClick={(e) => e.stopPropagation()}
           >
-            <h3 className="mb-3 text-base font-bold">新しいプロジェクト</h3>
-            <label className="mb-1 block text-xs text-neutral-400">プロジェクト名</label>
+            <h3 className="mb-5 text-xl font-bold">新しいプロジェクト</h3>
+            <label className="mb-1.5 block text-sm text-neutral-400">プロジェクト名</label>
             <input
               autoFocus
               value={newName}
@@ -600,11 +600,11 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 if (e.key === 'Escape') setCreatingNew(false);
               }}
               placeholder="マイプロジェクト"
-              className="mb-4 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 outline-none focus:border-emerald-500"
+              className="mb-6 w-full rounded-lg border border-neutral-700 bg-neutral-950 px-4 py-3 text-base text-neutral-100 outline-none focus:border-emerald-500"
             />
 
-            <label className="mb-1 block text-xs text-neutral-400">種類</label>
-            <div className="mb-4 grid grid-cols-2 gap-2">
+            <label className="mb-1.5 block text-sm text-neutral-400">種類</label>
+            <div className="mb-7 grid grid-cols-2 gap-4">
               <button
                 type="button"
                 onClick={() => setNewKind('full')}
@@ -615,9 +615,9 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 }`}
               >
                 <img src="/lp/lp-step-2d-3d-ai.jpg" alt="" loading="lazy" className="aspect-video w-full object-cover" />
-                <span className="block p-3">
-                  <span className="block text-sm font-semibold">図面からパース作成</span>
-                  <span className="mt-0.5 block text-[11px] text-neutral-400">2D作図 → 3D → AIレンダリング</span>
+                <span className="block p-4">
+                  <span className="block text-base font-semibold">図面からパース作成</span>
+                  <span className="mt-1 block text-xs text-neutral-400">2D作図 → 3D → AIレンダリング</span>
                 </span>
               </button>
               <button
@@ -630,18 +630,18 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 }`}
               >
                 <img src="/lp/lp-ai-edit.jpg" alt="" loading="lazy" className="aspect-video w-full object-cover" />
-                <span className="block p-3">
-                  <span className="block text-sm font-semibold">AI で写真編集</span>
-                  <span className="mt-0.5 block text-[11px] text-neutral-400">写真をアップロードしてAI画像編集</span>
+                <span className="block p-4">
+                  <span className="block text-base font-semibold">AI で写真編集</span>
+                  <span className="mt-1 block text-xs text-neutral-400">写真をアップロードしてAI画像編集</span>
                 </span>
               </button>
             </div>
 
-            <div className="flex justify-end gap-2">
+            <div className="mt-2 flex justify-end gap-3">
               <button
                 type="button"
                 onClick={() => setCreatingNew(false)}
-                className="rounded-lg bg-neutral-800 px-4 py-2 text-sm transition hover:bg-neutral-700"
+                className="rounded-lg bg-neutral-800 px-5 py-2.5 text-base transition hover:bg-neutral-700"
               >
                 キャンセル
               </button>
@@ -649,7 +649,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
                 type="button"
                 disabled={busy}
                 onClick={() => void confirmCreate()}
-                className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                className="rounded-lg bg-emerald-600 px-5 py-2.5 text-base font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
               >
                 作成して開く
               </button>

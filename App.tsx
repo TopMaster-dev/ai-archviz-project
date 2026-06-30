@@ -3043,7 +3043,7 @@ const App: React.FC = () => {
             style={viewMode === '3D' ? { paddingTop: canvasTopInset } : undefined}
           >
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
-                <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start gap-2 md:gap-3 pointer-events-none">
+                <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-center gap-2 md:gap-3 pointer-events-none">
                     {renderGlobalModeToggle(aiEditOpen ? 'ai' : viewMode)}
                     {!renderState.isRendering && viewMode === '3D' && (
                       <div className="pointer-events-none flex flex-col items-center gap-1.5 shrink-0">
