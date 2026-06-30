@@ -468,6 +468,10 @@ type EstimatePanelDetailScrollProps = {
   setMaterialUnitPriceOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>;
   materialMemoOverrides: Record<string, string>;
   setMaterialMemoOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  baseboardUnitPriceOverrides: Record<string, number>;
+  setBaseboardUnitPriceOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>;
+  baseboardMemoOverrides: Record<string, string>;
+  setBaseboardMemoOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   furnitureItems: any[];
   activeFurnitureId: string | null;
   setFurnitureItems: React.Dispatch<React.SetStateAction<any[]>>;
@@ -492,6 +496,10 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
   setMaterialUnitPriceOverrides,
   materialMemoOverrides,
   setMaterialMemoOverrides,
+  baseboardUnitPriceOverrides,
+  setBaseboardUnitPriceOverrides,
+  baseboardMemoOverrides,
+  setBaseboardMemoOverrides,
   furnitureItems,
   activeFurnitureId,
   setFurnitureItems,
@@ -606,16 +614,49 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                 className="p-2.5 rounded-xl border bg-white/5 border-white/5 hover:border-white/10 flex flex-col justify-between"
               >
                 <div className="text-[8px] font-black uppercase truncate text-neutral-500">{r.brand}</div>
-                <div className="text-[9px] text-white font-bold leading-tight truncate">{r.productName} の巾木</div>
+                {/* 既定（素材未割当）の placeholder 名は "巾木" なので「巾木 の巾木」にならないよう "巾木" のみ表示。 */}
+                <div className="text-[9px] text-white font-bold leading-tight truncate">
+                  {r.productName && r.productName !== '巾木' ? `${r.productName} の巾木` : '巾木'}
+                </div>
                 <div className="flex justify-between items-end border-t border-white/5 pt-1.5 mt-1.5">
                   <div className="text-[9px] font-mono text-neutral-500">
                     {r.lengthM.toFixed(2)}m × ¥{Math.round(r.unitPrice).toLocaleString()}/m
                   </div>
                   <div className="text-xs font-mono font-bold text-white">¥{Math.round(r.cost).toLocaleString()}</div>
                 </div>
-                {r.unitPrice <= 0 && (
-                  <div className="mt-1 text-[8px] font-bold text-amber-300/90">m単価未入力（素材設定の「単価」で入力）</div>
-                )}
+                {/* 建材ラインと同様に m単価・メモを編集可能に（260630・クライアント要望）。 */}
+                <div className="mt-2 flex items-center gap-1">
+                  <span className="text-[9px] font-bold text-neutral-400">m単価</span>
+                  <input
+                    value={baseboardUnitPriceOverrides[r.productId] ?? r.unitPrice ?? ''}
+                    onChange={(e) => {
+                      const raw = e.target.value.trim();
+                      const next = raw === '' ? undefined : Math.max(0, Number(raw) || 0);
+                      setBaseboardUnitPriceOverrides((prev) => {
+                        const copy = { ...prev };
+                        if (next == null) delete copy[r.productId];
+                        else copy[r.productId] = next;
+                        return copy;
+                      });
+                    }}
+                    className="w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                  />
+                  <span className="text-[9px] font-bold text-neutral-500">円/m</span>
+                </div>
+                <input
+                  value={baseboardMemoOverrides[r.productId] ?? ''}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setBaseboardMemoOverrides((prev) => {
+                      const copy = { ...prev };
+                      if (v === '') delete copy[r.productId];
+                      else copy[r.productId] = v;
+                      return copy;
+                    });
+                  }}
+                  placeholder="メモ（任意）"
+                  className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                />
               </div>
             ))}
           </div>
@@ -972,6 +1013,9 @@ const App: React.FC = () => {
   const [materialUnitPriceOverrides, setMaterialUnitPriceOverrides] = useState<Record<string, number>>({});
   // 建材ラインのメモ（productId キー、セッション内のみ）（4c）。
   const [materialMemoOverrides, setMaterialMemoOverrides] = useState<Record<string, string>>({});
+  // 巾木ラインの m単価・メモ上書き（productId キー、建材ラインと同じくセッション内のみ・260630）。
+  const [baseboardUnitPriceOverrides, setBaseboardUnitPriceOverrides] = useState<Record<string, number>>({});
+  const [baseboardMemoOverrides, setBaseboardMemoOverrides] = useState<Record<string, string>>({});
   const [estimateGuardOpen, setEstimateGuardOpen] = useState(false);
   const [pendingExportKind, setPendingExportKind] = useState<'pdf' | 'csv' | null>(null);
   const [showDebugModal, setShowDebugModal] = useState(false);
@@ -2654,11 +2698,12 @@ const App: React.FC = () => {
         productId: settingsKey,
         productName: prod ? prod.name : '巾木',
         brand: prod ? (prod.brand ?? '') : '',
-        unitPricePerM: settings.baseboardUnitPrice ?? 0,
+        // 見積もりパネルで上書きした m単価を優先（無ければ素材設定の値）。
+        unitPricePerM: baseboardUnitPriceOverrides[settingsKey] ?? settings.baseboardUnitPrice ?? 0,
       });
     }
     return buildBaseboardRows(segs);
-  }, [sketchPoints, wallDivisions, selections, materialSettings]);
+  }, [sketchPoints, wallDivisions, selections, materialSettings, baseboardUnitPriceOverrides]);
   const baseboardTotal = useMemo(() => baseboardTotalCost(baseboardBreakdown), [baseboardBreakdown]);
   const furnitureTotal = useMemo(
     () => furnitureItems.reduce((sum, item) => sum + (item.customPrice ?? 0), 0),
@@ -2691,11 +2736,12 @@ const App: React.FC = () => {
         wallDivisions,
         materialMemoByProductId: materialMemoOverrides,
         baseboardRows: baseboardBreakdown,
+        baseboardMemoByProductId: baseboardMemoOverrides,
         // マテリアルボード（A3）のヘッダ＝プロジェクト名、フッタ＝会社名（無ければユーザー名）。
         projectName: projectSession?.projectName ?? '',
         authorName: authProfile?.company || authProfile?.display_name || '',
       }),
-    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
+    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown, baseboardMemoOverrides, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
   );
   const canExportEstimate =
     estimatePayload.materialSections.some((s) => s.rows.length > 0) ||
@@ -2926,6 +2972,10 @@ const App: React.FC = () => {
                 setMaterialUnitPriceOverrides={setMaterialUnitPriceOverrides}
                 materialMemoOverrides={materialMemoOverrides}
                 setMaterialMemoOverrides={setMaterialMemoOverrides}
+                baseboardUnitPriceOverrides={baseboardUnitPriceOverrides}
+                setBaseboardUnitPriceOverrides={setBaseboardUnitPriceOverrides}
+                baseboardMemoOverrides={baseboardMemoOverrides}
+                setBaseboardMemoOverrides={setBaseboardMemoOverrides}
                 furnitureItems={furnitureItems}
                 activeFurnitureId={activeFurnitureId}
                 setFurnitureItems={setFurnitureItems}

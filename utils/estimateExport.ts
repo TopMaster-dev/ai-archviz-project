@@ -96,6 +96,8 @@ export interface BuildEstimateOptions {
   materialMemoByProductId?: Record<string, string>;
   /** 巾木ライン（壁延長 × m単価）。CSV/PDF の【巾木】セクションへ反映（260613）。 */
   baseboardRows?: BaseboardEstimateRow[];
+  /** 巾木ラインのメモ（productId キー）。CSV/PDF の備考へ反映（260630）。 */
+  baseboardMemoByProductId?: Record<string, string>;
 }
 
 function roundYen(n: number): number {
@@ -262,7 +264,7 @@ export function buildEstimateExportPayload(
     unit: 'm',
     unitPrice: roundYen(r.unitPrice),
     amount: roundYen(r.cost),
-    remark: '',
+    remark: (options.baseboardMemoByProductId?.[r.productId] ?? '').trim(),
     sectionType: '3D確定',
     inputStatus: r.unitPrice > 0 ? '完了' : '未入力',
   }));
