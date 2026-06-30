@@ -55,16 +55,26 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
   const fp = (meta.footprint2d ?? {}) as { widthMm?: unknown; depthMm?: unknown };
   const widthMm = finite(fp.widthMm);
   const depthMm = finite(fp.depthMm);
+  // アップロード時に入力した見積もり用メタ（データ名称・品番・メーカー名・商品金額・260630）。
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  const metaName = str(meta.name);
+  const metaBrand = str(meta.brand);
+  const metaModelNumber = str(meta.modelNumber);
   return {
     id: `upload-${upload.id}`,
     type: UPLOAD_FURNITURE_TYPE,
-    name: deriveUploadName(upload.originalName),
+    // データ名称（入力）を優先、無ければファイル名。
+    name: metaName || deriveUploadName(upload.originalName),
     url: upload.storageUrl,
     defaultScale: finite(meta.defaultScale) ?? 1,
     defaultY: finite(meta.defaultY) ?? 0,
     // 計測済み(metadata)のみ採用。未計測は undefined（DEFAULT/実測効果へフォールバック）。
     footprint2d: widthMm !== undefined && depthMm !== undefined ? { widthMm, depthMm } : undefined,
     forwardYawDeg: finite(meta.forwardYawDeg) ?? 0,
+    // 見積もり連携メタ（配置時に handleAddFurniture が customBrand/modelNumber/customPrice へ流す）。
+    brand: metaBrand || undefined,
+    modelNumber: metaModelNumber || undefined,
+    price: finite(meta.price),
   };
 }
 

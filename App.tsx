@@ -1,7 +1,7 @@
 import React, { useState, useRef, useMemo, useEffect, useCallback, Suspense, startTransition, memo } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { useGLTF, Environment } from '@react-three/drei';
-import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download, ChevronLeft } from 'lucide-react';
+import { Wand2, Sparkles, LayoutGrid, LayoutList, ArrowUpDown, Trash2, Download, ChevronLeft, Box } from 'lucide-react';
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
 import { MaterialCategory, Product, RenderState, FurnitureItem, FurnitureCatalogItem, Opening, ToolMode, AddKind, CameraPreset, CameraBlendRequest, AiEstimateItem, AgentRecommendation } from './types.js';
 import { NumericField } from './components/NumericField.js';
@@ -49,7 +49,7 @@ import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
-import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -1797,19 +1797,61 @@ const App: React.FC = () => {
   // 3Dモデルのアップロード（260623: 旧「マイ素材」モーダルを廃止し、家具ストリップの「アップロード」内の
   // 「＋」から3Dモデルを追加できるようにする）。アップロード成功で即座にカタログへ反映する。
   const modelUploadInputRef = useRef<HTMLInputElement | null>(null);
+  // 二重送信ガード（確認ボタンの連打で同一ファイルを2回アップロードしないように・260630）。
+  const modelUploadBusyRef = useRef(false);
   const handleUploadModelClick = useCallback(() => {
     modelUploadInputRef.current?.click();
   }, []);
-  const handleModelFileUpload = useCallback(async (file: File | undefined) => {
+  // 3Dモデルのアップロード情報入力ポップアップ（260630・建材と同じく、ファイル選択→入力＋確認→アップロード）。
+  // 入力（データ名称・品番・メーカー名・商品金額）は metadata に保存し、配置時に見積もりへ反映する。
+  const [pendingModelFile, setPendingModelFile] = useState<File | null>(null);
+  const [pendingModelName, setPendingModelName] = useState('');
+  const [pendingModelBrand, setPendingModelBrand] = useState('');
+  const [pendingModelModelNumber, setPendingModelModelNumber] = useState('');
+  const [pendingModelPrice, setPendingModelPrice] = useState('');
+  const closeModelPopup = () => {
+    setPendingModelFile(null);
+    setPendingModelName('');
+    setPendingModelBrand('');
+    setPendingModelModelNumber('');
+    setPendingModelPrice('');
+  };
+  // ファイル選択時はアップロードせず、情報入力ポップアップを開く（データ名称はファイル名で初期化）。
+  const handleModelFileUpload = useCallback((file: File | undefined) => {
     if (modelUploadInputRef.current) modelUploadInputRef.current.value = '';
     if (!file) return;
+    setPendingModelFile(file);
+    setPendingModelName(deriveUploadName(file.name));
+    setPendingModelBrand('');
+    setPendingModelModelNumber('');
+    setPendingModelPrice('');
+  }, []);
+  // 確認後に実アップロード。入力値を metadata に保存（uploadToFurnitureItem が name/brand/modelNumber/price を読む）。
+  const commitModelUpload = useCallback(async () => {
+    if (modelUploadBusyRef.current) return; // 連打による二重アップロード防止（同期ガード＝再描画前の二度押しも塞ぐ）。
+    const file = pendingModelFile;
+    if (!file) return;
+    modelUploadBusyRef.current = true;
+    const name = pendingModelName.trim();
+    const brand = pendingModelBrand.trim();
+    const modelNumber = pendingModelModelNumber.trim();
+    // 金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。0/空/不正は未入力＝undefined。
+    const priceNum = Math.round(Number(pendingModelPrice));
+    const price = pendingModelPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : undefined;
+    closeModelPopup();
+    useLoadingStore.getState().show('model-upload', '3Dモデルをアップロード中…');
     try {
       // 容量のソフト上限チェック（ホームのアップロードパネルと同じ挙動で迂回を防ぐ）。
       const [models, textures] = await Promise.all([listUserUploads('model'), listUserUploads('texture')]);
       const currentTotal = [...models, ...textures].reduce((sum, u) => sum + (u.bytes ?? 0), 0);
       const capMsg = checkStorageCapacity(currentTotal, file.size);
       if (capMsg) { alert(capMsg); return; }
-      const row = await uploadUserFile(file, 'model');
+      const metadata: Record<string, unknown> = {};
+      if (name) metadata.name = name;
+      if (brand) metadata.brand = brand;
+      if (modelNumber) metadata.modelNumber = modelNumber;
+      if (price !== undefined) metadata.price = price;
+      const row = await uploadUserFile(file, 'model', { metadata });
       const initialItem = uploadToFurnitureItem(row);
       // 即座にカタログへ追加（この時点では footprint2d 未計測＝undefined のことがある）。
       setFurnitureCatalog((prev) => (prev.some((p) => p.id === initialItem.id) ? prev : [...prev, initialItem]));
@@ -1827,8 +1869,11 @@ const App: React.FC = () => {
     } catch (e) {
       console.warn('3Dモデルのアップロードに失敗:', e);
       alert(e instanceof Error ? e.message : '3Dモデルのアップロードに失敗しました。');
+    } finally {
+      useLoadingStore.getState().hide('model-upload');
+      modelUploadBusyRef.current = false;
     }
-  }, []);
+  }, [pendingModelFile, pendingModelName, pendingModelBrand, pendingModelModelNumber, pendingModelPrice]);
 
   // Fetch Furniture dynamically from API（本番=Cloudinary）。
   // Cloudinary 未構成/空/失敗時は、同梱の静的カタログ public/models/catalog.json に
@@ -3030,13 +3075,77 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* 3Dモデルの情報入力ポップアップ（260630・建材と同じく、ファイル選択後に入力＋確認してから追加）。 */}
+      {pendingModelFile && (
+        <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4" onClick={closeModelPopup} role="dialog" aria-modal="true">
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
+            <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
+            <div className="mt-4 flex gap-4">
+              <div className="flex h-28 w-28 shrink-0 flex-col items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-neutral-800 text-neutral-400">
+                <Box className="h-8 w-8" />
+                <span className="line-clamp-2 break-all px-1.5 text-center text-[9px] leading-tight">{pendingModelFile.name}</span>
+              </div>
+              <div className="grid flex-1 grid-cols-1 gap-2.5 self-center">
+                <div>
+                  <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
+                  <input
+                    value={pendingModelName}
+                    onChange={(e) => setPendingModelName(e.target.value)}
+                    placeholder="例: ソファ A"
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="mb-1 block text-[10px] text-neutral-400">品番（任意）</label>
+                    <input
+                      value={pendingModelModelNumber}
+                      onChange={(e) => setPendingModelModelNumber(e.target.value)}
+                      placeholder="例: ABC-123"
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-[10px] text-neutral-400">メーカー名（任意）</label>
+                    <input
+                      value={pendingModelBrand}
+                      onChange={(e) => setPendingModelBrand(e.target.value)}
+                      placeholder="例: 〇〇家具"
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={pendingModelPrice}
+                    onChange={(e) => setPendingModelPrice(e.target.value)}
+                    placeholder="例: 45000"
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                  />
+                </div>
+              </div>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={closeModelPopup} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">キャンセル</button>
+              <button type="button" onClick={() => void commitModelUpload()} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500">この内容で追加</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 3Dモデルのアップロード用 input（家具ストリップの「アップロード」内「＋」から起動・260623） */}
       <input
         ref={modelUploadInputRef}
         type="file"
         accept=".glb,.gltf,.fbx,.obj"
         className="hidden"
-        onChange={(e) => void handleModelFileUpload(e.target.files?.[0])}
+        onChange={(e) => handleModelFileUpload(e.target.files?.[0])}
       />
 
       <input 
