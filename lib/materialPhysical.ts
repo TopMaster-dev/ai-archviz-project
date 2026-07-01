@@ -140,6 +140,25 @@ function pxToMmAtDpi(px: number, dpi: number): number {
 }
 
 /**
+ * 実寸メタから「長辺/短辺」比と向き（横長か）を返す。**画像のピクセル縦横比ではなく実寸(mm)の比**。
+ * K(タイル組み合わせ)など、画像ピクセル比 ≠ 実寸比 の素材でも実寸どおりにタイリングするために使う（260701）。
+ * 例: 画像1824x342px・実寸2994x1000mm → longOverShort=2.994（ピクセル比 5.33 ではなく実寸比を採用）。
+ * 実寸メタが無い（アップロード素材等）場合は null を返し、呼び出し側は画像ピクセル比へフォールバックする。
+ */
+export function physicalRealAspect(
+  physical: MaterialPhysical | undefined,
+): { longOverShort: number; landscape: boolean } | null {
+  if (!physical) return null;
+  const w = physical.repeatWidthMm;
+  const h = physical.repeatHeightMm;
+  if (!w || !h || !(w > 0) || !(h > 0)) return null;
+  const long = Math.max(w, h);
+  const short = Math.min(w, h);
+  if (!(short > 0)) return null;
+  return { longOverShort: long / short, landscape: w >= h };
+}
+
+/**
  * 実寸テクスチャ投影用: テクスチャ「短辺」の実寸（メートル）を決める。
  * 優先順位:
  *   1) 手動の textureScale（ユーザー調整）があればそれを使う

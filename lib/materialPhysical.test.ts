@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   effectiveTextureShortEdgeMeters,
+  physicalRealAspect,
   deriveMaterialPhysical,
   parseMaterialFilename,
   type MaterialPhysical,
@@ -11,6 +12,21 @@ const phys = (w?: number, h?: number): MaterialPhysical => ({
   repeatHeightMm: h,
   imageKind: 'repeat',
   source: 'filename+pixels',
+});
+
+describe('physicalRealAspect', () => {
+  it('uses REAL dims aspect, not image pixels (260701)', () => {
+    // SANGETSU K タイル: 画像1824x342px でも実寸2994x1000mm → 実寸比 2.994（ピクセル比 5.33 ではない）。
+    expect(physicalRealAspect(phys(2994, 1000))).toEqual({ longOverShort: 2994 / 1000, landscape: true });
+  });
+  it('portrait real dims → landscape false', () => {
+    expect(physicalRealAspect(phys(300, 600))).toEqual({ longOverShort: 2, landscape: false });
+  });
+  it('missing / invalid dims → null (caller falls back to image pixels)', () => {
+    expect(physicalRealAspect(undefined)).toBeNull();
+    expect(physicalRealAspect(phys(undefined, undefined))).toBeNull();
+    expect(physicalRealAspect(phys(0, 1000))).toBeNull();
+  });
 });
 
 describe('effectiveTextureShortEdgeMeters', () => {
