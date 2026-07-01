@@ -81,23 +81,38 @@ function buildBeamBandPrism(
   botY: number,
 ): THREE.BufferGeometry | null {
   const toXZ = (p: Point): [number, number] => [(p.x - centerMm.x) / MM_PER_METER, (p.y - centerMm.y) / MM_PER_METER];
-  const [x1, z1] = toXZ(corners.c1);
-  const [x2, z2] = toXZ(corners.c2);
-  const [x3, z3] = toXZ(corners.c3);
-  const [x4, z4] = toXZ(corners.c4);
+  // 長辺が c1-c2 になるよう必要なら頂点ラベルを1つ回転（壁梁は c1-c2 が長辺、自由梁は c2-c3 が長辺で
+  // 四隅の並び順が異なる・260701）。これで天面/底面・長辺側面の u が両梁種で「梁長さ方向」に揃い、
+  // 非1:1テクスチャのアスペクト比が正しく貼られる（回転しないと自由梁で長さ/幅が入れ替わり歪む）。
+  let { c1, c2, c3, c4 } = corners;
+  if (Math.hypot(c2.x - c3.x, c2.y - c3.y) > Math.hypot(c1.x - c2.x, c1.y - c2.y)) {
+    [c1, c2, c3, c4] = [c2, c3, c4, c1];
+  }
+  const [x1, z1] = toXZ(c1);
+  const [x2, z2] = toXZ(c2);
+  const [x3, z3] = toXZ(c3);
+  const [x4, z4] = toXZ(c4);
   if (![x1, z1, x2, z2, x3, z3, x4, z4, topY, botY].every(Number.isFinite)) return null;
   const T1 = [x1, topY, z1], T2 = [x2, topY, z2], T3 = [x3, topY, z3], T4 = [x4, topY, z4];
   const B1 = [x1, botY, z1], B2 = [x2, botY, z2], B3 = [x3, botY, z3], B4 = [x4, botY, z4];
   const pos: number[] = [];
-  const quad = (a: number[], b: number[], c: number[], d: number[]) => { pos.push(...a, ...b, ...c, ...a, ...c, ...d); };
+  // 各面に UV(0..1) を付与（従来は position/normal のみで UV 欠落＝梁にテクスチャが正しく貼れなかった・260701 修正）。
+  // 各四隅を (0,0)(1,0)(1,1)(0,1) に割当。長辺側面(c1-c2 / c3-c4)では u=梁長さ方向・v=高さ方向になり、
+  // applyRealSizeTextureRepeat の repeat と組み合わせて実寸＋アスペクト比を維持したタイリングになる。
+  const uv: number[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]) => {
+    pos.push(...a, ...b, ...c, ...a, ...c, ...d);
+    uv.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
+  };
   quad(T1, T2, T3, T4); // 天面
   quad(B4, B3, B2, B1); // 底面（室内から見上げる主要面）
-  quad(B1, B2, T2, T1); // 側面 c1-c2
+  quad(B1, B2, T2, T1); // 側面 c1-c2（長辺）
   quad(B2, B3, T3, T2); // 端面 c2-c3
-  quad(B3, B4, T4, T3); // 側面 c3-c4
+  quad(B3, B4, T4, T3); // 側面 c3-c4（長辺）
   quad(B4, B1, T1, T4); // 端面 c4-c1
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
   geo.computeVertexNormals();
   return geo;
 }
@@ -568,17 +583,22 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
         return;
     }
     const settings = materialSettings[prod.id] || {};
-    const texture = new THREE.TextureLoader().load(prod.textureUrl);
-    texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
-    texture.colorSpace = THREE.SRGBColorSpace;
     // 実寸投影: 素材の物理メタ（mm）から短辺実寸を決める（手動 textureScale が最優先）。
     const shortEdgeMeters = effectiveTextureShortEdgeMeters(prod.physical, settings.textureScale);
     const surface = getSurfaceSizeFromMesh(mesh);
-    applyRealSizeTextureRepeat(texture, shortEdgeMeters, surface?.widthM, surface?.heightM);
-    // テクスチャの向き（度）。中心回転で任意角度に対応（260613・row 164）。
-    texture.center.set(0.5, 0.5);
-    texture.rotation = THREE.MathUtils.degToRad(settings.textureRotation ?? 0);
-    texture.needsUpdate = true;
+    const rotationRad = THREE.MathUtils.degToRad(settings.textureRotation ?? 0);
+    // ラップ/実寸リピート/回転をまとめて適用。画像未ロード時はサイズ不明で 1x1（正方形）になり非正方形が歪むため、
+    // TextureLoader の onLoad でも再適用して実寸＋アスペクト比を確定させる（260701 修正）。
+    const applyTx = (tx: THREE.Texture) => {
+      tx.wrapS = tx.wrapT = THREE.RepeatWrapping;
+      tx.colorSpace = THREE.SRGBColorSpace;
+      tx.center.set(0.5, 0.5);
+      tx.rotation = rotationRad; // テクスチャの向き（度・260613 row 164）
+      applyRealSizeTextureRepeat(tx, shortEdgeMeters, surface?.widthM, surface?.heightM);
+      tx.needsUpdate = true;
+    };
+    const texture = new THREE.TextureLoader().load(prod.textureUrl, applyTx);
+    applyTx(texture); // 初期適用（ロード完了時に applyTx が実寸/アスペクトを再確定）
 
     mesh.material = new THREE.MeshStandardMaterial({
         map: texture,
