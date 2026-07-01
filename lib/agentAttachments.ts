@@ -26,6 +26,22 @@ export function isGeminiInlineSupported(mime: string): boolean {
 }
 
 /**
+ * 任意の data URL を {mimeType, base64} に分解する（画像に限らず PDF/音声/動画/テキスト/コード等・260702）。
+ * 重要: 拡張子から MIME を判定できないコード/テキストは File.type が空のため、ブラウザは
+ * `data:;base64,....`（MIME 部が空）を生成する。MIME 部は 0 文字も許容しないと base64 本体を取りこぼす。
+ */
+export function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
+  const m = (dataUrl || '').match(/^data:([^;,]*);base64,(.*)$/is);
+  if (m) return { mimeType: (m[1] || '').trim() || 'application/octet-stream', base64: m[2] || '' };
+  return { mimeType: 'application/octet-stream', base64: '' };
+}
+
+/** data URL が base64 形式か（MIME 部が空の `data:;base64,` も許容）。 */
+export function isBase64DataUrl(dataUrl: string): boolean {
+  return /^data:[^;,]*;base64,/i.test(dataUrl || '');
+}
+
+/**
  * ファイル名/種別から、AIが本体を直接読み取れる添付かどうか。
  * false のもの（.doc/.docx/.xls/.xlsx/.pptx 等）は添付一覧に載せず除外する（クライアント要望・260702）。
  */

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { isReadableAttachment, resolveAttachmentMime, isGeminiInlineSupported } from './agentAttachments.js';
+import {
+  isReadableAttachment,
+  resolveAttachmentMime,
+  isGeminiInlineSupported,
+  parseDataUrl,
+  isBase64DataUrl,
+} from './agentAttachments.js';
 
 describe('isReadableAttachment (Office バイナリを添付一覧から除外・260702)', () => {
   it('excludes Office binary formats (client asked to hide these)', () => {
@@ -52,5 +58,27 @@ describe('resolveAttachmentMime / isGeminiInlineSupported', () => {
     expect(isGeminiInlineSupported('application/pdf')).toBe(true);
     expect(isGeminiInlineSupported('application/vnd.x')).toBe(false);
     expect(isGeminiInlineSupported('application/octet-stream')).toBe(false);
+  });
+});
+
+describe('parseDataUrl / isBase64DataUrl (empty-MIME code/text files・260702)', () => {
+  it('extracts mime + base64 from a normal image data URL', () => {
+    expect(parseDataUrl('data:image/png;base64,AAAB')).toEqual({ mimeType: 'image/png', base64: 'AAAB' });
+  });
+
+  it('KEEPS the base64 body when the MIME part is empty (bug: code/text files were dropped)', () => {
+    // FileReader が File.type='' の .py 等に対して生成する形（MIME 部が空）。base64 を取りこぼさないこと。
+    expect(parseDataUrl('data:;base64,SGVsbG8=')).toEqual({ mimeType: 'application/octet-stream', base64: 'SGVsbG8=' });
+  });
+
+  it('returns empty base64 for a non-data-URL string', () => {
+    expect(parseDataUrl('not-a-data-url')).toEqual({ mimeType: 'application/octet-stream', base64: '' });
+  });
+
+  it('isBase64DataUrl accepts empty-MIME base64 URLs and rejects non-base64', () => {
+    expect(isBase64DataUrl('data:;base64,SGVsbG8=')).toBe(true);
+    expect(isBase64DataUrl('data:image/png;base64,AAAB')).toBe(true);
+    expect(isBase64DataUrl('data:text/plain,hello')).toBe(false);
+    expect(isBase64DataUrl('')).toBe(false);
   });
 });

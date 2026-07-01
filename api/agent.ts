@@ -1,4 +1,5 @@
 import { generateAgentReply, resolveAgentModel, type AgentAttachment, type AgentChatMessage } from '../lib/gemini.js';
+import { isBase64DataUrl } from '../lib/agentAttachments.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 import type { AgentCatalogEntry } from '../types.js';
 
@@ -63,7 +64,8 @@ export default async function handler(req: any, res: any) {
         if (!f || typeof f !== 'object') continue;
         const rec = f as { name?: unknown; dataUrl?: unknown };
         const dataUrl = typeof rec.dataUrl === 'string' ? rec.dataUrl : '';
-        if (!/^data:[^;,]+;base64,/i.test(dataUrl)) continue;
+        // MIME 部が空の `data:;base64,`（拡張子で判定するコード/テキストファイル）も受理する。
+        if (!isBase64DataUrl(dataUrl)) continue;
         total += dataUrl.length;
         if (total > MAX_TOTAL_B64) break;
         files.push({ name: typeof rec.name === 'string' ? rec.name : undefined, dataUrl });

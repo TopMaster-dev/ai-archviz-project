@@ -1,7 +1,7 @@
 import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
 import { buildAiEditReferenceGuide, describeObjectPlacements } from './aiEditPrompt.js';
 import { resolveAgentRecommendations } from './agentCatalog.js';
-import { resolveAttachmentMime, isGeminiInlineSupported } from './agentAttachments.js';
+import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './agentAttachments.js';
 
 // ---------------------------------------------------------------------------
 // AI モデルの使い分け（管理表 row 209/258「AIAPIの最適化・選択」）。
@@ -100,13 +100,6 @@ export function parseImageDataUrl(dataUrl: string): { mimeType: string; base64: 
   }
   const stripped = dataUrl.replace(/^data:image\/\w+;base64,/, '');
   return { mimeType: 'image/png', base64: stripped };
-}
-
-/** 任意の data URL を {mimeType, base64} に分解（画像に限らずPDF/音声/動画/テキスト等・260702）。 */
-export function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
-  const m = (dataUrl || '').match(/^data:([^;,]+);base64,(.+)$/is);
-  if (m) return { mimeType: (m[1] || '').trim() || 'application/octet-stream', base64: m[2] };
-  return { mimeType: 'application/octet-stream', base64: '' };
 }
 
 /** エージェント添付ファイル（クライアントから {name, dataUrl} で受け取る）。 */

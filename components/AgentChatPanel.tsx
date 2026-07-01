@@ -104,6 +104,8 @@ export function AgentChatPanel({
   const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
   // 参考ファイルの添付（260702: 画像・PDF・資料・音声・動画・コード等を複数、文脈に渡す）。
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  // 読み込み中の件数（FileReader は非同期のため、選択直後に「読み込み中…」を出して即時フィードバックする・260702）。
+  const [readingCount, setReadingCount] = useState(0);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -141,10 +143,10 @@ export function AgentChatPanel({
     if ((!text && attachedFiles.length === 0) || sending) return;
     // テキスト未入力でも添付だけで送れるよう既定プロンプトを補う。
     const content = text || '添付したファイルを確認してアドバイスをください。';
+    const filesToSend = attachedFiles; // 複数の添付を文脈として渡す（画像/PDF/資料/音声/動画/コード）。
     const next: ChatMessage[] = [...messages, { role: 'user', content }];
     setMessages(next);
     setInput('');
-    const filesToSend = attachedFiles; // 複数の添付を文脈として渡す（画像/PDF/資料/音声/動画/コード）。
     setAttachedFiles([]);
     setError(null);
     setSending(true);
@@ -230,6 +232,7 @@ export function AgentChatPanel({
       notes.push(`添付は合計 ${Math.round(MAX_TOTAL_RAW / 1024 / 1024)}MB までです。大きな動画・音声・資料は圧縮または分割してください。`);
     }
     if (notes.length) setError(notes.join(' '));
+    if (accepted.length) setReadingCount((c) => c + accepted.length); // 即時に「読み込み中…」を表示
     accepted.forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
@@ -239,6 +242,8 @@ export function AgentChatPanel({
           { id: `f${idRef.current++}`, name: file.name, mimeType: file.type || '', dataUrl: reader.result as string, size: file.size },
         ]);
       };
+      // onload/エラーいずれでも必ず減算し、読み込み中表示が残らないようにする。
+      reader.onloadend = () => setReadingCount((c) => Math.max(0, c - 1));
       reader.readAsDataURL(file);
     });
   };
@@ -249,36 +254,102 @@ export function AgentChatPanel({
   const hiddenFileInput = (
     <input ref={attachInputRef} type="file" accept={ACCEPT_EXTS} multiple className="hidden" onChange={onPickAttach} />
   );
-  const filesChips =
-    attachedFiles.length > 0 ? (
-      <div className="flex flex-wrap gap-1.5">
-        {attachedFiles.map((f) => (
-          <div
-            key={f.id}
-            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 py-1 pl-1 pr-1.5"
-          >
-            {isImageFile(f) ? (
-              <img src={f.dataUrl} alt={f.name} className="h-7 w-7 shrink-0 rounded object-cover" />
-            ) : (
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-neutral-300">
-                <FileText className="h-4 w-4" />
-              </span>
-            )}
-            <span className="max-w-[7rem] truncate text-[10px] text-neutral-300" title={f.name}>
-              {f.name}
-            </span>
-            <button
-              type="button"
-              onClick={() => removeFile(f.id)}
-              aria-label={`${f.name} を外す`}
-              className="shrink-0 rounded p-0.5 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+  // 送信前の添付インジケータ（クライアント要望・260702）: 添付したことがはっきり分かるよう、
+  // 件数ラベル付きの目立つパネルで表示する。選択直後は「読み込み中…」を即時表示する。
+  const attachmentsPanel =
+    attachedFiles.length > 0 || readingCount > 0 ? (
+      <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/[0.08] p-2">
+        <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-bold text-emerald-200">
+          <Paperclip className="h-3.5 w-3.5" />
+          添付ファイル{attachedFiles.length > 0 ? `（${attachedFiles.length}件）` : ''}
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {attachedFiles.map((f) => (
+            <div
+              key={f.id}
+              className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 py-1 pl-1 pr-1.5"
             >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        ))}
+              {isImageFile(f) ? (
+                <img src={f.dataUrl} alt={f.name} className="h-7 w-7 shrink-0 rounded object-cover" />
+              ) : (
+                <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-neutral-300">
+                  <FileText className="h-4 w-4" />
+                </span>
+              )}
+              <span className="max-w-[7rem] truncate text-[10px] text-neutral-200" title={f.name}>
+                {f.name}
+              </span>
+              <button
+                type="button"
+                onClick={() => removeFile(f.id)}
+                aria-label={`${f.name} を外す`}
+                className="shrink-0 rounded p-0.5 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+          {readingCount > 0 && (
+            <div className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-2 py-1.5 text-[10px] text-neutral-300">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              読み込み中…
+            </div>
+          )}
+        </div>
       </div>
     ) : null;
+
+  // 記入欄は初期状態でもチャット開始後でも同じ大きさ・同じ形式で下部に置く（縮ませない・260702 クライアント要望）。
+  // 大きな記入欄なので Enter=改行、送信は「送信」ボタンまたは Ctrl/⌘+Enter。
+  const renderComposer = (variant: 'initial' | 'chat') => {
+    const isInitial = variant === 'initial';
+    return (
+      <div className="flex flex-col gap-2">
+        {isInitial && (
+          <p id="agent-empty-label" className="text-[12px] font-bold text-neutral-200">
+            ここにお困りごとを記入してください。
+          </p>
+        )}
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+              e.preventDefault();
+              void send();
+            }
+          }}
+          aria-labelledby={isInitial ? 'agent-empty-label' : undefined}
+          aria-label={isInitial ? undefined : 'メッセージを記入'}
+          rows={isInitial ? 6 : 5}
+          placeholder={isInitial ? AGENT_PLACEHOLDER : '続けて質問する…（Ctrl+Enter で送信）'}
+          className="w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white outline-none focus:border-emerald-500"
+        />
+        {attachmentsPanel}
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => attachInputRef.current?.click()}
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
+          >
+            <Paperclip className="h-4 w-4" />
+            ファイルを添付
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={sending || (!input.trim() && attachedFiles.length === 0)}
+          className="flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2.5 text-[12px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+        >
+          {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+          送信
+        </button>
+        {error && <p className="text-[11px] text-red-300">{error}</p>}
+        {hiddenFileInput}
+      </div>
+    );
+  };
 
   if (!open) return null; // 開閉トリガは「エリア編集」横のタブ（AiEditWorkspace）へ移動
 
@@ -322,41 +393,7 @@ export function AgentChatPanel({
 
       {messages.length === 0 ? (
         /* 初期状態: コーディネートの記入欄と同じ形式（大きな記入欄＋枠内グレーの例文＋入力欄の近くにラベル）・260702 */
-        <div className="scroll-dark flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
-          <p id="agent-empty-label" className="text-[12px] font-bold text-neutral-200">
-            ここにお困りごとを記入してください。
-          </p>
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            aria-labelledby="agent-empty-label"
-            rows={6}
-            placeholder={AGENT_PLACEHOLDER}
-            className="w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white outline-none focus:border-emerald-500"
-          />
-          {filesChips}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => attachInputRef.current?.click()}
-              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
-            >
-              <Paperclip className="h-4 w-4" />
-              ファイルを添付
-            </button>
-          </div>
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={sending || (!input.trim() && attachedFiles.length === 0)}
-            className="mt-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2.5 text-[12px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
-          >
-            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-            送信
-          </button>
-          {error && <p className="text-[11px] text-red-300">{error}</p>}
-          {hiddenFileInput}
-        </div>
+        <div className="scroll-dark flex min-h-0 flex-1 flex-col overflow-y-auto p-3">{renderComposer('initial')}</div>
       ) : (
         <>
         <div ref={scrollRef} className="scroll-dark flex-1 space-y-2 overflow-y-auto p-3 text-[12px]">
@@ -457,47 +494,10 @@ export function AgentChatPanel({
               </div>
             </div>
           )}
-          {error && <p className="text-[11px] text-red-300">{error}</p>}
         </div>
 
-        <div className="border-t border-white/10 p-2.5">
-          {filesChips && <div className="mb-2">{filesChips}</div>}
-          <div className="flex items-end gap-2">
-            <button
-              type="button"
-              onClick={() => attachInputRef.current?.click()}
-              title="ファイルを添付（画像・PDF・資料・音声・動画・コードなど／複数可）"
-              aria-label="ファイルを添付"
-              className="shrink-0 rounded-lg border border-white/10 bg-black/40 p-2 text-neutral-300 transition hover:bg-white/10 hover:text-white"
-            >
-              <Paperclip className="h-4 w-4" />
-            </button>
-            {hiddenFileInput}
-            <textarea
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
-                  e.preventDefault();
-                  void send();
-                }
-              }}
-              rows={1}
-              placeholder="続けて質問する…"
-              aria-label="続けて質問する"
-              className="max-h-32 flex-1 resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white outline-none focus:border-emerald-500"
-            />
-            <button
-              type="button"
-              onClick={() => void send()}
-              disabled={sending || (!input.trim() && attachedFiles.length === 0)}
-              aria-label="送信"
-              className="rounded-lg bg-emerald-600 p-2 text-white transition hover:bg-emerald-500 disabled:opacity-40"
-            >
-              <Send className="h-4 w-4" />
-            </button>
-          </div>
-        </div>
+        {/* チャット開始後も記入欄は縮ませず、初期状態と同じ大きさ・形式で下部に置く（260702）。 */}
+        <div className="border-t border-white/10 p-2.5">{renderComposer('chat')}</div>
         </>
       )}
     </div>
