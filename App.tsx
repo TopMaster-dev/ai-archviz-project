@@ -3600,13 +3600,11 @@ const App: React.FC = () => {
                                                 const manualAppliedShortEdgeMm = settings.textureScale != null
                                                     ? Math.round(settings.textureScale * 1000)
                                                     : null;
-                                                const autoTargetShortEdgeMm = 1000;
-                                                const displayScale = detectedShortEdgeMm && detectedShortEdgeMm > 0
-                                                    ? autoTargetShortEdgeMm / detectedShortEdgeMm
-                                                    : 1;
+                                                // 1px=1mm（クライアント仕様260701）: 画像ピクセルの短辺(mm)をそのまま既定にする（1000mm へ正規化しない）。
+                                                // これで反映短辺・実寸の表示値が、実際の描画（画像px＝1タイルの実寸）と一致する。手動入力時はその値を優先。
                                                 const autoAppliedShortEdgeMm = detectedShortEdgeMm && detectedShortEdgeMm > 0
-                                                    ? Math.round(detectedShortEdgeMm * displayScale)
-                                                    : autoTargetShortEdgeMm;
+                                                    ? detectedShortEdgeMm
+                                                    : 1000;
                                                 const appliedShortEdgeMm = manualAppliedShortEdgeMm ?? autoAppliedShortEdgeMm;
                                                 const isManualOverride = manualAppliedShortEdgeMm != null;
                                                 const widthMm = imageSize
