@@ -23,10 +23,14 @@ export default async function handler(req: any, res: any) {
         return res.status(500).json({ error: "Server Configuration Error" });
     }
 
-    // Search for all images under 'materials' folder recursively
+    // Search for all images under 'materials' folder recursively.
+    // with_field('context'/'metadata'): アセットに登録した実寸(mm)等のメタデータを結果に含める（260701）。
+    // ピクセル寸法(res.width/height)は Web 用ダウンスケール版で実寸と一致しないため、実寸はメタデータを正とする。
     const searchResult = await cloudinary.search
       .expression('resource_type:image AND folder:materials/*')
       .sort_by('public_id', 'asc')
+      .with_field('context')
+      .with_field('metadata')
       .max_results(500)
       .execute();
     
@@ -57,6 +61,22 @@ export default async function handler(req: any, res: any) {
         if (r.includes('window') || r.includes('glass') || r.includes('sash')) return 'Window';
         if (r.includes('furn') || r.includes('furniture') || r.includes('chair')) return 'Furniture';
         return 'Wall'; // Default fallback
+    };
+
+    // Cloudinary アセットに登録した「実寸(mm)」を読む。ダウンスケール画像ではピクセル寸法≠実寸のため、
+    // 実寸はここ（コンテキスト or 構造化メタデータ）に登録した値を最優先で使う（deriveMaterialPhysical の sidecar 経路）。
+    // 登録キー（いずれか。幅・高さ両方を登録すること）: real_width_mm / real_height_mm（推奨）
+    //   もしくは repeat_width_mm / repeat_height_mm。未登録の素材は従来どおり画像ピクセルから推定（無回帰）。
+    const readRealSizeMm = (res: any): { repeatWidthMm?: number; repeatHeightMm?: number } | undefined => {
+        const num = (v: unknown): number | undefined => {
+            const n = typeof v === 'string' ? parseFloat(v) : typeof v === 'number' ? v : NaN;
+            return Number.isFinite(n) && n > 0 ? n : undefined;
+        };
+        const ctx = res?.context?.custom ?? res?.context ?? {};
+        const meta = res?.metadata ?? {};
+        const w = num(ctx.real_width_mm ?? meta.real_width_mm ?? ctx.repeat_width_mm ?? meta.repeat_width_mm);
+        const h = num(ctx.real_height_mm ?? meta.real_height_mm ?? ctx.repeat_height_mm ?? meta.repeat_height_mm);
+        return w || h ? { repeatWidthMm: w, repeatHeightMm: h } : undefined;
     };
 
     const products = resources.map((res: any) => {
@@ -123,6 +143,7 @@ export default async function handler(req: any, res: any) {
           publicId,
           widthPx: typeof res.width === 'number' ? res.width : undefined,
           heightPx: typeof res.height === 'number' ? res.height : undefined,
+          sidecar: readRealSizeMm(res), // アセットのメタデータに実寸があれば最優先で採用
         });
 
         // Infer PBR properties
