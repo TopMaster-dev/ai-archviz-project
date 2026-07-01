@@ -3373,7 +3373,9 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                       beams={beams}
                       centerMm={sketchFloorPolygon?.centerMm}
                       polygonMm={sketchFloorPolygon?.polygonMm}
-                      roomHeight={roomHeight}
+                      // スケルトン天井時は天井（＋上部壁ぶん）へ上がるので、梁も同じ高さへ引き上げる
+                      // （260701・クライアント要望「梁も上（天井）にあげる」）。梁Yは roomHeight から算出されるため props で調整。
+                      roomHeight={skeletonCeiling && skeletonUpperWallMm > 0 ? roomHeight + skeletonUpperWallMm / 1000 : roomHeight}
                       wallHiddenRef={wallHiddenRef}
                       selectedBeamId={selectedBeam3DId}
                       onBeamSelect={selectBeamClearOthers}
