@@ -3,6 +3,7 @@ import { Check, Copy, FileText, Loader2, MessageCircle, Paperclip, Send, X, Plus
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
+import { isReadableAttachment } from '../lib/agentAttachments.js';
 import type { AgentChatMessage } from '../lib/gemini.js';
 import type { AgentCatalogEntry, AgentRecommendation } from '../types.js';
 
@@ -36,9 +37,10 @@ type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[] 
 /** エージェント相談に添付するファイル（画像・PDF・資料・音声・動画・コード等・複数対応 260702）。 */
 type AttachedFile = { id: string; name: string; mimeType: string; dataUrl: string; size: number };
 
-// 受理する拡張子（クライアント要望リスト。.ph は .php も許容。.jpg も補完）。
+// 受理する拡張子（.ph は .php も許容・.jpg も補完）。
+// Office バイナリ(.doc/.docx/.xls/.xlsx/.pptx)は Gemini が直接読めないためピッカーから除外（クライアント要望・260702）。
 const ACCEPT_EXTS =
-  '.pdf,.txt,.doc,.docx,.rtf,.pptx,.csv,.tsv,.xls,.xlsx,.c,.java,.py,.js,.html,.css,.ph,.php,.jpeg,.jpg,.png,.webp,.bmp,.heic,.heif,.wav,.mp3,.aiff,.aac,.ogg,.flac,.mp4,.mpeg,.mov,.avi,.webm,.3gpp';
+  '.pdf,.txt,.rtf,.csv,.tsv,.c,.java,.py,.js,.html,.css,.ph,.php,.jpeg,.jpg,.png,.webp,.bmp,.heic,.heif,.wav,.mp3,.aiff,.aac,.ogg,.flac,.mp4,.mpeg,.mov,.avi,.webm,.3gpp';
 
 // 添付合計サイズ上限（生バイト）。Vercel の関数ボディ上限(~4.5MB)を超えると送信自体が失敗するため控えめに。
 const MAX_TOTAL_RAW = 3 * 1024 * 1024;
@@ -203,8 +205,14 @@ export function AgentChatPanel({
     if (!list || list.length === 0) return;
     let running = attachedFiles.reduce((s, f) => s + f.size, 0);
     const accepted: File[] = [];
+    const unreadable: string[] = [];
     let overflow = false;
     for (const file of Array.from(list)) {
+      // AIが本体を直接読み取れない形式(.doc/.docx/.xls/.xlsx/.pptx 等)は添付一覧に載せず除外（260702）。
+      if (!isReadableAttachment(file.name, file.type)) {
+        unreadable.push(file.name);
+        continue;
+      }
       if (running + file.size > MAX_TOTAL_RAW) {
         overflow = true;
         continue;
@@ -212,9 +220,16 @@ export function AgentChatPanel({
       running += file.size;
       accepted.push(file);
     }
-    if (overflow) {
-      setError(`添付は合計 ${Math.round(MAX_TOTAL_RAW / 1024 / 1024)}MB までです。大きな動画・音声・資料は圧縮または分割してください。`);
+    const notes: string[] = [];
+    if (unreadable.length) {
+      notes.push(
+        `AIが直接読み取れない形式のため除外しました（${unreadable.join('、')}）。.doc/.docx/.xls/.xlsx/.pptx などは PDF かテキストに変換してから添付してください。`,
+      );
     }
+    if (overflow) {
+      notes.push(`添付は合計 ${Math.round(MAX_TOTAL_RAW / 1024 / 1024)}MB までです。大きな動画・音声・資料は圧縮または分割してください。`);
+    }
+    if (notes.length) setError(notes.join(' '));
     accepted.forEach((file) => {
       const reader = new FileReader();
       reader.onload = () => {
