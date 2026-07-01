@@ -20,16 +20,15 @@ import type { AgentCatalogEntry, AgentRecommendation } from '../types.js';
 const CHAT_STORAGE_PREFIX = 'arise-agent-chat-';
 const MAX_STORED = 50;
 
-/** 空状態に出す相談例（クリックで入力欄へ流し込む・260624 クライアント要望のUIに合わせる）。 */
-const AGENT_EXAMPLES: { label: string; fill: string; hint?: string }[] = [
-  {
-    label: 'このブランドに合うデザインを提案して',
-    fill: 'このブランドに合うデザインを提案して。',
-    hint: '（HPに掲載されている企業理念や現在の展開されている店舗画像、今回の提案要件を記入してください）',
-  },
-  { label: 'この空間に合う家具を提案して', fill: 'この空間に合う家具を提案して。' },
-  { label: '最近のトレンドカラーを教えて', fill: '最近のトレンドカラーを教えて。' },
-];
+/**
+ * 初期状態の記入欄に薄いグレーで表示する相談例（260702 クライアント要望）。
+ * コーディネートの記入欄と同じく、例文はプレースホルダとして枠内にグレー表示する。
+ */
+const AGENT_PLACEHOLDER =
+  '例1）このブランドに合うデザインを提案して\n' +
+  '（HPに掲載されている企業理念や現在の展開されている店舗画像、今回の提案要件を記入してください）\n' +
+  '例2）この空間に合う家具を提案して\n' +
+  '例3）最近のトレンドカラーを教えて';
 
 /** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）が付くことがある。 */
 type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[] };
@@ -231,6 +230,41 @@ export function AgentChatPanel({
 
   const removeFile = (id: string) => setAttachedFiles((prev) => prev.filter((f) => f.id !== id));
 
+  // 初期状態フォームと会話中フッターで共有する部品（複数添付・260702）。※同時に描画されるのは片方のみ。
+  const hiddenFileInput = (
+    <input ref={attachInputRef} type="file" accept={ACCEPT_EXTS} multiple className="hidden" onChange={onPickAttach} />
+  );
+  const filesChips =
+    attachedFiles.length > 0 ? (
+      <div className="flex flex-wrap gap-1.5">
+        {attachedFiles.map((f) => (
+          <div
+            key={f.id}
+            className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 py-1 pl-1 pr-1.5"
+          >
+            {isImageFile(f) ? (
+              <img src={f.dataUrl} alt={f.name} className="h-7 w-7 shrink-0 rounded object-cover" />
+            ) : (
+              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-neutral-300">
+                <FileText className="h-4 w-4" />
+              </span>
+            )}
+            <span className="max-w-[7rem] truncate text-[10px] text-neutral-300" title={f.name}>
+              {f.name}
+            </span>
+            <button
+              type="button"
+              onClick={() => removeFile(f.id)}
+              aria-label={`${f.name} を外す`}
+              className="shrink-0 rounded p-0.5 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+      </div>
+    ) : null;
+
   if (!open) return null; // 開閉トリガは「エリア編集」横のタブ（AiEditWorkspace）へ移動
 
   return (
@@ -271,31 +305,47 @@ export function AgentChatPanel({
         </div>
       </div>
 
-      <div ref={scrollRef} className="scroll-dark flex-1 space-y-2 overflow-y-auto p-3 text-[12px]">
-        {messages.length === 0 ? (
-          <div className="space-y-2.5">
-            <p className="font-bold text-neutral-200">ここにお困りごとを記入してください。</p>
-            <div className="space-y-1.5">
-              {AGENT_EXAMPLES.map((ex, i) => (
-                <button
-                  key={i}
-                  type="button"
-                  onClick={() => setInput(ex.fill)}
-                  className="block w-full rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2 text-left transition hover:border-emerald-500/40 hover:bg-emerald-500/[0.06]"
-                  title="クリックで入力欄へ"
-                >
-                  <span className="text-[12px] text-neutral-200">
-                    例{i + 1}）{ex.label}
-                  </span>
-                  {ex.hint && (
-                    <span className="mt-0.5 block text-[10px] leading-relaxed text-neutral-500">{ex.hint}</span>
-                  )}
-                </button>
-              ))}
-            </div>
+      {messages.length === 0 ? (
+        /* 初期状態: コーディネートの記入欄と同じ形式（大きな記入欄＋枠内グレーの例文＋入力欄の近くにラベル）・260702 */
+        <div className="scroll-dark flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-3">
+          <p id="agent-empty-label" className="text-[12px] font-bold text-neutral-200">
+            ここにお困りごとを記入してください。
+          </p>
+          <textarea
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            aria-labelledby="agent-empty-label"
+            rows={6}
+            placeholder={AGENT_PLACEHOLDER}
+            className="w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white outline-none focus:border-emerald-500"
+          />
+          {filesChips}
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => attachInputRef.current?.click()}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
+            >
+              <Paperclip className="h-4 w-4" />
+              ファイルを添付
+            </button>
           </div>
-        ) : (
-          messages.map((m, i) => (
+          <button
+            type="button"
+            onClick={() => void send()}
+            disabled={sending || (!input.trim() && attachedFiles.length === 0)}
+            className="mt-1 flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2.5 text-[12px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+          >
+            {sending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            送信
+          </button>
+          {error && <p className="text-[11px] text-red-300">{error}</p>}
+          {hiddenFileInput}
+        </div>
+      ) : (
+        <>
+        <div ref={scrollRef} className="scroll-dark flex-1 space-y-2 overflow-y-auto p-3 text-[12px]">
+          {messages.map((m, i) => (
             <div key={`${m.role}-${i}`} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div
                 className={`max-w-[85%] cursor-text select-text whitespace-pre-wrap break-words rounded-xl px-3 py-2 ${
@@ -384,90 +434,57 @@ export function AgentChatPanel({
                 </div>
               )}
             </div>
-          ))
-        )}
-        {sending && (
-          <div className="flex justify-start">
-            <div className="rounded-xl bg-white/10 px-3 py-2 text-neutral-300">
-              <Loader2 className="h-4 w-4 animate-spin" />
-            </div>
-          </div>
-        )}
-        {error && <p className="text-[11px] text-red-300">{error}</p>}
-      </div>
-
-      <div className="border-t border-white/10 p-2.5">
-        {attachedFiles.length > 0 && (
-          <div className="mb-2 flex flex-wrap gap-1.5">
-            {attachedFiles.map((f) => (
-              <div
-                key={f.id}
-                className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 py-1 pl-1 pr-1.5"
-              >
-                {isImageFile(f) ? (
-                  <img src={f.dataUrl} alt={f.name} className="h-7 w-7 shrink-0 rounded object-cover" />
-                ) : (
-                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-neutral-300">
-                    <FileText className="h-4 w-4" />
-                  </span>
-                )}
-                <span className="max-w-[7rem] truncate text-[10px] text-neutral-300" title={f.name}>
-                  {f.name}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => removeFile(f.id)}
-                  aria-label={`${f.name} を外す`}
-                  className="shrink-0 rounded p-0.5 text-neutral-400 transition hover:bg-white/10 hover:text-white"
-                >
-                  <X className="h-3 w-3" />
-                </button>
+          ))}
+          {sending && (
+            <div className="flex justify-start">
+              <div className="rounded-xl bg-white/10 px-3 py-2 text-neutral-300">
+                <Loader2 className="h-4 w-4 animate-spin" />
               </div>
-            ))}
-          </div>
-        )}
-        <div className="flex items-end gap-2">
-          <button
-            type="button"
-            onClick={() => attachInputRef.current?.click()}
-            title="ファイルを添付（画像・PDF・資料・音声・動画・コードなど／複数可）"
-            aria-label="ファイルを添付"
-            className="shrink-0 rounded-lg border border-white/10 bg-black/40 p-2 text-neutral-300 transition hover:bg-white/10 hover:text-white"
-          >
-            <Paperclip className="h-4 w-4" />
-          </button>
-          <input
-            ref={attachInputRef}
-            type="file"
-            accept={ACCEPT_EXTS}
-            multiple
-            className="hidden"
-            onChange={onPickAttach}
-          />
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                void send();
-              }
-            }}
-            rows={1}
-            placeholder="例：最近のトレンドカラーを教えて"
-            className="max-h-24 flex-1 resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white outline-none focus:border-emerald-500"
-          />
-          <button
-            type="button"
-            onClick={() => void send()}
-            disabled={sending || (!input.trim() && attachedFiles.length === 0)}
-            aria-label="送信"
-            className="rounded-lg bg-emerald-600 p-2 text-white transition hover:bg-emerald-500 disabled:opacity-40"
-          >
-            <Send className="h-4 w-4" />
-          </button>
+            </div>
+          )}
+          {error && <p className="text-[11px] text-red-300">{error}</p>}
         </div>
-      </div>
+
+        <div className="border-t border-white/10 p-2.5">
+          {filesChips && <div className="mb-2">{filesChips}</div>}
+          <div className="flex items-end gap-2">
+            <button
+              type="button"
+              onClick={() => attachInputRef.current?.click()}
+              title="ファイルを添付（画像・PDF・資料・音声・動画・コードなど／複数可）"
+              aria-label="ファイルを添付"
+              className="shrink-0 rounded-lg border border-white/10 bg-black/40 p-2 text-neutral-300 transition hover:bg-white/10 hover:text-white"
+            >
+              <Paperclip className="h-4 w-4" />
+            </button>
+            {hiddenFileInput}
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  void send();
+                }
+              }}
+              rows={1}
+              placeholder="続けて質問する…"
+              aria-label="続けて質問する"
+              className="max-h-32 flex-1 resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] text-white outline-none focus:border-emerald-500"
+            />
+            <button
+              type="button"
+              onClick={() => void send()}
+              disabled={sending || (!input.trim() && attachedFiles.length === 0)}
+              aria-label="送信"
+              className="rounded-lg bg-emerald-600 p-2 text-white transition hover:bg-emerald-500 disabled:opacity-40"
+            >
+              <Send className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+        </>
+      )}
     </div>
   );
 }
