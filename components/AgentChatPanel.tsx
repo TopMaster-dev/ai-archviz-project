@@ -202,14 +202,17 @@ export function AgentChatPanel({
   };
 
   const onPickAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const list = e.target.files;
+    // 重要（260702 バグ修正）: input.value をリセットする前に FileList を配列へコピーする。
+    // 先に value='' すると、参照していた FileList が空になり（ブラウザ挙動）、添付が一切効かなくなる
+    // ＝「アップロードしても何も起きない」原因。必ず先にコピーしてからリセットする。
+    const picked = e.target.files ? Array.from(e.target.files) : [];
     e.target.value = '';
-    if (!list || list.length === 0) return;
+    if (picked.length === 0) return;
     let running = attachedFiles.reduce((s, f) => s + f.size, 0);
     const accepted: File[] = [];
     const unreadable: string[] = [];
     let overflow = false;
-    for (const file of Array.from(list)) {
+    for (const file of picked) {
       // AIが本体を直接読み取れない形式(.doc/.docx/.xls/.xlsx/.pptx 等)は添付一覧に載せず除外（260702）。
       if (!isReadableAttachment(file.name, file.type)) {
         unreadable.push(file.name);
@@ -242,6 +245,7 @@ export function AgentChatPanel({
           { id: `f${idRef.current++}`, name: file.name, mimeType: file.type || '', dataUrl: reader.result as string, size: file.size },
         ]);
       };
+      reader.onerror = () => setError(`「${file.name}」の読み込みに失敗しました。もう一度お試しください。`);
       // onload/エラーいずれでも必ず減算し、読み込み中表示が残らないようにする。
       reader.onloadend = () => setReadingCount((c) => Math.max(0, c - 1));
       reader.readAsDataURL(file);
