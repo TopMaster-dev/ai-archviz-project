@@ -96,13 +96,17 @@ function buildBeamBandPrism(
   const T1 = [x1, topY, z1], T2 = [x2, topY, z2], T3 = [x3, topY, z3], T4 = [x4, topY, z4];
   const B1 = [x1, botY, z1], B2 = [x2, botY, z2], B3 = [x3, botY, z3], B4 = [x4, botY, z4];
   const pos: number[] = [];
-  // 各面に UV(0..1) を付与（従来は position/normal のみで UV 欠落＝梁にテクスチャが正しく貼れなかった・260701 修正）。
-  // 各四隅を (0,0)(1,0)(1,1)(0,1) に割当。長辺側面(c1-c2 / c3-c4)では u=梁長さ方向・v=高さ方向になり、
-  // applyRealSizeTextureRepeat の repeat と組み合わせて実寸＋アスペクト比を維持したタイリングになる。
+  // 各面に「実寸(m)の UV」を付与する（等方＝1 UV 単位 = 1m）。
+  // 0..1 の UV だと長辺×短辺の面で UV が異方性になり、texture.rotation（90°等）でテクスチャが面のアスペクト比ぶん
+  // 歪む（260702 クライアント報告の修正）。実寸UV（ShapeGeometry と同じ扱い）なら回転しても歪まず、
+  // repeat は uvInMeters 経路で 1/タイル実寸 になり 1タイル=実寸・面積非依存でタイリングされる（u=a→b・v=a→d の実長）。
   const uv: number[] = [];
+  const dist3 = (a: number[], b: number[]) => Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
   const quad = (a: number[], b: number[], c: number[], d: number[]) => {
     pos.push(...a, ...b, ...c, ...a, ...c, ...d);
-    uv.push(0, 0, 1, 0, 1, 1, 0, 0, 1, 1, 0, 1);
+    const uLen = dist3(a, b); // u 軸＝a→b の実寸(m)
+    const vLen = dist3(a, d); // v 軸＝a→d の実寸(m)
+    uv.push(0, 0, uLen, 0, uLen, vLen, 0, 0, uLen, vLen, 0, vLen);
   };
   quad(T1, T2, T3, T4); // 天面
   quad(B4, B3, B2, B1); // 底面（室内から見上げる主要面）
@@ -113,6 +117,7 @@ function buildBeamBandPrism(
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  geo.userData.uvInMeters = true; // UV は実寸(m)＝ShapeGeometry と同じ扱い（applyRealSizeTextureRepeat で repeat=1/タイル）
   geo.computeVertexNormals();
   return geo;
 }
@@ -686,9 +691,9 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
 
     // 実寸投影: 実寸メタ（幅×高さmm）があれば実寸どおりにタイリング（画像ピクセル比に依存しない・260701）。
     // 無い素材は短辺実寸＋画像ピクセル比へフォールバック（effectiveTextureShortEdgeMeters）。
-    // ShapeGeometry（床/壁/天井/上部壁）は UV が実寸(m)なので、面積を変えてもブロックが伸縮しないよう
-    // repeat=1/タイルにする（uvInMeters）。梁プリズム等の UV0..1 は従来の 面/タイル（260701）。
-    const uvInMeters = mesh.geometry.type === 'ShapeGeometry';
+    // UV が実寸(m)の面は repeat=1/タイル（面積を変えてもブロック寸法一定＋回転で歪まない・260701/260702）。
+    // 対象: ShapeGeometry（床/壁/天井/上部壁）＋ 梁プリズム（userData.uvInMeters）。梁の箱(BoxGeometry, UV0..1)等は従来の 面/タイル。
+    const uvInMeters = mesh.geometry.type === 'ShapeGeometry' || mesh.geometry.userData?.uvInMeters === true;
     applyRealSizeTextureRepeat(
       mapTexture,
       effectiveTextureShortEdgeMeters(product.physical, settings.textureScale),
