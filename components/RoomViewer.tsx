@@ -544,6 +544,7 @@ function applyRealSizeTextureRepeat(
   surfaceWidthM?: number,
   surfaceHeightM?: number,
   tileMeters?: { widthM: number; heightM: number } | null,
+  uvInMeters?: boolean,
 ): void {
   const surfaceKnown =
     surfaceWidthM != null &&
@@ -553,40 +554,39 @@ function applyRealSizeTextureRepeat(
     surfaceWidthM > 0 &&
     surfaceHeightM > 0;
 
-  // 実寸メタがある素材は「実際の幅×高さ(m)」でそのままタイリング＝1枚が必ず実寸(例2994x1000mm)になる（260701）。
-  // 画像ピクセル比・短辺正規化に一切依存しない（K タイル等で画像px比 ≠ 実寸比でも正しい）。
+  // まず「1タイルの実寸(幅×高さ・m)」を決める。実寸メタ(tileMeters)があればそれを使い（画像px比・短辺正規化に非依存＝
+  // K タイル等でも正しい）、無ければ短辺実寸＋画像ピクセル比から算出（アップロード素材のフォールバック）。
+  let tileW: number;
+  let tileH: number;
   if (tileMeters && tileMeters.widthM > 0 && tileMeters.heightM > 0) {
-    if (surfaceKnown) {
-      // U(画像幅)=実寸幅 / V(画像高)=実寸高。面の実寸 ÷ タイル実寸 が繰り返し回数。
-      texture.repeat.set((surfaceWidthM as number) / tileMeters.widthM, (surfaceHeightM as number) / tileMeters.heightM);
-    } else {
-      const long = Math.max(tileMeters.widthM, tileMeters.heightM);
-      const short = Math.min(tileMeters.widthM, tileMeters.heightM);
-      const lf = short > 0 ? long / short : 1;
-      const landscape = tileMeters.widthM >= tileMeters.heightM;
-      texture.repeat.set(landscape ? 1 / lf : 1, landscape ? 1 : 1 / lf);
-    }
-    texture.needsUpdate = true;
-    return;
+    tileW = tileMeters.widthM;
+    tileH = tileMeters.heightM;
+  } else {
+    const safeShortEdgeM = Math.max(0.1, shortEdgeMeters);
+    const imageSize = getTextureImageSize(texture);
+    const imageWidth = imageSize?.width ?? 1;
+    const imageHeight = imageSize?.height ?? 1;
+    const isLandscape = imageWidth >= imageHeight;
+    const longEdgeFactor = isLandscape ? imageWidth / imageHeight : imageHeight / imageWidth;
+    tileW = isLandscape ? safeShortEdgeM * longEdgeFactor : safeShortEdgeM;
+    tileH = isLandscape ? safeShortEdgeM : safeShortEdgeM * longEdgeFactor;
   }
 
-  // フォールバック（実寸メタ無し＝アップロード素材等）: 短辺実寸 + 画像ピクセル比（1mm:1px 前提）。
-  const safeShortEdgeM = Math.max(0.1, shortEdgeMeters);
-  const imageSize = getTextureImageSize(texture);
-  const imageWidth = imageSize?.width ?? 1;
-  const imageHeight = imageSize?.height ?? 1;
-  const isLandscape = imageWidth >= imageHeight;
-  const longEdgeFactor = isLandscape ? imageWidth / imageHeight : imageHeight / imageWidth;
-  if (surfaceKnown) {
-    const repeatX = isLandscape
-      ? (surfaceWidthM as number) / (safeShortEdgeM * longEdgeFactor)
-      : (surfaceWidthM as number) / safeShortEdgeM;
-    const repeatY = isLandscape
-      ? (surfaceHeightM as number) / safeShortEdgeM
-      : (surfaceHeightM as number) / (safeShortEdgeM * longEdgeFactor);
-    texture.repeat.set(repeatX, repeatY);
+  if (uvInMeters) {
+    // ShapeGeometry 等は UV が「実寸(m)そのもの」（three.js の shape UV は頂点座標=m）。この場合 1タイル=1/repeat[m]
+    // なので repeat=1/タイル実寸。**面サイズに依存しない**ため、床/壁/天井の面積を変えても1タイルの寸法は一定
+    // （面積変化でブロックが伸縮するバグの修正・260701）。
+    texture.repeat.set(1 / tileW, 1 / tileH);
+  } else if (surfaceKnown) {
+    // UV 0..1（梁プリズム/箱・カスタムモデル等）: 面の実寸 ÷ タイル実寸 が繰り返し回数。1タイル=タイル実寸で一定。
+    texture.repeat.set((surfaceWidthM as number) / tileW, (surfaceHeightM as number) / tileH);
   } else {
-    texture.repeat.set(isLandscape ? 1 / longEdgeFactor : 1, isLandscape ? 1 : 1 / longEdgeFactor);
+    // 0..1 かつ面サイズ不明: アスペクト比のみ反映（長辺=1）。
+    const long = Math.max(tileW, tileH);
+    const short = Math.min(tileW, tileH);
+    const lf = short > 0 ? long / short : 1;
+    const landscape = tileW >= tileH;
+    texture.repeat.set(landscape ? 1 / lf : 1, landscape ? 1 : 1 / lf);
   }
   texture.needsUpdate = true;
 }
@@ -605,6 +605,7 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
     const shortEdgeMeters = effectiveTextureShortEdgeMeters(prod.physical, settings.textureScale);
     const tileMeters = effectiveTextureTileMeters(prod.physical, settings.textureScale); // 実寸(幅×高さ)＝画像px比より優先
     const surface = getSurfaceSizeFromMesh(mesh);
+    const uvInMeters = mesh.geometry?.type === 'ShapeGeometry'; // ShapeGeometry の UV は実寸(m) → repeat=1/タイルで面積非依存
     const rotationRad = THREE.MathUtils.degToRad(settings.textureRotation ?? 0);
     // ラップ/実寸リピート/回転をまとめて適用。画像未ロード時はサイズ不明で 1x1（正方形）になり非正方形が歪むため、
     // TextureLoader の onLoad でも再適用して実寸＋アスペクト比を確定させる（260701 修正）。
@@ -613,7 +614,7 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
       tx.colorSpace = THREE.SRGBColorSpace;
       tx.center.set(0.5, 0.5);
       tx.rotation = rotationRad; // テクスチャの向き（度・260613 row 164）
-      applyRealSizeTextureRepeat(tx, shortEdgeMeters, surface?.widthM, surface?.heightM, tileMeters);
+      applyRealSizeTextureRepeat(tx, shortEdgeMeters, surface?.widthM, surface?.heightM, tileMeters, uvInMeters);
       tx.needsUpdate = true;
     };
     const texture = new THREE.TextureLoader().load(prod.textureUrl, applyTx);
@@ -685,12 +686,16 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
 
     // 実寸投影: 実寸メタ（幅×高さmm）があれば実寸どおりにタイリング（画像ピクセル比に依存しない・260701）。
     // 無い素材は短辺実寸＋画像ピクセル比へフォールバック（effectiveTextureShortEdgeMeters）。
+    // ShapeGeometry（床/壁/天井/上部壁）は UV が実寸(m)なので、面積を変えてもブロックが伸縮しないよう
+    // repeat=1/タイルにする（uvInMeters）。梁プリズム等の UV0..1 は従来の 面/タイル（260701）。
+    const uvInMeters = mesh.geometry.type === 'ShapeGeometry';
     applyRealSizeTextureRepeat(
       mapTexture,
       effectiveTextureShortEdgeMeters(product.physical, settings.textureScale),
       w,
       h,
       effectiveTextureTileMeters(product.physical, settings.textureScale),
+      uvInMeters,
     );
     // テクスチャの向き（度）。中心回転にして任意角度で貼り付け（260613・row 164）。
     mapTexture.center.set(0.5, 0.5);
