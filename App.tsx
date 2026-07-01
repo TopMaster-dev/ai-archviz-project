@@ -417,30 +417,6 @@ const ModelThumbnail = ({ url, name }: { url?: string, name?: string }) => {
     );
 };
 
-const MouseLeftClick = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2C8.686 2 6 4.686 6 8v8c0 3.314 2.686 6 6 6s6-2.686 6-6V8c0-3.314-2.686-6-6-6z" />
-    <path d="M12 2v6" />
-    <path d="M6 8h6" className="text-emerald-400 drop-shadow-[0_0_5px_rgba(52,211,153,1)]" strokeWidth="2.5" />
-  </svg>
-);
-
-const MouseRightClick = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2C8.686 2 6 4.686 6 8v8c0 3.314 2.686 6 6 6s6-2.686 6-6V8c0-3.314-2.686-6-6-6z" />
-    <path d="M12 2v6" />
-    <path d="M12 8h6" className="text-emerald-400 drop-shadow-[0_0_5px_rgba(52,211,153,1)]" strokeWidth="2.5" />
-  </svg>
-);
-
-const MouseWheel = () => (
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 2C8.686 2 6 4.686 6 8v8c0 3.314 2.686 6 6 6s6-2.686 6-6V8c0-3.314-2.686-6-6-6z" />
-    <path d="M12 2v6" />
-    <path d="M12 4v3" className="text-emerald-400 drop-shadow-[0_0_5px_rgba(52,211,153,1)]" strokeWidth="2.5" />
-  </svg>
-);
-
 const OPENING_TYPE_LABELS: Record<string, string> = {
   window_fix: 'はめ殺し窓',
   window_sliding: '引き違い窓',
@@ -1285,10 +1261,8 @@ const App: React.FC = () => {
 
   const [maskMode, setMaskMode] = useState(false);
   const [aiEditOpen, setAiEditOpen] = useState(false);
-  // エディタ上部の「?」から見返せる操作ガイド（260623）。
+  // エディタ上部の「?」から見返せる操作ガイド（260623）。2D/3Dの操作ガイドはこのパネルへ統合（260701）。
   const [editorOnboardingOpen, setEditorOnboardingOpen] = useState(false);
-  // 2D操作ガイドの開閉（260623: 左下パネルがオブジェクト/属性パネルと重なるため、クリックで開閉するドロップダウンに）。
-  const [guideOpen, setGuideOpen] = useState(false);
 
   // ログイン時のみ存在するプロジェクトセッション（ゲストでは null）。一覧サムネ保存に使う（2c-i）。
   const projectSession = useOptionalProjectSession();
@@ -4251,47 +4225,7 @@ const App: React.FC = () => {
                                 </div>
 
                                 <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2 pointer-events-none">
-                                    <div className="glass px-2.5 py-2 rounded-xl border border-white/10 bg-black/50 backdrop-blur-md max-w-[min(40vw,200px)] w-[min(40vw,168px)] shrink-0 self-stretch min-h-0 hidden md:flex md:flex-col overflow-hidden pointer-events-auto">
-                                        <p className="text-[9px] font-black uppercase text-neutral-400 tracking-wider mb-1.5 shrink-0">操作</p>
-                                        <ul className="flex-1 min-h-0 max-h-full overflow-y-auto space-y-1 text-[9px] leading-snug text-neutral-200 font-semibold py-0.5">
-                                            {cameraMode === 'orbit' ? (
-                                                <>
-                                                    <li>
-                                                        <span className="text-white/90">左ドラッグ</span> 視点回転
-                                                    </li>
-                                                    <li>
-                                                        <span className="text-white/90">右ドラッグ</span> パン
-                                                    </li>
-                                                    <li>
-                                                        <span className="text-white/90">ホイール</span> ズーム
-                                                    </li>
-                                                    <li>
-                                                        <span className="text-white/90">クリック</span> 面・家具選択
-                                                    </li>
-                                                </>
-                                            ) : (
-                                                <>
-                                                    <li>
-                                                        <span className="text-white/90">左ドラッグ</span> 視線
-                                                    </li>
-                                                    <li>
-                                                        <span className="text-white/90">WASD / 矢印</span> 移動
-                                                    </li>
-                                                    <li>
-                                                        <span className="text-white/90">Q / E</span> 左右旋回
-                                                    </li>
-                                                    <li>
-                                                        <span className="text-white/90">Shift</span> 低速移動
-                                                    </li>
-                                                </>
-                                            )}
-                                            <li className="mt-1 border-t border-white/10 pt-1"><span className="text-white/90">Ctrl+Z</span> 一つ戻る</li>
-                                            <li><span className="text-white/90">Ctrl+Y</span> やり直す</li>
-                                            <li><span className="text-white/90">Ctrl+G</span> グループ化</li>
-                                            <li><span className="text-white/90">Ctrl+C</span> コピー</li>
-                                            <li><span className="text-white/90">Ctrl+V</span> ペースト</li>
-                                        </ul>
-                                    </div>
+                                    {/* 3Dビューの操作ガイドは削除し、操作ガイド（オンボーディングパネル）へ統合（260701・クライアント要望）。 */}
                                     <CameraPresetBar
                                         presets={cameraPresets}
                                         lastAppliedId={lastAppliedPresetId}
@@ -4346,63 +4280,7 @@ const App: React.FC = () => {
              )}
           </div>
 
-          {viewMode === 'sketch' && (
-          <div className="hidden lg:block absolute bottom-6 left-6 z-30 glass p-5 rounded-3xl border border-white/10 shadow-2xl bg-black/60 backdrop-blur-xl pointer-events-none transition-all">
-              <button
-                  type="button"
-                  onClick={() => setGuideOpen((v) => !v)}
-                  aria-expanded={guideOpen}
-                  className="pointer-events-auto flex w-full items-center gap-2 text-[10px] font-black text-neutral-400 uppercase tracking-widest transition-colors hover:text-white"
-              >
-                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
-                  操作ガイド
-                  <svg className={`w-3.5 h-3.5 ml-auto transition-transform ${guideOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M19 9l-7 7-7-7" /></svg>
-              </button>
-              {guideOpen && (<>
-              <ul className="space-y-3 text-xs font-bold text-neutral-200 mt-4">
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 p-2 rounded-xl border border-white/10"><MouseLeftClick /></div> 
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">左クリック:</strong> 壁を描画 / 確定</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 p-2 rounded-xl border border-white/10"><MouseRightClick /></div> 
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">右ドラッグ:</strong> キャンセル / 画面移動</span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 p-2 rounded-xl border border-white/10"><MouseWheel /></div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">ホイール:</strong> ズーム</span>
-                      </li>
-              </ul>
-              {/* キーボードショートカットは2列グリッドで整列（260623・赤枠指摘=横2つ並びの行に） */}
-              <ul className="grid grid-cols-2 gap-x-3 gap-y-2 mt-3 text-xs font-bold text-neutral-200">
-                      <li className="flex items-center gap-2">
-                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+Z</div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">一つ戻る</strong></span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+Y</div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">やり直す</strong></span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+C</div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">コピー</strong></span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+V</div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">ペースト</strong></span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 px-2.5 py-1.5 rounded-xl border border-white/10 text-[10px] font-mono text-neutral-300">Ctrl+G</div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">グループ化</strong></span>
-                      </li>
-                      <li className="flex items-center gap-3">
-                          <div className="bg-white/10 px-2 py-1.5 rounded-xl border border-white/10 text-[9px] font-mono text-neutral-300">Ctrl+⇧+G</div>
-                          <span className="text-neutral-300 text-[11px]"><strong className="text-white">グループ解除</strong></span>
-                      </li>
-              </ul>
-              </>)}
-          </div>
-          )}
+          {/* 2Dビューの操作ガイドは削除し、操作ガイド（オンボーディングパネル）へ統合（260701・クライアント要望）。 */}
 
           {/* 2Dビューでドア選択時: 向き（左右反転 / 内外反転）。3Dと同一コンポーネント・同一状態で連動。 */}
           {viewMode === 'sketch' && (() => {
