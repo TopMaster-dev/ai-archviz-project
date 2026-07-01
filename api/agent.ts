@@ -1,4 +1,4 @@
-import { generateAgentReply, resolveAgentModel, type AgentChatMessage } from '../lib/gemini.js';
+import { generateAgentReply, resolveAgentModel, type AgentAttachment, type AgentChatMessage } from '../lib/gemini.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 import type { AgentCatalogEntry } from '../types.js';
 
@@ -29,7 +29,7 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });
     }
 
-    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown };
+    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown; files?: unknown };
     const messages: AgentChatMessage[] = Array.isArray(body.messages)
       ? body.messages
           .filter(
@@ -52,10 +52,29 @@ export default async function handler(req: any, res: any) {
           .slice(0, 80)
       : [];
 
+    // 添付ファイル（画像/PDF/音声/動画/テキスト等・複数）。data URL 形式のみ受理し、件数/合計サイズを制限（260702）。
+    const MAX_FILES = 10;
+    const MAX_TOTAL_B64 = 18 * 1024 * 1024; // Gemini inline 上限(~20MB)手前で頭打ち
+    const files: AgentAttachment[] = [];
+    if (Array.isArray(body.files)) {
+      let total = 0;
+      for (const f of body.files as unknown[]) {
+        if (files.length >= MAX_FILES) break;
+        if (!f || typeof f !== 'object') continue;
+        const rec = f as { name?: unknown; dataUrl?: unknown };
+        const dataUrl = typeof rec.dataUrl === 'string' ? rec.dataUrl : '';
+        if (!/^data:[^;,]+;base64,/i.test(dataUrl)) continue;
+        total += dataUrl.length;
+        if (total > MAX_TOTAL_B64) break;
+        files.push({ name: typeof rec.name === 'string' ? rec.name : undefined, dataUrl });
+      }
+    }
+
     const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
       messages,
       imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : null,
       catalog,
+      files,
     });
     return res.status(200).json({ success: true, reply, recommendations, usage, model: resolveAgentModel() });
   } catch (e: any) {

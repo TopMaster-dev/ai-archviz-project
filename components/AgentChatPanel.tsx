@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, Loader2, MessageCircle, Send, X, Plus, ImagePlus } from 'lucide-react';
+import { Check, Copy, FileText, Loader2, MessageCircle, Paperclip, Send, X, Plus } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
@@ -33,6 +33,21 @@ const AGENT_EXAMPLES: { label: string; fill: string; hint?: string }[] = [
 
 /** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）が付くことがある。 */
 type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[] };
+
+/** エージェント相談に添付するファイル（画像・PDF・資料・音声・動画・コード等・複数対応 260702）。 */
+type AttachedFile = { id: string; name: string; mimeType: string; dataUrl: string; size: number };
+
+// 受理する拡張子（クライアント要望リスト。.ph は .php も許容。.jpg も補完）。
+const ACCEPT_EXTS =
+  '.pdf,.txt,.doc,.docx,.rtf,.pptx,.csv,.tsv,.xls,.xlsx,.c,.java,.py,.js,.html,.css,.ph,.php,.jpeg,.jpg,.png,.webp,.bmp,.heic,.heif,.wav,.mp3,.aiff,.aac,.ogg,.flac,.mp4,.mpeg,.mov,.avi,.webm,.3gpp';
+
+// 添付合計サイズ上限（生バイト）。Vercel の関数ボディ上限(~4.5MB)を超えると送信自体が失敗するため控えめに。
+const MAX_TOTAL_RAW = 3 * 1024 * 1024;
+
+const IMAGE_NAME_RE = /\.(jpe?g|png|webp|bmp|hei[cf])$/i;
+function isImageFile(f: { mimeType?: string; name?: string }): boolean {
+  return (f.mimeType || '').startsWith('image/') || IMAGE_NAME_RE.test(f.name || '');
+}
 
 function chatKey(projectId: string | null | undefined): string {
   return CHAT_STORAGE_PREFIX + (projectId || 'guest');
@@ -86,9 +101,10 @@ export function AgentChatPanel({
   const [copiedIdx, setCopiedIdx] = useState<number | null>(null);
   // 「見積に追加」済みの推薦キー（メッセージ番号-推薦番号）。二重追加を視覚的に抑止。
   const [addedKeys, setAddedKeys] = useState<Set<string>>(new Set());
-  // 参考画像の添付（260624: 入力欄左の画像アイコンから添付。ブランドの店舗写真などを文脈に渡す）。
-  const [attachedImage, setAttachedImage] = useState<string | null>(null);
+  // 参考ファイルの添付（260702: 画像・PDF・資料・音声・動画・コード等を複数、文脈に渡す）。
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const attachInputRef = useRef<HTMLInputElement>(null);
+  const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   // プロジェクト切替直後、まだ古い messages のまま保存 effect が走るのを防ぐ。
   const skipSave = useRef(false);
@@ -121,18 +137,19 @@ export function AgentChatPanel({
 
   const send = async () => {
     const text = input.trim();
-    if (!text || sending) return;
-    const next: ChatMessage[] = [...messages, { role: 'user', content: text }];
+    if ((!text && attachedFiles.length === 0) || sending) return;
+    // テキスト未入力でも添付だけで送れるよう既定プロンプトを補う。
+    const content = text || '添付したファイルを確認してアドバイスをください。';
+    const next: ChatMessage[] = [...messages, { role: 'user', content }];
     setMessages(next);
     setInput('');
-    const imgToSend = attachedImage; // 添付があれば優先して文脈に渡す（無ければ現在の生成画像）。
-    setAttachedImage(null);
+    const filesToSend = attachedFiles; // 複数の添付を文脈として渡す（画像/PDF/資料/音声/動画/コード）。
+    setAttachedFiles([]);
     setError(null);
     setSending(true);
     try {
       // 履歴がURL（クラウド保存）の場合に備え、サーバへ渡す前に base64 データURL化（画像グラウンディング維持・260619）。
-      const groundingSource = imgToSend ?? imageDataUrl;
-      const grounding = groundingSource ? await ensureDataUrl(groundingSource) : null;
+      const grounding = imageDataUrl ? await ensureDataUrl(imageDataUrl) : null;
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
@@ -140,12 +157,14 @@ export function AgentChatPanel({
           messages: next.slice(-12).map((m) => ({ role: m.role, content: m.content })),
           imageDataUrl: grounding,
           catalog,
+          files: filesToSend.map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
         }),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || '応答の取得に失敗しました');
-      // トークン計測（row 58・無効時は no-op）。エージェントはテキスト（添付画像があれば 1）。
-      void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: imageDataUrl ? 1 : 0 });
+      // トークン計測（row 58・無効時は no-op）。エージェントはテキスト（グラウンディング画像＋添付画像を計上）。
+      const imageCount = (grounding ? 1 : 0) + filesToSend.filter(isImageFile).length;
+      void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount });
       // Tier2: 推薦はサーバ側でカタログ実データへ解決済み（index ずれ・捏造防止）。型のみ軽く検証。
       const recs: AgentRecommendation[] = Array.isArray(data.recommendations)
         ? (data.recommendations as unknown[]).filter(
@@ -180,13 +199,37 @@ export function AgentChatPanel({
   };
 
   const onPickAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const list = e.target.files;
     e.target.value = '';
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => setAttachedImage(typeof reader.result === 'string' ? reader.result : null);
-    reader.readAsDataURL(file);
+    if (!list || list.length === 0) return;
+    let running = attachedFiles.reduce((s, f) => s + f.size, 0);
+    const accepted: File[] = [];
+    let overflow = false;
+    for (const file of Array.from(list)) {
+      if (running + file.size > MAX_TOTAL_RAW) {
+        overflow = true;
+        continue;
+      }
+      running += file.size;
+      accepted.push(file);
+    }
+    if (overflow) {
+      setError(`添付は合計 ${Math.round(MAX_TOTAL_RAW / 1024 / 1024)}MB までです。大きな動画・音声・資料は圧縮または分割してください。`);
+    }
+    accepted.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result !== 'string') return;
+        setAttachedFiles((prev) => [
+          ...prev,
+          { id: `f${idRef.current++}`, name: file.name, mimeType: file.type || '', dataUrl: reader.result as string, size: file.size },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
   };
+
+  const removeFile = (id: string) => setAttachedFiles((prev) => prev.filter((f) => f.id !== id));
 
   if (!open) return null; // 開閉トリガは「エリア編集」横のタブ（AiEditWorkspace）へ移動
 
@@ -354,33 +397,50 @@ export function AgentChatPanel({
       </div>
 
       <div className="border-t border-white/10 p-2.5">
-        {attachedImage && (
-          <div className="mb-2 flex items-center gap-2">
-            <img src={attachedImage} alt="添付画像" className="h-10 w-10 rounded object-cover" />
-            <span className="text-[10px] text-neutral-400">参考画像を添付中</span>
-            <button
-              type="button"
-              onClick={() => setAttachedImage(null)}
-              className="ml-auto rounded px-1.5 py-0.5 text-[10px] text-neutral-400 transition hover:bg-white/10 hover:text-white"
-            >
-              外す
-            </button>
+        {attachedFiles.length > 0 && (
+          <div className="mb-2 flex flex-wrap gap-1.5">
+            {attachedFiles.map((f) => (
+              <div
+                key={f.id}
+                className="flex items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 py-1 pl-1 pr-1.5"
+              >
+                {isImageFile(f) ? (
+                  <img src={f.dataUrl} alt={f.name} className="h-7 w-7 shrink-0 rounded object-cover" />
+                ) : (
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded bg-white/10 text-neutral-300">
+                    <FileText className="h-4 w-4" />
+                  </span>
+                )}
+                <span className="max-w-[7rem] truncate text-[10px] text-neutral-300" title={f.name}>
+                  {f.name}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeFile(f.id)}
+                  aria-label={`${f.name} を外す`}
+                  className="shrink-0 rounded p-0.5 text-neutral-400 transition hover:bg-white/10 hover:text-white"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+            ))}
           </div>
         )}
         <div className="flex items-end gap-2">
           <button
             type="button"
             onClick={() => attachInputRef.current?.click()}
-            title="参考画像を添付（店舗写真など）"
-            aria-label="参考画像を添付"
+            title="ファイルを添付（画像・PDF・資料・音声・動画・コードなど／複数可）"
+            aria-label="ファイルを添付"
             className="shrink-0 rounded-lg border border-white/10 bg-black/40 p-2 text-neutral-300 transition hover:bg-white/10 hover:text-white"
           >
-            <ImagePlus className="h-4 w-4" />
+            <Paperclip className="h-4 w-4" />
           </button>
           <input
             ref={attachInputRef}
             type="file"
-            accept="image/*"
+            accept={ACCEPT_EXTS}
+            multiple
             className="hidden"
             onChange={onPickAttach}
           />
@@ -400,7 +460,7 @@ export function AgentChatPanel({
           <button
             type="button"
             onClick={() => void send()}
-            disabled={sending || !input.trim()}
+            disabled={sending || (!input.trim() && attachedFiles.length === 0)}
             aria-label="送信"
             className="rounded-lg bg-emerald-600 p-2 text-white transition hover:bg-emerald-500 disabled:opacity-40"
           >

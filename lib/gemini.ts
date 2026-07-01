@@ -101,6 +101,39 @@ export function parseImageDataUrl(dataUrl: string): { mimeType: string; base64: 
   return { mimeType: 'image/png', base64: stripped };
 }
 
+/** 任意の data URL を {mimeType, base64} に分解（画像に限らずPDF/音声/動画/テキスト等・260702）。 */
+export function parseDataUrl(dataUrl: string): { mimeType: string; base64: string } {
+  const m = (dataUrl || '').match(/^data:([^;,]+);base64,(.+)$/is);
+  if (m) return { mimeType: (m[1] || '').trim() || 'application/octet-stream', base64: m[2] };
+  return { mimeType: 'application/octet-stream', base64: '' };
+}
+
+// 添付ファイル拡張子 → Gemini が扱える MIME（コード/テキストは text/plain に寄せる・260702 クライアント要望）。
+const ATTACH_EXT_MIME: Record<string, string> = {
+  pdf: 'application/pdf',
+  txt: 'text/plain', csv: 'text/csv', tsv: 'text/plain', rtf: 'text/rtf', html: 'text/html', css: 'text/css',
+  c: 'text/plain', java: 'text/plain', py: 'text/plain', js: 'text/plain', php: 'text/plain', ph: 'text/plain',
+  jpeg: 'image/jpeg', jpg: 'image/jpeg', png: 'image/png', webp: 'image/webp', bmp: 'image/bmp', heic: 'image/heic', heif: 'image/heif',
+  wav: 'audio/wav', mp3: 'audio/mp3', aiff: 'audio/aiff', aac: 'audio/aac', ogg: 'audio/ogg', flac: 'audio/flac',
+  mp4: 'video/mp4', mpeg: 'video/mpeg', mov: 'video/mov', avi: 'video/avi', webm: 'video/webm', '3gpp': 'video/3gpp',
+};
+/** ファイル名の拡張子から Gemini 向き MIME を決める。未対応拡張子は data URL の MIME を使う。 */
+export function resolveAttachmentMime(name: string | undefined, dataUrlMime: string): string {
+  const ext = (name || '').toLowerCase().match(/\.([a-z0-9]+)$/)?.[1];
+  if (ext && ATTACH_EXT_MIME[ext]) return ATTACH_EXT_MIME[ext];
+  return dataUrlMime || 'application/octet-stream';
+}
+/** Gemini が inlineData で直接扱える MIME か（画像/音声/動画/テキスト/PDF）。Office バイナリ等は不可。 */
+export function isGeminiInlineSupported(mime: string): boolean {
+  return /^(image|audio|video|text)\//.test(mime) || mime === 'application/pdf';
+}
+
+/** エージェント添付ファイル（クライアントから {name, dataUrl} で受け取る）。 */
+export interface AgentAttachment {
+  name?: string;
+  dataUrl: string;
+}
+
 /** ベース画像と配置座標から、オブジェクトごとの短い日本語位置説明を生成（失敗時は {}） */
 export async function generatePlacementNarratives(
   apiKey: string,
@@ -202,7 +235,7 @@ export interface AgentRecommendationPick {
  */
 export async function generateAgentReply(
   apiKey: string,
-  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[] }
+  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[] }
 ): Promise<{ reply: string; recommendations: AgentRecommendation[]; usage: TokenUsage | null }> {
   const catalog = params.catalog ?? [];
   const catalogBlock = catalog.length
@@ -225,14 +258,39 @@ export async function generateAgentReply(
 - 出力は必ず次の形式の JSON のみ（前後に説明やマークダウンを付けない）:
 {"reply":"<会話的な日本語の助言。必須。recommendationsの有無に関わらず必ず入れる>","recommendations":[{"index":<カタログ番号(整数)>,"name":"<見積もりに載せる自然な日本語名>","reason":"<短い推薦理由>"}]}${catalogBlock}`;
 
+  const files = params.files ?? [];
   const lastIdx = params.messages.length - 1;
   const contents = params.messages.map((m, i) => {
     const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
       { text: m.content },
     ];
-    if (m.role === 'user' && i === lastIdx && params.imageDataUrl) {
-      const img = parseImageDataUrl(params.imageDataUrl);
-      parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+    if (m.role === 'user' && i === lastIdx) {
+      if (params.imageDataUrl) {
+        const img = parseImageDataUrl(params.imageDataUrl);
+        parts.push({ inlineData: { mimeType: img.mimeType, data: img.base64 } });
+      }
+      if (files.length) {
+        // 添付ファイル：Gemini が扱える形式は inlineData で本体を渡し、扱えない形式（Officeバイナリ等）は
+        // ファイル名だけをテキストで知らせてリクエスト全体が 400 で失敗しないようにする（260702）。
+        const unsupported: string[] = [];
+        for (const f of files) {
+          const { mimeType: dm, base64 } = parseDataUrl(f?.dataUrl || '');
+          const mime = resolveAttachmentMime(f?.name, dm);
+          if (base64 && isGeminiInlineSupported(mime)) {
+            parts.push({ inlineData: { mimeType: mime, data: base64 } });
+          } else if (f?.name) {
+            unsupported.push(f.name);
+          }
+        }
+        const names = files.map((f) => f?.name).filter(Boolean) as string[];
+        if (names.length) {
+          let hint = `（添付ファイル: ${names.join(', ')}）`;
+          if (unsupported.length) {
+            hint += `\n※ 次のファイルは形式的にAIが直接読み取れないため、ファイル名のみ共有します: ${unsupported.join(', ')}`;
+          }
+          parts.push({ text: hint });
+        }
+      }
     }
     return { role: m.role === 'assistant' ? 'model' : 'user', parts };
   });
