@@ -3229,9 +3229,9 @@ const App: React.FC = () => {
                       <UndoRedoBar inline />
                     )}
                     {viewMode === '3D' && (
-                      // 上部の操作群（天井高/背景/スケルトン天井/上部壁）: 幅が狭いと1行に詰まって崩れるため、
-                      // 狭い画面では専用の行へ回し（basis-full・右寄せ）、広い画面でのみ左群と同じ行へ寄せる（260701）。
-                      <div className="flex basis-full items-center justify-end gap-2 flex-wrap xl:basis-auto xl:ml-auto">
+                      // 上部の操作群（天井高/背景/スケルトン天井/上部壁）は左群と同じ1行に右寄せで並べる（260701・クライアント要望=1行）。
+                      // 入りきらない極端に狭い幅でのみ flex-wrap で折り返す（重なり防止の保険）。
+                      <div className="flex items-center justify-end gap-2 flex-wrap ml-auto">
                         <div className="glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-2 bg-black/40 backdrop-blur-md shadow-xl pointer-events-auto shrink-0 h-[46px]">
                           <span className="text-[10px] font-black uppercase text-neutral-400 tracking-widest">天井高</span>
                           <div className="flex items-center gap-1.5">
