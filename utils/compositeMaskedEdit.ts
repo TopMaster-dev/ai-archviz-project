@@ -55,7 +55,8 @@ export async function compositeMaskedEdit(
           mctx.lineTo(p.points[i].x * width, p.points[i].y * height);
         }
         mctx.closePath();
-        mctx.fill('evenodd');
+        // nonzero（既定）で塗る: 手描き多角形が自己交差しても穴が空かず、領域を塗り潰す（260702）。
+        mctx.fill('nonzero');
       } else {
         mctx.fillRect(p.x * width, p.y * height, p.width * width, p.height * height);
       }

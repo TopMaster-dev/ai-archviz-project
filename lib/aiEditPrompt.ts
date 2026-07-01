@@ -16,15 +16,36 @@ export function resolvePromptMode(hasStyle: boolean, hasObjects: boolean): AiEdi
   return 'lighting_atmosphere';
 }
 
-function formatPlacement(r: NormalizedRect): string {
-  // 多角形マスク（260623）: 頂点列で領域を厳密に指定し、多角形の内側のみ編集する。
+/** NormalizedRect の外接矩形（多角形は頂点 min/max、矩形は x/y/width/height）を 0..1 で返す。 */
+function bboxOf(r: NormalizedRect): { x: number; y: number; w: number; h: number } {
   if (r.points && r.points.length >= 3) {
-    const verts = r.points
-      .map((p) => `(${(p.x * 100).toFixed(1)}%, ${(p.y * 100).toFixed(1)}%)`)
-      .join(' → ');
-    return `多角形領域 頂点[${verts}]（画像全体に対する正規化座標。編集はこの多角形の内側のみに厳密に限定し、外接矩形まではみ出さない。多角形の境界は編集範囲の内部的な制約としてのみ用い、境界そのものを線・輪郭・ふち取り・色や明るさの差として出力画像に描画しないこと。仕上がりは境界が見えない、継ぎ目のない自然な写真にする）`;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const p of r.points) {
+      minX = Math.min(minX, p.x);
+      minY = Math.min(minY, p.y);
+      maxX = Math.max(maxX, p.x);
+      maxY = Math.max(maxY, p.y);
+    }
+    if ([minX, minY, maxX, maxY].every((v) => Number.isFinite(v))) {
+      return { x: minX, y: minY, w: Math.max(0, maxX - minX), h: Math.max(0, maxY - minY) };
+    }
   }
-  return `左${(r.x * 100).toFixed(1)}%, 上${(r.y * 100).toFixed(1)}%, 幅${(r.width * 100).toFixed(1)}%, 高さ${(r.height * 100).toFixed(1)}%（画像全体に対する正規化座標）`;
+  return { x: r.x, y: r.y, w: r.width, h: r.height };
+}
+
+/**
+ * 領域の座標テキスト（画像編集・キャプション生成で共通）。
+ * 多角形マスクでも「矩形（左/上/幅/高さ）」で Gemini に伝える（260702 クライアント報告「多角形は精度が低い」対応）。
+ * 画像モデルは頂点列より単純な矩形の方が遥かに正確に領域を把握できるため、矩形＝矩形指定と同等の精度になる。
+ * 実際の多角形の形は表示側 compositeMaskedEdit で厳密にクリップするので、テキストが矩形でも最終出力は損失なし。
+ * 「境界線を描かない」制約は buildAiEditConstitution 内に一度だけ置き、ここでは繰り返さない（多重指示で逆に線を誘発するのを防ぐ）。
+ */
+function formatPlacement(r: NormalizedRect): string {
+  const b = bboxOf(r);
+  return `左${(b.x * 100).toFixed(1)}%, 上${(b.y * 100).toFixed(1)}%, 幅${(b.w * 100).toFixed(1)}%, 高さ${(b.h * 100).toFixed(1)}%（画像全体に対する正規化座標）`;
 }
 
 /** オブジェクト1件の配置テキスト（画像編集・キャプション生成で共通） */
