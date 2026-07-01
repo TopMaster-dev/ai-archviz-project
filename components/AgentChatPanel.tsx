@@ -31,8 +31,8 @@ const AGENT_PLACEHOLDER =
   '例2）この空間に合う家具を提案して\n' +
   '例3）最近のトレンドカラーを教えて';
 
-/** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）が付くことがある。 */
-type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[] };
+/** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）、ユーザー発話には送信した添付ファイル名が付く。 */
+type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[]; attachmentNames?: string[] };
 
 /** エージェント相談に添付するファイル（画像・PDF・資料・音声・動画・コード等・複数対応 260702）。 */
 type AttachedFile = { id: string; name: string; mimeType: string; dataUrl: string; size: number };
@@ -69,6 +69,9 @@ function loadStoredChat(projectId: string | null | undefined): ChatMessage[] {
         role: m.role,
         content: m.content,
         recommendations: Array.isArray(m.recommendations) ? m.recommendations : undefined,
+        attachmentNames: Array.isArray(m.attachmentNames)
+          ? (m.attachmentNames as unknown[]).filter((n): n is string => typeof n === 'string')
+          : undefined,
       }));
   } catch {
     return [];
@@ -144,7 +147,12 @@ export function AgentChatPanel({
     // テキスト未入力でも添付だけで送れるよう既定プロンプトを補う。
     const content = text || '添付したファイルを確認してアドバイスをください。';
     const filesToSend = attachedFiles; // 複数の添付を文脈として渡す（画像/PDF/資料/音声/動画/コード）。
-    const next: ChatMessage[] = [...messages, { role: 'user', content }];
+    // 送信した添付のファイル名を会話履歴（吹き出し）に残す（クライアント要望・260702）。ファイル本体は保存しない。
+    const sentNames = filesToSend.map((f) => f.name);
+    const next: ChatMessage[] = [
+      ...messages,
+      { role: 'user', content, attachmentNames: sentNames.length ? sentNames : undefined },
+    ];
     setMessages(next);
     setInput('');
     setAttachedFiles([]);
@@ -411,6 +419,20 @@ export function AgentChatPanel({
               >
                 {m.content}
               </div>
+              {m.role === 'user' && m.attachmentNames && m.attachmentNames.length > 0 && (
+                <div className="mt-1 flex max-w-[85%] flex-wrap justify-end gap-1">
+                  {m.attachmentNames.map((name, ai) => (
+                    <span
+                      key={ai}
+                      title={name}
+                      className="inline-flex items-center gap-1 rounded-md bg-emerald-700/40 px-1.5 py-0.5 text-[10px] text-emerald-50"
+                    >
+                      <Paperclip className="h-3 w-3 shrink-0" />
+                      <span className="max-w-[10rem] truncate">{name}</span>
+                    </span>
+                  ))}
+                </div>
+              )}
               {m.role === 'assistant' && m.content ? (
                 <button
                   type="button"
