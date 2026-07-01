@@ -45,6 +45,12 @@ function buildAiEditConstitution(
   const hasAreaEdits = !!opts?.hasAreaEdits;
   const hasObjectRefs = !!opts?.hasObjectRefs;
 
+  // 重なった家具の前後分離（260702 クライアント要望）: エリア編集時、指定領域に複数の家具が
+  // 重なって写る場合でも、対象（最も手前で領域に写るもの）だけを編集し、手前の別家具は文脈として保持する。
+  const overlapNote = hasAreaEdits
+    ? '\n- 指定領域に複数の家具が重なって写る場合は、その領域で最も手前に写っている対象オブジェクトのみを編集し、その手前や周囲にある別の家具（テーブル・椅子・観葉植物等）は前後関係（奥行き）・位置・形状を文脈として保持する（別物に置き換えたり溶かし込んだりしない）。'
+    : '';
+
   const reflectNote = hasObjectRefs
     ? `
 
@@ -75,7 +81,7 @@ function buildAiEditConstitution(
 - **ベース画像に過去の編集由来のうっすらした輪郭線・境界線・マスクの跡が残っている場合は、それらを周囲の質感・色に馴染ませて完全に消去し痕跡を残さない。ただし実在する細い影・配線・吊り線・目地・サッシなど本物の要素は消さない。**
 
 【変更してよい範囲】
-${MODE_INSTRUCTIONS[mode]}
+${MODE_INSTRUCTIONS[mode]}${overlapNote}
 
 【参照画像の扱い】
 - ベース画像: ${baseImageLine}

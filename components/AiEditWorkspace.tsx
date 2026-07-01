@@ -29,6 +29,16 @@ import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
+import {
+  unionBBoxOfPlacements,
+  padBBox,
+  parseAspectRatioKey,
+  snapCropToAspect,
+  remapPlacementsToCrop,
+  shouldCropRegion,
+  type CropPx,
+} from '../utils/maskCropRemap.js';
+import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -435,11 +445,38 @@ export function AiEditWorkspace({
 
       // in-context反映（row 211/219）: 個人の高評価傾向＋全体共有プールを取得し、生成プロンプトへ参考添付（ベストエフォート）。
       const learnedHints = await getLearnedHints().catch(() => [] as string[]);
+
+      // エリア編集の精度向上（260702 クライアント要望「重なった家具でエリア編集が効きにくい／当たり外れが激しい」）:
+      // 純エリア編集のときは、マスク領域＋余白をクロップして拡大送信する。対象がフレームいっぱいに写るため
+      // 実効解像度が上がり、重なった家具の前後を分離しやすくなる（＝当たり外れが減る）。利得が無い/過拡大に
+      // なるケースは shouldCropRegion で従来の全画面パスにフォールバック（既存挙動を維持＝退行なし）。
+      const allPlacements = draftObjects.flatMap((o) => o.placements);
+      const hasWholeImageStyle =
+        isSituationCardVisible && (!!styleImageDataUrl || draftStyleMemo.trim().length > 0);
+      const isPureArea = allPlacements.length > 0 && !hasWholeImageStyle;
+
+      let cropPx: CropPx | null = null;
+      if (isPureArea) {
+        const bbox = padBBox(unionBBoxOfPlacements(allPlacements));
+        const targetAspect = parseAspectRatioKey(
+          pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
+        );
+        const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
+        if (shouldCropRegion(bbox, candidate, baseW, baseH)) cropPx = candidate;
+      }
+
+      // クロップ経路ではベース画像・配置座標・アスペクト比をクロップ空間に統一して送る（サーバの位置説明生成も同座標系で整合）。
+      const postBase = cropPx ? await cropDataUrl(baseScaled, cropPx) : baseScaled;
+      const postObjects = cropPx
+        ? objectsScaled.map((o) => ({ ...o, placements: remapPlacementsToCrop(o.placements, cropPx as CropPx, baseW, baseH) }))
+        : objectsScaled;
+      const postAspect = cropPx ? pickClosestAspectRatio(cropPx.sw, cropPx.sh) : aspectRatio;
+
       const body: Record<string, unknown> = {
-        baseImage: baseScaled,
+        baseImage: postBase,
         styleImage: styleScaled,
-        objects: objectsScaled,
-        aspectRatio,
+        objects: postObjects,
+        aspectRatio: postAspect,
         imageSize,
         learnedHints,
       };
@@ -458,23 +495,24 @@ export function AiEditWorkspace({
       void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
 
       let outUrl = data.url as string;
-      // ② アスペクト補正（260624 クライアント報告「写真編集で縦に延びる」）: Gemini は対応アスペクト比でしか
-      // 生成できないため、強制ストレッチではなく歪まないクロップでベース寸法へ合わせる。極端なアスペクト差は
-      // 内容欠落を避けてレターボックス（contain）にフォールバック。
-      const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
-      const aspectMode: 'cover' | 'contain' =
-        coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-      const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, aspectMode);
-      // ① 領域外染み出し対策（260624 クライアント報告「指示にないドライフラワーが増える」）:
-      // 純エリア編集（全体スタイル指定なし・アスペクト維持）のときだけ、マスク内だけ Gemini 出力を合成し
-      // マスク外はベース画像のまま保持する。全体スタイル併用時は全画面変更を維持するため合成しない。
-      const allPlacements = draftObjects.flatMap((o) => o.placements);
-      const hasWholeImageStyle =
-        isSituationCardVisible && (!!styleImageDataUrl || draftStyleMemo.trim().length > 0);
-      outUrl =
-        allPlacements.length > 0 && !hasWholeImageStyle && aspectMode === 'cover'
-          ? await compositeMaskedEdit(baseScaled, normalized, allPlacements, baseW, baseH)
-          : normalized;
+      if (cropPx) {
+        // クロップ経路: 編集済みクロップを crop 寸法へ整え（cover＝位置整合を維持）、ベースへ貼り戻し、
+        // 元の全画面座標の多角形でクリップする。crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、
+        // クロップ矩形の縁は必ずユーザーに見えない。
+        const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
+        const full = await pasteCropIntoBase(baseScaled, fittedCrop, cropPx, baseW, baseH);
+        outUrl = await compositeMaskedEdit(baseScaled, full, allPlacements, baseW, baseH);
+      } else {
+        // 従来の全画面パス。② アスペクト補正（写真が縦に延びる対策）＋ ① 領域外染み出し対策（マスク内のみ合成）。
+        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
+        const aspectMode: 'cover' | 'contain' =
+          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
+        const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, aspectMode);
+        outUrl =
+          allPlacements.length > 0 && !hasWholeImageStyle && aspectMode === 'cover'
+            ? await compositeMaskedEdit(baseScaled, normalized, allPlacements, baseW, baseH)
+            : normalized;
+      }
       // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
       outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
 
