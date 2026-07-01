@@ -50,7 +50,7 @@ import {
 } from '../utils/sketchTransform.js';
 import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
-import { effectiveTextureShortEdgeMeters, physicalRealAspect } from '../lib/materialPhysical.js';
+import { effectiveTextureShortEdgeMeters, effectiveTextureTileMeters } from '../lib/materialPhysical.js';
 import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
@@ -543,42 +543,50 @@ function applyRealSizeTextureRepeat(
   shortEdgeMeters: number,
   surfaceWidthM?: number,
   surfaceHeightM?: number,
-  realAspect?: { longOverShort: number; landscape: boolean } | null,
+  tileMeters?: { widthM: number; heightM: number } | null,
 ): void {
-  const safeShortEdgeM = Math.max(0.1, shortEdgeMeters);
-  // 縦横比は「実寸(mm)の比」を最優先（画像ピクセル比だと K タイル等で実寸とズレてタイル寸法が狂う・260701）。
-  // 実寸メタが無い素材（アップロード等）は画像ピクセル比へフォールバック（1mm:1px 前提）。
-  let isLandscape: boolean;
-  let longEdgeFactor: number;
-  if (realAspect && Number.isFinite(realAspect.longOverShort) && realAspect.longOverShort > 0) {
-    isLandscape = realAspect.landscape;
-    longEdgeFactor = realAspect.longOverShort;
-  } else {
-    const imageSize = getTextureImageSize(texture);
-    const imageWidth = imageSize?.width ?? 1;
-    const imageHeight = imageSize?.height ?? 1;
-    isLandscape = imageWidth >= imageHeight;
-    longEdgeFactor = isLandscape ? imageWidth / imageHeight : imageHeight / imageWidth;
-  }
-  if (
+  const surfaceKnown =
     surfaceWidthM != null &&
     surfaceHeightM != null &&
     Number.isFinite(surfaceWidthM) &&
     Number.isFinite(surfaceHeightM) &&
     surfaceWidthM > 0 &&
-    surfaceHeightM > 0
-  ) {
+    surfaceHeightM > 0;
+
+  // 実寸メタがある素材は「実際の幅×高さ(m)」でそのままタイリング＝1枚が必ず実寸(例2994x1000mm)になる（260701）。
+  // 画像ピクセル比・短辺正規化に一切依存しない（K タイル等で画像px比 ≠ 実寸比でも正しい）。
+  if (tileMeters && tileMeters.widthM > 0 && tileMeters.heightM > 0) {
+    if (surfaceKnown) {
+      // U(画像幅)=実寸幅 / V(画像高)=実寸高。面の実寸 ÷ タイル実寸 が繰り返し回数。
+      texture.repeat.set((surfaceWidthM as number) / tileMeters.widthM, (surfaceHeightM as number) / tileMeters.heightM);
+    } else {
+      const long = Math.max(tileMeters.widthM, tileMeters.heightM);
+      const short = Math.min(tileMeters.widthM, tileMeters.heightM);
+      const lf = short > 0 ? long / short : 1;
+      const landscape = tileMeters.widthM >= tileMeters.heightM;
+      texture.repeat.set(landscape ? 1 / lf : 1, landscape ? 1 : 1 / lf);
+    }
+    texture.needsUpdate = true;
+    return;
+  }
+
+  // フォールバック（実寸メタ無し＝アップロード素材等）: 短辺実寸 + 画像ピクセル比（1mm:1px 前提）。
+  const safeShortEdgeM = Math.max(0.1, shortEdgeMeters);
+  const imageSize = getTextureImageSize(texture);
+  const imageWidth = imageSize?.width ?? 1;
+  const imageHeight = imageSize?.height ?? 1;
+  const isLandscape = imageWidth >= imageHeight;
+  const longEdgeFactor = isLandscape ? imageWidth / imageHeight : imageHeight / imageWidth;
+  if (surfaceKnown) {
     const repeatX = isLandscape
-      ? surfaceWidthM / (safeShortEdgeM * longEdgeFactor)
-      : surfaceWidthM / safeShortEdgeM;
+      ? (surfaceWidthM as number) / (safeShortEdgeM * longEdgeFactor)
+      : (surfaceWidthM as number) / safeShortEdgeM;
     const repeatY = isLandscape
-      ? surfaceHeightM / safeShortEdgeM
-      : surfaceHeightM / (safeShortEdgeM * longEdgeFactor);
+      ? (surfaceHeightM as number) / safeShortEdgeM
+      : (surfaceHeightM as number) / (safeShortEdgeM * longEdgeFactor);
     texture.repeat.set(repeatX, repeatY);
   } else {
-    const fallbackRepeatX = isLandscape ? 1 / longEdgeFactor : 1;
-    const fallbackRepeatY = isLandscape ? 1 : 1 / longEdgeFactor;
-    texture.repeat.set(fallbackRepeatX, fallbackRepeatY);
+    texture.repeat.set(isLandscape ? 1 / longEdgeFactor : 1, isLandscape ? 1 : 1 / longEdgeFactor);
   }
   texture.needsUpdate = true;
 }
@@ -595,7 +603,7 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
     const settings = materialSettings[prod.id] || {};
     // 実寸投影: 素材の物理メタ（mm）から短辺実寸を決める（手動 textureScale が最優先）。
     const shortEdgeMeters = effectiveTextureShortEdgeMeters(prod.physical, settings.textureScale);
-    const realAspect = physicalRealAspect(prod.physical); // 実寸比（画像ピクセル比より優先）
+    const tileMeters = effectiveTextureTileMeters(prod.physical, settings.textureScale); // 実寸(幅×高さ)＝画像px比より優先
     const surface = getSurfaceSizeFromMesh(mesh);
     const rotationRad = THREE.MathUtils.degToRad(settings.textureRotation ?? 0);
     // ラップ/実寸リピート/回転をまとめて適用。画像未ロード時はサイズ不明で 1x1（正方形）になり非正方形が歪むため、
@@ -605,7 +613,7 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
       tx.colorSpace = THREE.SRGBColorSpace;
       tx.center.set(0.5, 0.5);
       tx.rotation = rotationRad; // テクスチャの向き（度・260613 row 164）
-      applyRealSizeTextureRepeat(tx, shortEdgeMeters, surface?.widthM, surface?.heightM, realAspect);
+      applyRealSizeTextureRepeat(tx, shortEdgeMeters, surface?.widthM, surface?.heightM, tileMeters);
       tx.needsUpdate = true;
     };
     const texture = new THREE.TextureLoader().load(prod.textureUrl, applyTx);
@@ -675,14 +683,14 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
       }
     }
 
-    // 実寸投影: 素材の物理メタ（mm）から短辺実寸を決める（手動 textureScale が最優先）。
-    // 縦横比は実寸メタ（physicalRealAspect）を優先し、画像ピクセル比とのズレでタイル寸法が狂うのを防ぐ（260701）。
+    // 実寸投影: 実寸メタ（幅×高さmm）があれば実寸どおりにタイリング（画像ピクセル比に依存しない・260701）。
+    // 無い素材は短辺実寸＋画像ピクセル比へフォールバック（effectiveTextureShortEdgeMeters）。
     applyRealSizeTextureRepeat(
       mapTexture,
       effectiveTextureShortEdgeMeters(product.physical, settings.textureScale),
       w,
       h,
-      physicalRealAspect(product.physical),
+      effectiveTextureTileMeters(product.physical, settings.textureScale),
     );
     // テクスチャの向き（度）。中心回転にして任意角度で貼り付け（260613・row 164）。
     mapTexture.center.set(0.5, 0.5);

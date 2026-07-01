@@ -140,22 +140,34 @@ function pxToMmAtDpi(px: number, dpi: number): number {
 }
 
 /**
- * 実寸メタから「長辺/短辺」比と向き（横長か）を返す。**画像のピクセル縦横比ではなく実寸(mm)の比**。
- * K(タイル組み合わせ)など、画像ピクセル比 ≠ 実寸比 の素材でも実寸どおりにタイリングするために使う（260701）。
- * 例: 画像1824x342px・実寸2994x1000mm → longOverShort=2.994（ピクセル比 5.33 ではなく実寸比を採用）。
- * 実寸メタが無い（アップロード素材等）場合は null を返し、呼び出し側は画像ピクセル比へフォールバックする。
+ * 実寸タイリング用: テクスチャ1枚分の実寸（幅×高さ・メートル）を返す。**画像ピクセルではなく実寸メタ(mm)由来**。
+ * これで床/壁/天井/梁に「実際の幅・高さ」どおりにタイリングされる（K タイル等で画像px比 ≠ 実寸比でも正しい・260701）。
+ * 例: 実寸2994x1000mm → { widthM: 2.994, heightM: 1.0 }（画像ピクセル 1824x342 等に依存しない）。
+ * textureScaleOverride（＝反映短辺の実寸・m）があれば、実寸比を保ったまま短辺基準で全体を同率で拡縮する。
+ * 実寸メタが無い（アップロード素材等）場合は null（呼び出し側は画像ピクセル比＋短辺既定へフォールバック）。
  */
-export function physicalRealAspect(
+export function effectiveTextureTileMeters(
   physical: MaterialPhysical | undefined,
-): { longOverShort: number; landscape: boolean } | null {
+  textureScaleOverride?: number,
+): { widthM: number; heightM: number } | null {
   if (!physical) return null;
-  const w = physical.repeatWidthMm;
-  const h = physical.repeatHeightMm;
-  if (!w || !h || !(w > 0) || !(h > 0)) return null;
-  const long = Math.max(w, h);
-  const short = Math.min(w, h);
-  if (!(short > 0)) return null;
-  return { longOverShort: long / short, landscape: w >= h };
+  const wMm = physical.repeatWidthMm;
+  const hMm = physical.repeatHeightMm;
+  if (!wMm || !hMm || !(wMm > 0) || !(hMm > 0)) return null;
+  let widthM = wMm / 1000;
+  let heightM = hMm / 1000;
+  const realShortM = Math.min(widthM, heightM);
+  if (
+    textureScaleOverride != null &&
+    Number.isFinite(textureScaleOverride) &&
+    textureScaleOverride > 0 &&
+    realShortM > 0
+  ) {
+    const scale = textureScaleOverride / realShortM; // 短辺を指定実寸へ→全体を同率で拡縮（実寸比は不変）
+    widthM *= scale;
+    heightM *= scale;
+  }
+  return { widthM, heightM };
 }
 
 /**

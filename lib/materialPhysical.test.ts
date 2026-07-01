@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   effectiveTextureShortEdgeMeters,
-  physicalRealAspect,
+  effectiveTextureTileMeters,
   deriveMaterialPhysical,
   parseMaterialFilename,
   type MaterialPhysical,
@@ -14,18 +14,19 @@ const phys = (w?: number, h?: number): MaterialPhysical => ({
   source: 'filename+pixels',
 });
 
-describe('physicalRealAspect', () => {
-  it('uses REAL dims aspect, not image pixels (260701)', () => {
-    // SANGETSU K タイル: 画像1824x342px でも実寸2994x1000mm → 実寸比 2.994（ピクセル比 5.33 ではない）。
-    expect(physicalRealAspect(phys(2994, 1000))).toEqual({ longOverShort: 2994 / 1000, landscape: true });
+describe('effectiveTextureTileMeters', () => {
+  it('returns the actual tile size in meters from real dims, not image pixels (260701)', () => {
+    // SANGETSU K タイル: 画像1824x342px でも実寸2994x1000mm → タイルは 2.994m x 1.0m。
+    expect(effectiveTextureTileMeters(phys(2994, 1000))).toEqual({ widthM: 2.994, heightM: 1 });
   });
-  it('portrait real dims → landscape false', () => {
-    expect(physicalRealAspect(phys(300, 600))).toEqual({ longOverShort: 2, landscape: false });
+  it('scales uniformly (keeps aspect) when the short edge is overridden', () => {
+    // 反映短辺を 0.5m に → 短辺1.0m の半分 → 全体 0.5倍。
+    expect(effectiveTextureTileMeters(phys(2994, 1000), 0.5)).toEqual({ widthM: 1.497, heightM: 0.5 });
   });
   it('missing / invalid dims → null (caller falls back to image pixels)', () => {
-    expect(physicalRealAspect(undefined)).toBeNull();
-    expect(physicalRealAspect(phys(undefined, undefined))).toBeNull();
-    expect(physicalRealAspect(phys(0, 1000))).toBeNull();
+    expect(effectiveTextureTileMeters(undefined)).toBeNull();
+    expect(effectiveTextureTileMeters(phys(undefined, undefined))).toBeNull();
+    expect(effectiveTextureTileMeters(phys(0, 1000))).toBeNull();
   });
 });
 
