@@ -118,6 +118,20 @@ describe('uploadToProduct', () => {
     expect(p.brand).toBe(USER_UPLOAD_BRAND);
     expect(p.modelNumber).toBeUndefined();
   });
+
+  it('reads data name + product price from metadata → reflected in the Product (260702)', () => {
+    const p = uploadToProduct(
+      baseUpload({ kind: 'texture', originalName: 'raw.png', metadata: { name: '〇〇タイル', price: 45000 } }),
+    );
+    expect(p.name).toBe('〇〇タイル'); // データ名称があればファイル名より優先
+    expect(p.pricePerUnit).toBe(45000); // 商品金額が単価として反映
+  });
+  it('blank data name → file name; missing/zero/invalid price → 0', () => {
+    expect(uploadToProduct(baseUpload({ kind: 'texture', originalName: 'oak.png', metadata: { name: '  ' } })).name).toBe('oak');
+    expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: {} })).pricePerUnit).toBe(0);
+    expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: { price: 0 } })).pricePerUnit).toBe(0);
+    expect(uploadToProduct(baseUpload({ kind: 'texture', metadata: { price: NaN } })).pricePerUnit).toBe(0);
+  });
 });
 
 describe('texture category helpers', () => {

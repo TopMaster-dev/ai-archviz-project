@@ -128,9 +128,11 @@ export function UploadPanel({
   // 建材画像（テクスチャ）追加: ファイル選択後にカテゴリ選択ポップアップで使う一時状態。
   const [pendingTexture, setPendingTexture] = useState<{ file: File; previewUrl: string } | null>(null);
   const [pendingCategory, setPendingCategory] = useState<MaterialCategory | null>(null);
-  // 建材ポップアップのメーカー名・品番（任意・260630。エディタの建材ポップアップと同一に）。
+  // 建材ポップアップのデータ名称・メーカー名・品番・商品金額（任意・260630/260702。エディタの建材ポップアップと同一に）。
+  const [ptName, setPtName] = useState('');
   const [ptBrand, setPtBrand] = useState('');
   const [ptModelNumber, setPtModelNumber] = useState('');
+  const [ptPrice, setPtPrice] = useState('');
   // 3Dモデル追加: ファイル選択後に情報入力ポップアップ（データ名称/品番/メーカー名/商品金額）を出す（260630）。
   const [pendingModel, setPendingModel] = useState<{ file: File } | null>(null);
   const [pmName, setPmName] = useState('');
@@ -269,8 +271,10 @@ export function UploadPanel({
     if (!file || !passesCapacityPrecheck(file)) return;
     setMsg(null);
     setPendingCategory(null); // 既定=共通
+    setPtName(file.name.replace(/\.[^./\\]+$/, '').trim()); // データ名称はファイル名で初期化（3Dモデルと同様）
     setPtBrand('');
     setPtModelNumber('');
+    setPtPrice('');
     setPendingTexture({ file, previewUrl: URL.createObjectURL(file) });
   };
 
@@ -278,12 +282,18 @@ export function UploadPanel({
   const confirmPendingTexture = async () => {
     const pending = pendingTexture;
     if (!pending) return;
+    const name = ptName.trim();
     const brand = ptBrand.trim();
     const modelNumber = ptModelNumber.trim();
+    // 商品金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。空/0/不正は未設定＝3Dモデルと同方針。
+    const priceNum = Math.round(Number(ptPrice));
+    const price = ptPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : undefined;
     const metadata: Record<string, unknown> = {};
     if (pendingCategory) metadata.category = pendingCategory; // 共通=未設定
+    if (name) metadata.name = name;
     if (brand) metadata.brand = brand;
     if (modelNumber) metadata.modelNumber = modelNumber;
+    if (price !== undefined) metadata.price = price;
     const ok = await doUpload(pending.file, 'texture', metadata);
     if (ok) setPendingTexture(null); // 成功時のみ閉じる（ObjectURL は effect が解放・失敗時は再試行可）
   };
@@ -577,9 +587,18 @@ export function UploadPanel({
             aria-label="建材画像のカテゴリ選択"
           >
             <h3 className="text-base font-bold text-neutral-100">追加した建材画像のカテゴリを選択してください。</h3>
-            <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。</p>
-            {/* メーカー名・品番（任意）。最上部に配置し、見積もりへ反映する。 */}
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。入力した内容は見積もりに反映されます（すべて任意）。</p>
+            {/* データ名称・メーカー名・品番・商品金額（任意）。エディタの建材ポップアップと同一に、見積もりへ反映する（260702）。 */}
+            <div className="mt-4">
+              <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
+              <input
+                value={ptName}
+                onChange={(e) => setPtName(e.target.value)}
+                placeholder="例: 〇〇タイル"
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-[10px] text-neutral-400">メーカー名（任意）</label>
                 <input
@@ -598,6 +617,19 @@ export function UploadPanel({
                   className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
                 />
               </div>
+            </div>
+            <div className="mt-3">
+              <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                value={ptPrice}
+                onChange={(e) => setPtPrice(e.target.value)}
+                placeholder="例: 45000"
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+              />
             </div>
             <div className="mt-4 flex gap-4">
               <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">

@@ -115,18 +115,22 @@ export async function ensureUploadFootprint(upload: UserUpload): Promise<Furnitu
 export function uploadToProduct(upload: UserUpload): Product {
   const meta = (upload.metadata ?? {}) as Record<string, unknown>;
   const assigned = normalizeTextureCategory(meta.category);
-  // 建材アップロード時に入力したメーカー名・品番（260630）。メーカー名があればブランド表示に使う。
+  // 建材アップロード時に入力したデータ名称・メーカー名・品番・商品金額（260630/260702）。見積もりへ反映する。
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+  const metaName = str(meta.name);
   const metaBrand = str(meta.brand);
   const metaModelNumber = str(meta.modelNumber);
+  // 商品金額（円・整数）。未入力/不正/0 は 0（未設定）。
+  const metaPrice =
+    typeof meta.price === 'number' && Number.isFinite(meta.price) && meta.price > 0 ? Math.round(meta.price) : 0;
   return {
     id: `upload-tex-${upload.id}`,
-    name: deriveUploadName(upload.originalName, 'テクスチャ'),
+    name: metaName || deriveUploadName(upload.originalName, 'テクスチャ'), // 入力したデータ名称を優先
     brand: metaBrand || USER_UPLOAD_BRAND, // メーカー名未入力時は識別用の既定ブランド
     modelNumber: metaModelNumber || undefined,
     category: assigned ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
     crossCategory: assigned === null,
-    pricePerUnit: 0,
+    pricePerUnit: metaPrice,
     unit: '㎡',
     lossFactor: 0,
     textureUrl: upload.storageUrl,
