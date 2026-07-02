@@ -929,8 +929,75 @@ const App: React.FC = () => {
   const furnitureFootprintAttemptedRef = useRef<Set<string>>(new Set());
   const furnitureItemsRef = useRef<FurnitureItem[]>(furnitureItems);
   furnitureItemsRef.current = furnitureItems;
+  // 選択オブジェクト操作バー（グループ化/コピー等）の表示用に、選択・グループ・クリップボード件数を購読（260702）。
+  const selectedFurnitureIds = useProjectStore((s) => s.selectedIds);
+  const furnitureGroups = useProjectStore((s) => s.scene.groups);
+  const [clipboardCount, setClipboardCount] = useState(0);
   // コピー/ペースト用クリップボード（260623・C フェーズ1: 家具を複製。家具は2D/3D共有データのため自動同期）。
   const furnitureClipboardRef = useRef<FurnitureItem[]>([]);
+  // コピー元のグループ構造（クリップボードと並行配列。各アイテムが属していた元グループID・無ければ null）。
+  // ペースト時に同じまとまりを新しいグループとして再現する（260702 クライアント報告「コピペでグループが外れる」対応）。
+  const furnitureClipboardGroupsRef = useRef<(string | null)[]>([]);
+
+  // 選択中の家具をクリップボードへ（単一/複数選択とも selectedIds を使用・グループ構造も控える）。
+  const copySelectedFurniture = useCallback((): boolean => {
+    const store = useProjectStore.getState();
+    const ids = store.selectedIds;
+    if (ids.length === 0) return false;
+    const items = furnitureItemsRef.current.filter((f) => ids.includes(f.id));
+    if (items.length === 0) return false;
+    furnitureClipboardRef.current = items.map((it) => ({ ...it }));
+    const groupOf = new Map<string, string>();
+    for (const g of store.scene.groups) for (const mid of g.memberIds) if (ids.includes(mid)) groupOf.set(mid, g.id);
+    furnitureClipboardGroupsRef.current = items.map((it) => groupOf.get(it.id) ?? null);
+    setClipboardCount(items.length);
+    return true;
+  }, []);
+
+  // クリップボードの家具を複製（新規ID＋少しオフセット）。コピー元で同じグループだったものは新グループとして再現する。
+  const pasteFurniture = useCallback((): boolean => {
+    const clip = furnitureClipboardRef.current;
+    if (clip.length === 0) return false;
+    const clipGroups = furnitureClipboardGroupsRef.current;
+    const baseTs = Date.now();
+    const clones: FurnitureItem[] = clip.map((item, idx) => ({
+      ...item,
+      id: `furniture-${baseTs}-${idx}`,
+      position: [item.position[0] + 0.3, item.position[1], item.position[2] + 0.3] as [number, number, number],
+    }));
+    // setFurnitureItems は同期でストア(scene.furniture)へ反映するため、直後に groupSelection がクローンを認識できる。
+    setFurnitureItems((prev) => [...prev, ...clones]);
+    const byGroup = new Map<string, string[]>();
+    clones.forEach((clone, idx) => {
+      const gid = clipGroups[idx];
+      if (gid) {
+        if (!byGroup.has(gid)) byGroup.set(gid, []);
+        byGroup.get(gid)!.push(clone.id);
+      }
+    });
+    const store = useProjectStore.getState();
+    for (const cloneIds of byGroup.values()) {
+      if (cloneIds.length >= 2) {
+        store.select(cloneIds);
+        store.groupSelection(); // selectedIds から新グループを作成
+      }
+    }
+    store.select(clones.map((c) => c.id)); // 貼り付けた全クローンを選択
+    setActiveFurnitureId(clones[clones.length - 1].id);
+    return true;
+  }, [setFurnitureItems]);
+
+  // 選択中の家具（2件以上）をグループ化 / 選択に含まれるグループを解除する（ボタン・ショートカット共通）。
+  const groupSelectedFurniture = useCallback(() => {
+    const store = useProjectStore.getState();
+    if (store.selectedIds.length >= 2) store.groupSelection();
+  }, []);
+  const ungroupSelectedFurniture = useCallback(() => {
+    const store = useProjectStore.getState();
+    const sel = new Set(store.selectedIds);
+    const groupIds = store.scene.groups.filter((g) => g.memberIds.some((id) => sel.has(id))).map((g) => g.id);
+    groupIds.forEach((gid) => store.ungroup(gid));
+  }, []);
 
   /** 足跡未設定・modelUrl 等が変わったときだけ GLTF スキャン用 effect を走らせる（位置更新のたびに forEach しない） */
   const furnitureItemsFootprintScanKey = useMemo(
@@ -1121,32 +1188,12 @@ const App: React.FC = () => {
       if (mod && (e.key === 'c' || e.key === 'C')) {
         // テキスト選択中はブラウザのコピーを優先（家具はコピーしない）。
         if (window.getSelection()?.toString()) return;
-        // 複数選択(selectedIds)があればそれを、無ければ単一選択(activeFurnitureId)をコピー対象にする。
-        const selIds = useProjectStore.getState().selectedIds;
-        const ids = selIds.length > 0 ? selIds : activeFurnitureId ? [activeFurnitureId] : [];
-        if (ids.length > 0) {
-          const items = furnitureItemsRef.current.filter((f) => ids.includes(f.id));
-          if (items.length > 0) {
-            furnitureClipboardRef.current = items.map((it) => ({ ...it }));
-            e.preventDefault();
-          }
-        }
+        if (copySelectedFurniture()) e.preventDefault();
         return;
       }
-      // ペースト（Ctrl/Cmd+V）: クリップボードの家具を複製（新規ID＋少しオフセット）し、最後を選択状態にする。
+      // ペースト（Ctrl/Cmd+V）: クリップボードの家具を複製（新規ID＋少しオフセット）。グループも再現する。
       if (mod && (e.key === 'v' || e.key === 'V')) {
-        const clip = furnitureClipboardRef.current;
-        if (clip.length > 0) {
-          e.preventDefault();
-          const baseTs = Date.now();
-          const clones: FurnitureItem[] = clip.map((item, idx) => ({
-            ...item,
-            id: `furniture-${baseTs}-${idx}`,
-            position: [item.position[0] + 0.3, item.position[1], item.position[2] + 0.3] as [number, number, number],
-          }));
-          setFurnitureItems((prev) => [...prev, ...clones]);
-          setActiveFurnitureId(clones[clones.length - 1].id);
-        }
+        if (pasteFurniture()) e.preventDefault();
         return;
       }
       if (e.key !== 'Delete' && e.key !== 'Backspace') return;
@@ -1171,7 +1218,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedOpeningId, activeFurnitureId, selectedBeam3DId]);
+  }, [selectedOpeningId, activeFurnitureId, selectedBeam3DId, copySelectedFurniture, pasteFurniture]);
 
   useEffect(() => {
     if (!catalogSortMenuOpen) return;
@@ -3239,6 +3286,36 @@ const App: React.FC = () => {
             }`}
             style={viewMode === '3D' ? { paddingTop: canvasTopInset } : undefined}
           >
+             {/* 選択オブジェクトの操作バー（260702 クライアント要望「複数選択・グループ化・コピペ」を分かりやすく）。
+                 複数選択は Shift/Ctrl+クリック（従来から可能）。ここでグループ化/解除/コピー/貼り付けをボタン化して発見しやすくする。 */}
+             {(viewMode === 'sketch' || viewMode === '3D') && !renderState.isRendering && !aiEditOpen &&
+               (selectedFurnitureIds.length > 0 || clipboardCount > 0) && (() => {
+                 const sel = new Set(selectedFurnitureIds);
+                 const grouped = furnitureGroups.some((g) => g.memberIds.some((id) => sel.has(id)));
+                 const canGroup = selectedFurnitureIds.length >= 2 && !grouped;
+                 return (
+                   <div className="pointer-events-none absolute bottom-6 left-1/2 z-40 -translate-x-1/2">
+                     <div className="glass pointer-events-auto flex items-center gap-1 rounded-2xl border border-white/10 bg-black/60 px-2 py-1.5 shadow-xl backdrop-blur-md">
+                       <span className="px-1.5 text-[10px] font-black uppercase tracking-widest text-neutral-400">
+                         {selectedFurnitureIds.length > 0 ? `${selectedFurnitureIds.length}件選択` : 'コピー済'}
+                       </span>
+                       {canGroup && (
+                         <button type="button" onClick={groupSelectedFurniture} title="選択したオブジェクトをグループ化（Ctrl+G）"
+                           className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10">グループ化</button>
+                       )}
+                       {grouped && (
+                         <button type="button" onClick={ungroupSelectedFurniture} title="グループを解除（Ctrl+Shift+G）"
+                           className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10">グループ解除</button>
+                       )}
+                       <button type="button" onClick={() => copySelectedFurniture()} disabled={selectedFurnitureIds.length === 0} title="コピー（Ctrl+C）"
+                         className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 disabled:opacity-40">コピー</button>
+                       <button type="button" onClick={() => pasteFurniture()} disabled={clipboardCount === 0} title="貼り付け（Ctrl+V・グループも一緒に複製）"
+                         className="rounded-lg px-2.5 py-1.5 text-[11px] font-bold text-emerald-300 transition hover:bg-emerald-500/15 disabled:opacity-40">貼り付け{clipboardCount > 0 ? `（${clipboardCount}）` : ''}</button>
+                       <span className="hidden px-1.5 text-[9px] leading-tight text-neutral-500 md:inline">Shift+クリックで複数選択</span>
+                     </div>
+                   </div>
+                 );
+               })()}
              {!renderState.isRendering && (viewMode === 'sketch' || viewMode === '3D') && (
                 <div ref={setHeaderBarNode} className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-center gap-2 md:gap-2 pointer-events-none">
                     {renderGlobalModeToggle(aiEditOpen ? 'ai' : viewMode)}
