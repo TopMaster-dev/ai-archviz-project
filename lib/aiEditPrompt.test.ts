@@ -93,3 +93,24 @@ describe('formatPlacement: 多角形も矩形(bbox)で Gemini に伝える（260
     expect(guide).toContain('境界線');
   });
 });
+
+describe('コーディネートのテキスト指示は画像添付が無くてもプロンプトに反映される（260702）', () => {
+  it('hasStyle=false・objects=[] でも styleMemo が編集指示としてプロンプトに載る', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [],
+      styleMemo: '木の温もりを感じるナチュラルモダンなリビングにして',
+    });
+    expect(guide).toContain('ユーザーの編集指示');
+    expect(guide).toContain('木の温もりを感じるナチュラルモダンなリビングにして');
+  });
+
+  it('エリア編集（objects あり）では全体指示ブロックを出さない（独立性）', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      styleMemo: 'これは送られないはず',
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+    });
+    expect(guide).not.toContain('ユーザーの編集指示（空間全体');
+  });
+});

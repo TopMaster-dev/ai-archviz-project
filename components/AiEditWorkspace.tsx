@@ -396,8 +396,6 @@ export function AiEditWorkspace({
   );
 
   const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
-  const hasSituationInput =
-    isSituationCardVisible && (!!styleImageDataUrl || draftStyleMemo.trim().length > 0);
   const emptySituationCard =
     activeTool === 'coordinate' &&
     isSituationCardVisible &&
@@ -416,8 +414,10 @@ export function AiEditWorkspace({
   );
   const hasAreaEditInput = areaEditItems.length > 0;
   const areaPlacementCount = areaEditItems.reduce((sum, o) => sum + o.placements.length, 0);
-  const hasAnyInput = hasSituationInput || hasAreaEditInput;
-  const requiresAreaPlacement = hasAreaEditInput && areaPlacementCount === 0;
+  // エリア編集の実行可否は「エリア編集の入力（範囲＋指示）だけ」で判定する。コーディネート欄のプロンプトとは
+  // 完全に独立（260702 クライアント指摘: 範囲を1つも作成していなくても、コーディネートに入力があるとボタンが
+  // 押せてしまう＝機能が混線している問題の是正）。範囲(placement)が1つ以上・空カードなし・指示ありが条件。
+  const canRunAreaEdit = hasAreaEditInput && areaPlacementCount > 0 && emptyCardCount === 0;
 
   const runEdit = useCallback(async () => {
     if (!activeVersion) return;
@@ -432,7 +432,6 @@ export function AiEditWorkspace({
       // （AIレンダリングは PREVIEW_GEMINI_IMAGE_SIZE=1K で正常、AIデザイン/編集だけ 2K で異常・260619報告対応）。
       const imageSize = PREVIEW_GEMINI_IMAGE_SIZE;
 
-      const styleScaled = styleImageDataUrl ? await downscaleDataUrlIfNeeded(await ensureDataUrl(styleImageDataUrl)) : null;
       const objectsScaled = await Promise.all(
         draftObjects.map(async (o) => {
           const norm = normalizeImageDataUrl(o.imageDataUrl);
@@ -446,17 +445,14 @@ export function AiEditWorkspace({
       // in-context反映（row 211/219）: 個人の高評価傾向＋全体共有プールを取得し、生成プロンプトへ参考添付（ベストエフォート）。
       const learnedHints = await getLearnedHints().catch(() => [] as string[]);
 
-      // エリア編集の精度向上（260702 クライアント要望「重なった家具でエリア編集が効きにくい／当たり外れが激しい」）:
-      // 純エリア編集のときは、マスク領域＋余白をクロップして拡大送信する。対象がフレームいっぱいに写るため
-      // 実効解像度が上がり、重なった家具の前後を分離しやすくなる（＝当たり外れが減る）。利得が無い/過拡大に
-      // なるケースは shouldCropRegion で従来の全画面パスにフォールバック（既存挙動を維持＝退行なし）。
+      // エリア編集は「マスク領域だけ」を編集する独立機能（260702 クライアント指摘対応）。コーディネート欄の
+      // スタイル/プロンプト（styleImage/styleMemo）は一切読み込まない。マスク領域＋余白をクロップして拡大送信し
+      // （重なった家具の分離＝精度向上）、編集後は必ずベースへ貼り戻して多角形/矩形でクリップする。これにより
+      // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
       const allPlacements = draftObjects.flatMap((o) => o.placements);
-      const hasWholeImageStyle =
-        isSituationCardVisible && (!!styleImageDataUrl || draftStyleMemo.trim().length > 0);
-      const isPureArea = allPlacements.length > 0 && !hasWholeImageStyle;
 
       let cropPx: CropPx | null = null;
-      if (isPureArea) {
+      if (allPlacements.length > 0) {
         const bbox = padBBox(unionBBoxOfPlacements(allPlacements));
         const targetAspect = parseAspectRatioKey(
           pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
@@ -472,17 +468,14 @@ export function AiEditWorkspace({
         : objectsScaled;
       const postAspect = cropPx ? pickClosestAspectRatio(cropPx.sw, cropPx.sh) : aspectRatio;
 
+      // エリア編集はスタイル参照/コーディネートのプロンプトを送らない（機能の独立性・コーディネートとは混線させない）。
       const body: Record<string, unknown> = {
         baseImage: postBase,
-        styleImage: styleScaled,
         objects: postObjects,
         aspectRatio: postAspect,
         imageSize,
         learnedHints,
       };
-      if (isSituationCardVisible && draftStyleMemo.trim()) {
-        body.styleMemo = draftStyleMemo.trim();
-      }
 
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
@@ -495,21 +488,18 @@ export function AiEditWorkspace({
       void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
 
       let outUrl = data.url as string;
+      // 編集結果は必ずマスク（多角形/矩形）内だけを合成し、マスク外はベースのまま（＝指定外は改変しない）。
+      // アスペクトは cover 固定（contain のレターボックスは領域と位置がズレるため使わない）。
       if (cropPx) {
-        // クロップ経路: 編集済みクロップを crop 寸法へ整え（cover＝位置整合を維持）、ベースへ貼り戻し、
-        // 元の全画面座標の多角形でクリップする。crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、
-        // クロップ矩形の縁は必ずユーザーに見えない。
+        // クロップ経路: 編集済みクロップを crop 寸法へ整え、ベースへ貼り戻し、元の全画面座標の多角形でクリップ。
+        // crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、クロップ矩形の縁は必ず見えない。
         const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
         const full = await pasteCropIntoBase(baseScaled, fittedCrop, cropPx, baseW, baseH);
         outUrl = await compositeMaskedEdit(baseScaled, full, allPlacements, baseW, baseH);
       } else {
-        // 従来の全画面パス。② アスペクト補正（写真が縦に延びる対策）＋ ① 領域外染み出し対策（マスク内のみ合成）。
-        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
-        const aspectMode: 'cover' | 'contain' =
-          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-        const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, aspectMode);
+        const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, 'cover');
         outUrl =
-          allPlacements.length > 0 && !hasWholeImageStyle && aspectMode === 'cover'
+          allPlacements.length > 0
             ? await compositeMaskedEdit(baseScaled, normalized, allPlacements, baseW, baseH)
             : normalized;
       }
@@ -538,8 +528,9 @@ export function AiEditWorkspace({
         parentId: activeVersion.id,
         baseImageDataUrl: activeVersion.outputImageDataUrl,
         outputImageDataUrl: outUrl,
-        styleRefDataUrl: isSituationCardVisible ? styleImageDataUrl : null,
-        styleMemo: isSituationCardVisible ? draftStyleMemo.trim() : '',
+        // エリア編集はコーディネートのスタイルを保持しない（独立機能）。
+        styleRefDataUrl: null,
+        styleMemo: '',
         objects: draftObjects.map((o) => ({
           ...o,
           placements: o.placements.map((p) => ({ ...p })),
@@ -550,16 +541,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [
-    activeVersion,
-    versions,
-    styleImageDataUrl,
-    draftStyleMemo,
-    isSituationCardVisible,
-    draftObjects,
-    onEditSuccess,
-    isFreePlan,
-  ]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession]);
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -567,12 +549,12 @@ export function AiEditWorkspace({
       setSubmitError(`未入力カードがあります（未入力${emptyCardCount}件）`);
       return;
     }
-    if (!hasAnyInput) {
-      setSubmitError('AIデザインまたはエリア編集で、画像かテキストを1つ以上設定してください。');
+    if (!hasAreaEditInput) {
+      setSubmitError('エリア編集で、範囲に加える編集内容（テキストまたは参照画像）を設定してください。');
       return;
     }
-    if (requiresAreaPlacement) {
-      setSubmitError('エリア編集を使う場合は、範囲選択を1つ以上設定してください。');
+    if (areaPlacementCount === 0) {
+      setSubmitError('エリア編集を使う場合は、範囲を1つ以上作成してください。');
       return;
     }
     // フリープランのクレジット枯渇/失効時は生成を抑止（row 49/50）。無効/有料/ゲストでは null=通過。
@@ -601,11 +583,27 @@ export function AiEditWorkspace({
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       // in-context反映（row 211/219）: 過去に高評価した傾向をコーディネートにも参考添付（ベストエフォート）。
       const learnedHints = await getLearnedHints().catch(() => [] as string[]);
+      // コーディネートは「空間全体（お任せ／プロンプト反映）」の独立機能。エリア編集の範囲(draftObjects)は一切
+      // 読み込まない（objects:[] 固定・マスクもしない）。プロンプト/参照画像があれば全体スタイル編集として反映し、
+      // 無ければ完全お任せ（coordinate:true）。生成サイズは 1K（2Kは新画像モデルでぼやけ・260619報告対応）。
+      const styleMemo = draftStyleMemo.trim();
+      const styleScaled = styleImageDataUrl ? await downscaleDataUrlIfNeeded(await ensureDataUrl(styleImageDataUrl)) : null;
+      const hasPrompt = styleMemo.length > 0 || !!styleScaled;
+      const body: Record<string, unknown> = hasPrompt
+        ? {
+            baseImage: baseScaled,
+            styleImage: styleScaled,
+            objects: [],
+            aspectRatio,
+            imageSize: PREVIEW_GEMINI_IMAGE_SIZE,
+            learnedHints,
+            ...(styleMemo ? { styleMemo } : {}),
+          }
+        : { baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: PREVIEW_GEMINI_IMAGE_SIZE, learnedHints };
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        // 生成サイズはAIレンダリングと同じ 1K に揃える（2K だと新画像モデルでぼやけ出力・260619報告対応）。
-        body: JSON.stringify({ baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: PREVIEW_GEMINI_IMAGE_SIZE, learnedHints }),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
@@ -635,8 +633,8 @@ export function AiEditWorkspace({
         parentId: activeVersion.id,
         baseImageDataUrl: activeVersion.outputImageDataUrl,
         outputImageDataUrl: outUrl,
-        styleRefDataUrl: null,
-        styleMemo: '',
+        styleRefDataUrl: styleImageDataUrl,
+        styleMemo,
         objects: [],
       });
     } catch (err: unknown) {
@@ -644,9 +642,10 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession]);
+  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession, draftStyleMemo, styleImageDataUrl]);
 
-  // コーディネートタブの実行（260624）: プロンプト/添付があればそれを反映（runEdit流用）、無ければ完全お任せ（runCoordinate）。
+  // コーディネートタブの実行（260624/260702）: 常に runCoordinate（全体編集）で実行する。エリア編集(runEdit)とは
+  // 完全に独立させ、エリア編集の範囲を読み込まない。プロンプト/添付があれば全体スタイル編集、無ければ完全お任せ。
   // プロンプト未入力でも実行可能（クライアント要望）。
   const handleCoordinateExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -656,11 +655,7 @@ export function AiEditWorkspace({
       return;
     }
     setSubmitError(null);
-    if (draftStyleMemo.trim().length > 0 || styleImageDataUrl) {
-      void runEdit();
-    } else {
-      void runCoordinate();
-    }
+    void runCoordinate();
   };
 
   const POLY_CLOSE_DIST = 0.03; // 始点付近クリックで多角形を閉じる距離（正規化）。
@@ -1503,8 +1498,7 @@ export function AiEditWorkspace({
                   !activeVersion ||
                   isSubmitting ||
                   !!projectSession?.aiCredits.blocked ||
-                  (activeTool === 'area' &&
-                    (!hasAnyInput || requiresAreaPlacement || emptyCardCount > 0))
+                  (activeTool === 'area' && !canRunAreaEdit)
                 }
                 onClick={activeTool === 'coordinate' ? handleCoordinateExecute : handleClickExecute}
                 className="w-full flex items-center justify-center gap-2 py-3 rounded-xl bg-purple-600 hover:bg-purple-500 disabled:opacity-40 disabled:pointer-events-none font-black text-sm"
