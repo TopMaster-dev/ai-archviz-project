@@ -26,10 +26,11 @@ const MAX_STORED = 50;
  * コーディネートの記入欄と同じく、例文はプレースホルダとして枠内にグレー表示する。
  */
 const AGENT_PLACEHOLDER =
-  '例1）このブランドに合うデザインを提案して\n' +
-  '（HPに掲載されている企業理念や現在の展開されている店舗画像、今回の提案要件を記入してください）\n' +
-  '例2）この空間に合う家具を提案して\n' +
-  '例3）最近のトレンドカラーを教えて';
+  '【※対話専用チャットです。ここから画像の生成は実行されません】\n' +
+  '\n' +
+  '例1）添付した企業理念から、オフィスのコンセプト案を3つ出して\n' +
+  '例2）最近のトレンドを取り入れた、美容室のアクセントカラーを教えて\n' +
+  '例3）この間取りで、より広く見せるための照明の配置アイデアは？';
 
 /** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）、ユーザー発話には送信した添付ファイル名が付く。 */
 type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[]; attachmentNames?: string[] };
@@ -319,7 +320,7 @@ export function AgentChatPanel({
       <div className="flex flex-col gap-2">
         {isInitial && (
           <p id="agent-empty-label" className="text-[12px] font-bold text-neutral-200">
-            ここにお困りごとを記入してください。
+            デザインの相談や、アイデア出しの壁打ちにご利用ください。
           </p>
         )}
         <textarea

@@ -1248,7 +1248,7 @@ export function AiEditWorkspace({
                     value={draftStyleMemo}
                     onChange={(e) => onStyleMemoChange(e.target.value)}
                     placeholder={
-                      '例）このブランドに合うデザインを提案して\n（HPに掲載されている企業理念や現在の展開されている店舗画像、今回の提案要件を記入してください）\n例）この空間に合う家具を提案して'
+                      '生成したい空間のイメージや条件を入力してください。\n【※入力内容に基づき、パース画像の生成が実行されます】\n\n例1）木の温もりを感じる、ナチュラルモダンなリビング\n例2）添付したブランドロゴの雰囲気に合う、高級感のあるカフェの内装\n例3）コンクリートとアイアン素材を組み合わせた、インダストリアルなオフィス'
                     }
                     rows={6}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white leading-relaxed resize-none outline-none focus:border-emerald-500"
