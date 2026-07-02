@@ -2250,23 +2250,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           ctx.restore();
         }
 
-        // 始点（最初に打った点）のハイライト（260702 クライアント要望「予測位置に加えて始点も表示」）:
-        // 壁作図中は始点を予測位置ハイライトと同様に常に強調し、ここへ戻ってクリックすると壁を閉じられることを
-        // 分かりやすくする。色は既存の始点色（赤 #ef4444）に合わせ、予測位置（緑）と区別する。
-        if (isDrawing && !isClosed && pointsMm.length >= 1) {
-          const startMm = pointsMm[0];
-          const spx = startMm.x * currentZoom + currentOffset.x;
-          const spy = startMm.y * currentZoom + currentOffset.y;
-          ctx.save();
-          ctx.beginPath();
-          ctx.arc(spx, spy, 11, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(239, 68, 68, 0.18)';
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = 'rgba(239, 68, 68, 0.95)';
-          ctx.stroke();
-          ctx.restore();
-        }
+        // 始点（最初に打った点）は下の「Draw Points」で赤丸(#ef4444, 半径7)として既に表示される。
+        // 以前ここに追加していた大きめの赤いリングは、初期状態/作図中に赤い残像のように見えるとの指摘（260703）で撤去。
+        // 始点強調が必要になれば、作図中(pointsMm.length>=2)に限定した控えめな表現で再検討する。
 
         // Draw Points
         screenPoints.forEach((p, i) => {
