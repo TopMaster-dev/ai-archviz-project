@@ -2210,26 +2210,43 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           }
         }
 
-        // 予測位置（次の停止点）のハイライト。窓/ドアのプレビューと同様に半透明＋輪郭で「ここに置かれる」を明示する。
-        // draw モードのホバー中のみ predictedWallPointRef が set される（確定前でも最初の点の位置を表示）。
+        // 予測位置（次の停止点）のハイライト。窓/ドアのプレビューと同様に、マウス移動に追従して「ここに置かれる」を明示する。
+        // draw モードのホバー中は常に（最初の点を打つ前でも）表示する。クライアント要望（260702）で、十字レティクル＋
+        // 座標ラベルにして配置位置を分かりやすくした。
         const predMm = predictedWallPointRef.current;
         if (predMm && !isClosed) {
           const ppx = predMm.x * currentZoom + currentOffset.x;
           const ppy = predMm.y * currentZoom + currentOffset.y;
           ctx.save();
+          // 十字レティクル（長めの破線）: マウス位置＝配置位置をはっきり示す。
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+          ctx.lineWidth = 1;
+          ctx.setLineDash([4, 3]);
           ctx.beginPath();
-          ctx.arc(ppx, ppy, 9, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.22)';
+          ctx.moveTo(ppx - 24, ppy); ctx.lineTo(ppx + 24, ppy);
+          ctx.moveTo(ppx, ppy - 24); ctx.lineTo(ppx, ppy + 24);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          // 円＋中心点。
+          ctx.beginPath();
+          ctx.arc(ppx, ppy, 8, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
           ctx.fill();
           ctx.lineWidth = 2;
           ctx.strokeStyle = 'rgba(16, 185, 129, 0.95)';
           ctx.stroke();
           ctx.beginPath();
-          ctx.moveTo(ppx - 5, ppy); ctx.lineTo(ppx + 5, ppy);
-          ctx.moveTo(ppx, ppy - 5); ctx.lineTo(ppx, ppy + 5);
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-          ctx.lineWidth = 1;
-          ctx.stroke();
+          ctx.arc(ppx, ppy, 1.6, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+          ctx.fill();
+          // 座標ラベル（配置位置 mm を明示）。窓/ドアの「配置位置表示」と同様の役割。
+          const label = `${Math.round(predMm.x)}, ${Math.round(predMm.y)}`;
+          ctx.font = 'bold 11px "Inter"';
+          const tw = ctx.measureText(label).width;
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+          ctx.fillRect(ppx + 12, ppy - 27, tw + 10, 17);
+          ctx.fillStyle = 'rgba(52, 211, 153, 0.98)';
+          ctx.fillText(label, ppx + 17, ppy - 15);
           ctx.restore();
         }
 
