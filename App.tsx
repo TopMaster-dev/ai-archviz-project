@@ -2240,15 +2240,19 @@ const App: React.FC = () => {
   const [pendingMaterialFiles, setPendingMaterialFiles] = useState<File[]>([]);
   const [pendingMaterialPreview, setPendingMaterialPreview] = useState<string | null>(null);
   const [pendingMaterialCategory, setPendingMaterialCategory] = useState<MaterialCategory | null>(null);
-  // 建材アップロード時に任意で入力するメーカー名・品番（260630・クライアント要望）。見積もりへ流す。
+  // 建材アップロード時に任意で入力するデータ名称・メーカー名・品番・商品金額（260630/260702・クライアント要望）。見積もりへ流す。
+  const [pendingMaterialName, setPendingMaterialName] = useState('');
   const [pendingMaterialBrand, setPendingMaterialBrand] = useState('');
   const [pendingMaterialModelNumber, setPendingMaterialModelNumber] = useState('');
+  const [pendingMaterialPrice, setPendingMaterialPrice] = useState('');
   const closeMaterialPopup = () => {
     setPendingMaterialPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
     setPendingMaterialFiles([]);
     setPendingMaterialCategory(null);
+    setPendingMaterialName('');
     setPendingMaterialBrand('');
     setPendingMaterialModelNumber('');
+    setPendingMaterialPrice('');
   };
   const onMaterialFilesPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
@@ -2257,22 +2261,29 @@ const App: React.FC = () => {
     setPendingMaterialFiles(files);
     setPendingMaterialPreview(URL.createObjectURL(files[0]));
     setPendingMaterialCategory(null); // 既定＝共通
+    // データ名称は先頭ファイル名で初期化（3Dモデルと同様・編集可）。金額は空。
+    setPendingMaterialName(deriveUploadName(files[0].name));
+    setPendingMaterialPrice('');
   };
   const commitMaterialUpload = () => {
     const files = pendingMaterialFiles;
     const chosen = pendingMaterialCategory; // null=共通（crossCategory）
+    const enteredName = pendingMaterialName.trim();
+    // 商品金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。空/0/不正は 0（未設定）＝3Dモデルと同方針。
+    const priceNum = Math.round(Number(pendingMaterialPrice));
+    const price = pendingMaterialPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : 0;
     files.forEach((file) => {
       const reader = new FileReader();
       reader.onloadend = () => {
         if (typeof reader.result === 'string') {
           const newProduct: Product = {
             id: `custom-${Date.now()}-${Math.random()}`,
-            name: file.name.split('.')[0],
+            name: enteredName || file.name.split('.')[0],
             brand: pendingMaterialBrand.trim() || 'Custom',
             modelNumber: pendingMaterialModelNumber.trim() || undefined,
             category: chosen ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
             crossCategory: chosen === null,
-            pricePerUnit: 0,
+            pricePerUnit: price,
             unit: '㎡',
             lossFactor: 0,
             textureUrl: reader.result as string,
@@ -3054,9 +3065,18 @@ const App: React.FC = () => {
         <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4" onClick={closeMaterialPopup} role="dialog" aria-modal="true">
           <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-bold text-neutral-100">追加した建材画像のカテゴリを選択してください。</h3>
-            <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。</p>
-            {/* メーカー名・品番（任意）。最上部に配置し、見積もりへ反映する（260630・クライアント要望）。 */}
-            <div className="mt-4 grid grid-cols-2 gap-3">
+            <p className="mt-1 text-[11px] text-neutral-400">※複数のカテゴリに属する場合は共通を選択してください。入力した内容は見積もりに反映されます（すべて任意）。</p>
+            {/* データ名称・メーカー名・品番・商品金額（任意）。3Dモデル追加と同様に見積もりへ反映する（260630/260702・クライアント要望）。 */}
+            <div className="mt-4">
+              <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
+              <input
+                value={pendingMaterialName}
+                onChange={(e) => setPendingMaterialName(e.target.value)}
+                placeholder="例: 〇〇タイル"
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div className="mt-3 grid grid-cols-2 gap-3">
               <div>
                 <label className="mb-1 block text-[10px] text-neutral-400">メーカー名（任意）</label>
                 <input
@@ -3075,6 +3095,19 @@ const App: React.FC = () => {
                   className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
                 />
               </div>
+            </div>
+            <div className="mt-3">
+              <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                value={pendingMaterialPrice}
+                onChange={(e) => setPendingMaterialPrice(e.target.value)}
+                placeholder="例: 45000"
+                className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+              />
             </div>
             <div className="mt-4 flex gap-4">
               <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
