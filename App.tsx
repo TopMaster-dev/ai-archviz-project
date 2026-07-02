@@ -50,7 +50,7 @@ import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
-import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
 
 const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
 const MAX_CAMERA_PRESETS = 12;
@@ -2279,7 +2279,9 @@ const App: React.FC = () => {
           const newProduct: Product = {
             id: `custom-${Date.now()}-${Math.random()}`,
             name: enteredName || file.name.split('.')[0],
-            brand: pendingMaterialBrand.trim() || 'Custom',
+            // メーカー名未入力時は「マイアップロード」に分類する（260702 クライアント要望）。
+            // 従来は 'Custom' で「CUSTOM」グループに入っていた。ホームのアップロード建材と同じ既定に揃える。
+            brand: pendingMaterialBrand.trim() || USER_UPLOAD_BRAND,
             modelNumber: pendingMaterialModelNumber.trim() || undefined,
             category: chosen ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
             crossCategory: chosen === null,
@@ -2289,7 +2291,7 @@ const App: React.FC = () => {
             textureUrl: reader.result as string,
             color: '#ffffff',
             pbr: { roughness: 0.8, metalness: 0, reflectivity: 0, glossiness: 'Matte', normalMapStrength: 0 },
-            promptHint: '(Custom Texture)',
+            promptHint: '(ユーザーアップロード)',
           };
           setProducts((prev) => [newProduct, ...prev]);
           // 選択中メッシュがあれば即適用（従来挙動を維持）。
