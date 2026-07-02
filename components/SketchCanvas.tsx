@@ -330,7 +330,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [isClosed, setIsClosed] = useState(pointsMm.length >= 3);
   const isClosedRef = useRef(isClosed);
   isClosedRef.current = isClosed;
-  const [isGridSnapEnabled, setIsGridSnapEnabled] = useState(true);
+  const [isGridSnapEnabled, setIsGridSnapEnabled] = useState(false); // グリッドスナップ既定OFF（260703 クライアント要望）
   // 寸法/頂点スナップ（既存ジオメトリの頂点・X/Y整列に吸着）。
   // 頂点スナップは UI トグルを撤去（260630・クライアント要望）。機能は常時 ON のまま維持。
   const [isVertexSnapEnabled] = useState(true);

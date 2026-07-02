@@ -873,11 +873,11 @@ const App: React.FC = () => {
   // スケルトン天井時の上部壁バンドの高さ(mm)。既定1000（4b）。
   const [skeletonUpperWallMm, setSkeletonUpperWallMm] = useState(1000);
 
-  // Snap Settings
-  const [gridSnapSize, setGridSnapSize] = useState(1000); 
-  const [lengthSnapSize, setLengthSnapSize] = useState(1000);
+  // Snap Settings（既定値・260703 クライアント要望: 長さ100mm / 角度15° / グリッドは既定OFF）。
+  const [gridSnapSize, setGridSnapSize] = useState(1000); // グリッド1マスの寸法(1m)。ON/OFF既定は SketchCanvas 側で OFF。
+  const [lengthSnapSize, setLengthSnapSize] = useState(100);
   const [isLengthSnapEnabled, setIsLengthSnapEnabled] = useState(true);
-  const [angleSnapSize, setAngleSnapSize] = useState(45); 
+  const [angleSnapSize, setAngleSnapSize] = useState(15);
   const [isAngleSnapEnabled, setIsAngleSnapEnabled] = useState(true);
   
   const [customModelUrl, setCustomModelUrl] = useState<string | null>(null);
