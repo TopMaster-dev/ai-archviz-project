@@ -99,7 +99,11 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   const hydrateDraftFromVersion = useCallback((v: AiEditVersion) => {
     setDraftStyleRefDataUrl(v.styleRefDataUrl);
     setDraftStyleMemo(v.styleMemo ?? '');
-    setDraftObjects(v.objects.map((o) => ({ ...o, placements: o.placements.map((p) => ({ ...p })) })));
+    // マスク（エリア編集の範囲）下書きは常に空にする（260702 クライアント報告「前の下絵の名残が残る」対応）。
+    // 範囲はバージョンに provenance として保持されるが、確定済みバージョンの範囲を再表示すると、その多角形が
+    // 新しい結果画像の上にオーバーレイとして残り「前に描いた範囲の名残」に見える。マスク下書きは「次の編集を
+    // 作図するためのもの」なので、バージョン選択・再表示時は必ずクリアする（＝過去の描画を出さない）。
+    setDraftObjects([]);
     setActiveObjectId(null);
     setPlacementEditIndex(null);
   }, []);

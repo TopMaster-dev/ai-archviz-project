@@ -34,6 +34,53 @@ describe('useAiEditSession render history', () => {
     expect(result.current.activeVersion?.outputImageDataUrl).toBe('data:image/png;base64,AAA');
   });
 
+  // 「前の下絵の名残が残る」対策（260702）: 確定済みバージョンのマスク（エリア編集の範囲）を選択で復元しない。
+  it('does NOT re-hydrate a committed version mask into draftObjects (no leftover overlay)', () => {
+    const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
+    act(() => result.current.addVersionFromRender('data:image/png;base64,AAA'));
+    const rootId = result.current.versions[0].id;
+    const maskObj = {
+      id: 'obj1',
+      imageDataUrl: null,
+      placements: [
+        {
+          x: 0.2,
+          y: 0.2,
+          width: 0.3,
+          height: 0.3,
+          points: [
+            { x: 0.2, y: 0.2 },
+            { x: 0.5, y: 0.2 },
+            { x: 0.35, y: 0.5 },
+          ],
+        },
+      ],
+      memo: '植木鉢を入れて',
+      placementMemos: [],
+    };
+    act(() =>
+      result.current.appendVersionAfterEdit({
+        parentId: rootId,
+        baseImageDataUrl: 'data:image/png;base64,AAA',
+        outputImageDataUrl: 'data:image/png;base64,BBB',
+        styleRefDataUrl: null,
+        styleMemo: '',
+        objects: [maskObj],
+      }),
+    );
+    const childId = result.current.versions[result.current.versions.length - 1].id;
+    // 編集直後は下書きが空（resetDraft）。
+    expect(result.current.draftObjects).toEqual([]);
+    // マスクの provenance はバージョンに保持される（履歴・再生成のため）。
+    const child = result.current.versions.find((v) => v.id === childId)!;
+    expect(child.objects).toHaveLength(1);
+    expect(child.objects[0].placements[0].points).toHaveLength(3);
+    // 他バージョンを経て結果バージョンを再選択しても、マスク下書きは復元されない（名残オーバーレイを出さない）。
+    act(() => result.current.selectVersion(rootId));
+    act(() => result.current.selectVersion(childId));
+    expect(result.current.draftObjects).toEqual([]);
+  });
+
   it('caps history at MAX_AI_EDIT_VERSIONS, dropping the oldest (bounds memory/DB growth)', () => {
     const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
     const total = MAX_AI_EDIT_VERSIONS + 5;

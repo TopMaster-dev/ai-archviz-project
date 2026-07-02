@@ -34,8 +34,9 @@ export async function compositeMaskedEdit(
   featherPx?: number
 ): Promise<string> {
   if (!placements || placements.length === 0 || width <= 0 || height <= 0) return editDataUrl;
+  // フェザーは控えめに（内側のみに適用するため小さめで十分・境界の名残を減らす・260702）。
   const feather =
-    featherPx ?? Math.min(16, Math.max(4, Math.round(Math.max(width, height) * 0.006)));
+    featherPx ?? Math.min(10, Math.max(2, Math.round(Math.max(width, height) * 0.004)));
   try {
     const [baseImg, editImg] = await Promise.all([loadImage(baseDataUrl), loadImage(editDataUrl)]);
 
@@ -71,6 +72,14 @@ export async function compositeMaskedEdit(
         // ctx.filter 未対応エンジンでは無視され、ハードな縁になるだけ（致命ではない）。
         bctx.filter = `blur(${feather}px)`;
         bctx.drawImage(mask, 0, 0);
+        // フェザーを「内側のみ」に限定（260702・クライアント報告「境界に前の下絵の名残が残る」対応）:
+        // ぼかしで多角形の外側へ広がったアルファを、元の多角形（ハードエッジ）でクリップして取り除く。
+        // これで編集は必ず描いた線の内側に収まり（拘束力）、線の外側へベース画像の元オブジェクトがにじんで
+        // 残る「境界の名残（二重縁）」も出さない。内側だけがなだらかに馴染む。
+        bctx.filter = 'none';
+        bctx.globalCompositeOperation = 'destination-in';
+        bctx.drawImage(mask, 0, 0);
+        bctx.globalCompositeOperation = 'source-over';
         maskCanvas = blur;
       }
     }

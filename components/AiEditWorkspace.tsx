@@ -690,11 +690,12 @@ export function AiEditWorkspace({
     setPolygonCursor(null);
   }, []);
 
-  // 作図対象（オブジェクト）やマスク方式を切り替えたら、作図中の多角形は破棄する。
+  // 作図対象（オブジェクト）やマスク方式、表示中バージョンを切り替えたら、作図中の多角形は破棄する
+  // （バージョン切替時に作図中の線が新しい結果画像に残らないようにする・260702）。
   useEffect(() => {
     setPolygonPoints([]);
     setPolygonCursor(null);
-  }, [activeObjectId, maskMode]);
+  }, [activeObjectId, maskMode, activeVersion?.id]);
 
   const onMouseDownPlacement = (e: React.MouseEvent) => {
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
