@@ -2210,45 +2210,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           }
         }
 
-        // 予測位置（次の停止点）のハイライト。窓/ドアのプレビューと同様に、マウス移動に追従して「ここに置かれる」を明示する。
-        // draw モードのホバー中は常に（最初の点を打つ前でも）表示する。クライアント要望（260702）で、十字レティクル＋
-        // 座標ラベルにして配置位置を分かりやすくした。
-        const predMm = predictedWallPointRef.current;
-        if (predMm && !isClosed) {
-          const ppx = predMm.x * currentZoom + currentOffset.x;
-          const ppy = predMm.y * currentZoom + currentOffset.y;
-          ctx.save();
-          // 十字レティクル（長めの破線）: マウス位置＝配置位置をはっきり示す。
-          ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
-          ctx.lineWidth = 1;
-          ctx.setLineDash([4, 3]);
-          ctx.beginPath();
-          ctx.moveTo(ppx - 24, ppy); ctx.lineTo(ppx + 24, ppy);
-          ctx.moveTo(ppx, ppy - 24); ctx.lineTo(ppx, ppy + 24);
-          ctx.stroke();
-          ctx.setLineDash([]);
-          // 円＋中心点。
-          ctx.beginPath();
-          ctx.arc(ppx, ppy, 8, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
-          ctx.fill();
-          ctx.lineWidth = 2;
-          ctx.strokeStyle = 'rgba(16, 185, 129, 0.95)';
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.arc(ppx, ppy, 1.6, 0, Math.PI * 2);
-          ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
-          ctx.fill();
-          // 座標ラベル（配置位置 mm を明示）。窓/ドアの「配置位置表示」と同様の役割。
-          const label = `${Math.round(predMm.x)}, ${Math.round(predMm.y)}`;
-          ctx.font = 'bold 11px "Inter"';
-          const tw = ctx.measureText(label).width;
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-          ctx.fillRect(ppx + 12, ppy - 27, tw + 10, 17);
-          ctx.fillStyle = 'rgba(52, 211, 153, 0.98)';
-          ctx.fillText(label, ppx + 17, ppy - 15);
-          ctx.restore();
-        }
+        // 予測位置（次の停止点）のハイライトは、点が0個（作図前/全消去後）でも出せるよう、この
+        // 「pointsMm.length > 0」ブロックの外側で描画する（260703 クライアント報告「作図前/全消去後に出ない」対応）。
 
         // 始点（最初に打った点）は下の「Draw Points」で赤丸(#ef4444, 半径7)として既に表示される。
         // 以前ここに追加していた大きめの赤いリングは、初期状態/作図中に赤い残像のように見えるとの指摘（260703）で撤去。
@@ -2458,6 +2421,45 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         ctx.restore();
       }
       ctx.filter = 'none';
+
+      // 予測位置ポインタ（マウスオーバーで「次に点が打たれる位置」を表示）。窓/ドアの配置プレビューと同様。
+      // pointsMm が空（作図前/全消去後）でも表示するため、pointsMm.length>0 ブロックの外で描く（260703 クライアント要望）。
+      const predMm = predictedWallPointRef.current;
+      if (predMm && !isClosed) {
+        const ppx = predMm.x * currentZoom + currentOffset.x;
+        const ppy = predMm.y * currentZoom + currentOffset.y;
+        ctx.save();
+        // 十字レティクル（長めの破線）: マウス位置＝配置位置をはっきり示す。
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.6)';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(ppx - 24, ppy); ctx.lineTo(ppx + 24, ppy);
+        ctx.moveTo(ppx, ppy - 24); ctx.lineTo(ppx, ppy + 24);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // 円＋中心点。
+        ctx.beginPath();
+        ctx.arc(ppx, ppy, 8, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(16, 185, 129, 0.25)';
+        ctx.fill();
+        ctx.lineWidth = 2;
+        ctx.strokeStyle = 'rgba(16, 185, 129, 0.95)';
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(ppx, ppy, 1.6, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.95)';
+        ctx.fill();
+        // 座標ラベル（配置位置 mm を明示）。
+        const label = `${Math.round(predMm.x)}, ${Math.round(predMm.y)}`;
+        ctx.font = 'bold 11px "Inter"';
+        const tw = ctx.measureText(label).width;
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+        ctx.fillRect(ppx + 12, ppy - 27, tw + 10, 17);
+        ctx.fillStyle = 'rgba(52, 211, 153, 0.98)';
+        ctx.fillText(label, ppx + 17, ppy - 15);
+        ctx.restore();
+      }
 
       const frameMs = performance.now() - frameStart;
       if (PERF_TRACE && frameMs > PERF_FRAME_WARN_MS && furnitureItemsRef.current.length > 0) {
