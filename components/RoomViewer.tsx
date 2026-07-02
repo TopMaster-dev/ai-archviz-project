@@ -52,6 +52,7 @@ import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
 import { effectiveTextureShortEdgeMeters, effectiveTextureTileMeters } from '../lib/materialPhysical.js';
 import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
+import { applyFurniturePatch, resolveMoveMembers } from '../utils/furnitureGroupMove.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -1406,7 +1407,13 @@ const GLTFFurniture: React.FC<{
             rotation: [g.rotation.x, g.rotation.y, g.rotation.z]
         };
         const clamped = clampFurnitureItemToRoom(draft, centerMm, polygonMm);
-        onFurniturePatch(clamped.id, clamped.position, clamped.rotation);
+        // 移動時は rotation を渡さない（undefined）。回転値を常に渡すと下流の groupMove 判定(!rotation)が
+        // 常に false になり、グループ/複数選択が一緒に動かない（260703 クライアント報告の原因）。回転ドラッグ時のみ渡す。
+        onFurniturePatch(
+          clamped.id,
+          clamped.position,
+          dragKindRef.current === 'rotate' ? clamped.rotation : undefined
+        );
         g.position.set(clamped.position[0], clamped.position[1], clamped.position[2]);
         g.rotation.set(clamped.rotation[0], clamped.rotation[1], clamped.rotation[2]);
     }, [centerMm, polygonMm, item, onFurniturePatch]);
@@ -3398,21 +3405,11 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             centerMm={sketchFloorPolygon?.centerMm}
                             polygonMm={sketchFloorPolygon?.polygonMm}
                             onFurniturePatch={(id, position, rotation) => {
-                              const moveSet = new Set(useProjectStore.getState().selectedIds);
-                              onFurnitureUpdate((prev) => {
-                                const target = prev.find((f) => f.id === id);
-                                // 移動（rotation 無し）かつ複数選択中は、選択メンバー全員を同じ差分で動かす（260623・Cフェーズ3）。
-                                const groupMove = !!target && !rotation && moveSet.size > 1 && moveSet.has(id);
-                                const dx = target ? position[0] - target.position[0] : 0;
-                                const dz = target ? position[2] - target.position[2] : 0;
-                                return prev.map((f) => {
-                                  if (f.id === id) return { ...f, position, ...(rotation ? { rotation } : {}) };
-                                  if (groupMove && moveSet.has(f.id)) {
-                                    return { ...f, position: [f.position[0] + dx, f.position[1], f.position[2] + dz] as [number, number, number] };
-                                  }
-                                  return f;
-                                });
-                              });
+                              // 一緒に動かす集合は「所属グループのメンバー ∪ 複数選択」から求める（選択のタイミングに依存せず
+                              // グループが確実に一緒に動く・260703 クライアント報告対応）。移動はグループ全員、回転は対象のみ。
+                              const state = useProjectStore.getState();
+                              const moveMembers = resolveMoveMembers(id, state.scene.groups, state.selectedIds);
+                              onFurnitureUpdate((prev) => applyFurniturePatch(prev, id, position, rotation, moveMembers));
                             }}
                             onFurnitureDragStart={beginDragInteraction}
                             onFurnitureDragEnd={endDragInteraction}
