@@ -247,26 +247,29 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   // プロジェクトカード（260623: カテゴリ別に2回マップするため関数化）。
   const renderCard = (p: ProjectSummary) => {
     const active = p.id === projectId;
+    // パネル内の操作要素（名称変更入力・メモ・操作ボタン）はカード全体のクリック/ダブルクリックを
+    // 発火させない（例: 削除ボタンやメモ入力でプロジェクトが開いてしまうのを防ぐ）。260702。
+    const stopEvent = (e: { stopPropagation: () => void }) => e.stopPropagation();
     return (
       <li
         key={p.id}
-        className={`flex flex-col overflow-hidden rounded-xl border transition ${
+        onClick={() => {
+          if (!busy) void switchProject(p.id);
+        }}
+        onDoubleClick={() => {
+          if (!busy) void openProject(p.id);
+        }}
+        title="クリックで選択 / ダブルクリックで開く"
+        className={`flex cursor-pointer flex-col overflow-hidden rounded-xl border transition ${
           active
             ? 'border-emerald-500/60 bg-emerald-500/5'
             : 'border-white/10 bg-neutral-900/40 hover:border-white/25'
         }`}
       >
-        {/* サムネイル（クリックで選択） */}
-        <button
-          type="button"
-          onClick={() => void switchProject(p.id)}
-          onDoubleClick={() => void openProject(p.id)}
-          disabled={busy}
-          title="クリックで選択 / ダブルクリックで開く"
-          className="block aspect-video w-full overflow-hidden bg-neutral-800 disabled:opacity-60"
-        >
+        {/* サムネイル（パネル全体クリックで選択・ダブルクリックで開く・260702） */}
+        <div className="block aspect-video w-full overflow-hidden bg-neutral-800">
           <ProjectThumb url={p.thumbnail_url} name={p.name} />
-        </button>
+        </div>
 
         {/* 情報 + 操作 */}
         <div className="flex flex-1 flex-col gap-2 p-3">
@@ -274,12 +277,15 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
             <input
               autoFocus
               value={nameDraft}
+              onClick={stopEvent}
+              onDoubleClick={stopEvent}
               onChange={(e) => setNameDraft(e.target.value)}
               onBlur={() => {
                 setRenaming(false);
                 void renameCurrentProject(nameDraft);
               }}
               onKeyDown={(e) => {
+                e.stopPropagation();
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
               }}
               className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm outline-none focus:border-emerald-500"
@@ -290,9 +296,16 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
             </span>
           )}
           <span className="text-[11px] text-neutral-500">更新 {fmtDate(p.updated_at)}</span>
-          <ProjectMemoField memo={p.memo ?? ''} onSave={(m) => void updateProjectMemo(p.id, m)} />
+          {/* メモ入力はカードのクリック/ダブルクリックを発火させない（入力・単語選択の妨げ防止）。 */}
+          <div onClick={stopEvent} onDoubleClick={stopEvent}>
+            <ProjectMemoField memo={p.memo ?? ''} onSave={(m) => void updateProjectMemo(p.id, m)} />
+          </div>
 
-          <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-1 text-xs">
+          <div
+            onClick={stopEvent}
+            onDoubleClick={stopEvent}
+            className="mt-auto flex flex-wrap items-center gap-1.5 pt-1 text-xs"
+          >
             {active && (
               <>
                 <button
