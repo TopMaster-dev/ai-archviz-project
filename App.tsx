@@ -9,6 +9,7 @@ import { RoomViewer } from './components/RoomViewer.js';
 import { ModelRoot } from './components/ModelRoot.js';
 import { ModelFilePreview } from './components/ModelFilePreview.js';
 import { CameraPresetBar } from './components/CameraPresetBar.js';
+import { MovablePanel } from './components/MovablePanel.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
@@ -1397,24 +1398,9 @@ const App: React.FC = () => {
   // → キャンバスは常に Undo/Redo アイコンの約15px下から始まり、ツールバー領域に食い込まない。未計測時は132で代替。
   const canvasTopInset = headerHeight > 0 ? headerHeight + 89 : 132;
 
-  // 3D下部のカメラ操作バー行の実測高さ(px)。選択操作バーをこの上へ積んで重なりを防ぐ（260703 クライアント報告）。
-  // カメラバーは折り返しで高さが変わるため固定オフセットでなく実測で追従する（headerBar と同方式）。
-  const [cameraRowHeight, setCameraRowHeight] = useState(0);
-  const cameraRowObserverRef = useRef<ResizeObserver | null>(null);
-  const setCameraRowNode = useCallback((node: HTMLDivElement | null) => {
-    cameraRowObserverRef.current?.disconnect();
-    cameraRowObserverRef.current = null;
-    if (!node) {
-      setCameraRowHeight(0);
-      return;
-    }
-    const update = () => setCameraRowHeight(Math.round(node.getBoundingClientRect().height));
-    update();
-    const ro = new ResizeObserver(update);
-    ro.observe(node);
-    cameraRowObserverRef.current = ro;
-  }, []);
-  useEffect(() => () => { cameraRowObserverRef.current?.disconnect(); }, []);
+  // 視点操作パネル（MovablePanel）の画面上矩形。選択操作バーが「パネルが下部中央バンドに被るときだけ」上へ
+  // 逃げるための位置依存判定に使う（260703 検証B: 高さのみだとパネルを動かした後に空中へ浮く不具合を回避）。
+  const [cameraPanelRect, setCameraPanelRect] = useState<{ top: number; bottom: number } | null>(null);
 
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
@@ -3388,8 +3374,16 @@ const App: React.FC = () => {
                  return (
                    <div
                      className="pointer-events-none absolute left-1/2 z-40 -translate-x-1/2"
-                     // 3D ではカメラ操作バー行の実測高さ分だけ上へ積んで重なりを防ぐ（260703）。2D/未計測は従来の bottom-6(24px)。
-                     style={{ bottom: viewMode === '3D' && cameraRowHeight > 0 ? cameraRowHeight + 24 + 8 : 24 }}
+                     // 視点操作パネルが下部中央バンド（画面下端付近＋下半分）に被るときだけ、その上端の少し上へ逃がす。
+                     // パネルを別の位置へ動かした後は下部中央バンドから外れるので従来の bottom-6(24px) に戻る（260703 検証B）。
+                     style={{
+                       bottom: (() => {
+                         if (viewMode !== '3D' || !cameraPanelRect) return 24;
+                         const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+                         const inBottomBand = cameraPanelRect.bottom > vh - 48 && cameraPanelRect.top > vh * 0.5;
+                         return inBottomBand ? Math.max(24, vh - cameraPanelRect.top + 8) : 24;
+                       })(),
+                     }}
                    >
                      <div className="glass pointer-events-auto flex items-center gap-1 rounded-2xl border border-white/10 bg-black/60 px-2 py-1.5 shadow-xl backdrop-blur-md">
                        <span className="px-1.5 text-[10px] font-black uppercase tracking-widest text-neutral-400">
@@ -4421,8 +4415,8 @@ const App: React.FC = () => {
                     })()}
                     </div>
 
-                            {/* --- BOTTOM ROW (Debug, Camera presets, Furniture) --- */}
-                            <div ref={setCameraRowNode} className="absolute bottom-6 left-6 right-6 z-40 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
+                            {/* --- BOTTOM ROW (Debug, Furniture) --- 視点操作パネルは MovablePanel(fixed)で別描画。 */}
+                            <div className="absolute bottom-6 left-6 right-6 z-40 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
                                 <div className="flex-1 min-w-0 flex justify-start">
                                     {renderState.debugBaseUrl ? (
                                         <div className="group cursor-pointer pointer-events-auto animate-in fade-in slide-in-from-bottom-4" onClick={() => setShowDebugModal(true)}>
@@ -4436,42 +4430,46 @@ const App: React.FC = () => {
                                     ) : null}
                                 </div>
 
-                                <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2 pointer-events-none">
-                                    {/* 3Dビューの操作ガイドは削除し、操作ガイド（オンボーディングパネル）へ統合（260701・クライアント要望）。 */}
-                                    <CameraPresetBar
-                                        presets={cameraPresets}
-                                        lastAppliedId={lastAppliedPresetId}
-                                        disabled={
-                                            renderState.isRendering ||
-                                            snapshotMode ||
-                                            maskMode ||
-                                            captureStep !== 'idle'
-                                        }
-                                        cameraMode={cameraMode}
-                                        onCameraModeChange={handleCameraModeChange}
-                                        cameraFov={cameraFov}
-                                        onCameraFovChange={setCameraFov}
-                                        eyeHeightMm={eyeHeightMm}
-                                        onEyeHeightMmChange={setEyeHeightMm}
-                                        onSaveCurrent={handleSaveCameraPreset}
-                                        onApply={applyCameraPreset}
-                                        onDelete={handleDeleteCameraPreset}
-                                        onRename={handleRenameCameraPreset}
-                                    />
-                                    {cameraMode === 'walk' &&
-                                        !(
-                                            renderState.isRendering ||
-                                            snapshotMode ||
-                                            maskMode ||
-                                            captureStep !== 'idle'
-                                        ) && (
-                                            <WalkMovePad
-                                                disabled={false}
-                                                walkDigitalInputRef={walkDigitalInputRef}
-                                                className="self-center"
-                                            />
-                                        )}
-                                </div>
+                                {/* 視点操作パネルはドラッグ移動・拡大縮小できるフローティングに（260703 クライアント要望）。
+                                    家具ギズモに被って選択できない問題を、任意位置・任意サイズへ動かして回避できる。
+                                    fixed 配置のためこの flex 行のレイアウト（デバッグ左・家具ストリップ右）には影響しない。 */}
+                                <MovablePanel storageKey="arise.camera-panel.v1" label="視点操作" onRect={setCameraPanelRect}>
+                                    <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2">
+                                        <CameraPresetBar
+                                            presets={cameraPresets}
+                                            lastAppliedId={lastAppliedPresetId}
+                                            disabled={
+                                                renderState.isRendering ||
+                                                snapshotMode ||
+                                                maskMode ||
+                                                captureStep !== 'idle'
+                                            }
+                                            cameraMode={cameraMode}
+                                            onCameraModeChange={handleCameraModeChange}
+                                            cameraFov={cameraFov}
+                                            onCameraFovChange={setCameraFov}
+                                            eyeHeightMm={eyeHeightMm}
+                                            onEyeHeightMmChange={setEyeHeightMm}
+                                            onSaveCurrent={handleSaveCameraPreset}
+                                            onApply={applyCameraPreset}
+                                            onDelete={handleDeleteCameraPreset}
+                                            onRename={handleRenameCameraPreset}
+                                        />
+                                        {cameraMode === 'walk' &&
+                                            !(
+                                                renderState.isRendering ||
+                                                snapshotMode ||
+                                                maskMode ||
+                                                captureStep !== 'idle'
+                                            ) && (
+                                                <WalkMovePad
+                                                    disabled={false}
+                                                    walkDigitalInputRef={walkDigitalInputRef}
+                                                    className="self-center"
+                                                />
+                                            )}
+                                    </div>
+                                </MovablePanel>
 
                                 <div className="flex-1 flex justify-end">
                                     <FurnitureAssetStrip
