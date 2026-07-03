@@ -1401,7 +1401,7 @@ const App: React.FC = () => {
 
   // 視点操作パネル（MovablePanel）の画面上矩形。選択操作バーが「パネルが下部中央バンドに被るときだけ」上へ
   // 逃げるための位置依存判定に使う（260703 検証B: 高さのみだとパネルを動かした後に空中へ浮く不具合を回避）。
-  const [cameraPanelRect, setCameraPanelRect] = useState<{ top: number; bottom: number } | null>(null);
+  const [cameraPanelRect, setCameraPanelRect] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
 
   // 操作パネル3枚（視点操作/オブジェクト情報/マテリアル）の最前面制御と移動可能領域（260703(2) クライアント要望）。
   // 最後に mousedown したパネルを最前面へ＝他パネルの下や画面外に潜って取り出せなくなるのを防ぐ。z は 41..43（ヘッダ z-50 未満）。
@@ -3450,14 +3450,26 @@ const App: React.FC = () => {
                  return (
                    <div
                      className="pointer-events-none absolute left-1/2 z-40 -translate-x-1/2"
-                     // 視点操作パネルが下部中央バンド（画面下端付近＋下半分）に被るときだけ、その上端の少し上へ逃がす。
-                     // パネルを別の位置へ動かした後は下部中央バンドから外れるので従来の bottom-6(24px) に戻る（260703 検証B）。
+                     // 視点操作パネルが下部でこのバー（ビュー領域の水平中央）に「縦にも横にも」被るときだけ、その上端の
+                     // 少し上へ逃がす。パネルを左右にどければ横方向で被らなくなり従来の bottom-6(24px) に戻る。
+                     // 以前は縦バンドのみ判定だったため、パネルを下部の隅へ置いても被っていないのにバーが中央で浮いていた
+                     // （260703 クライアント指摘）。横方向の重なりも条件に加えて解消。
                      style={{
                        bottom: (() => {
                          if (viewMode !== '3D' || !cameraPanelRect) return 24;
                          const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+                         const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
                          const inBottomBand = cameraPanelRect.bottom > vh - 48 && cameraPanelRect.top > vh * 0.5;
-                         return inBottomBand ? Math.max(24, vh - cameraPanelRect.top + 8) : 24;
+                         // バーはビュー領域の水平中央。パネルが「バーの中央付近を実際に覆う」ときだけ上へ逃がす。
+                         // 隅に置いたパネルにバーの端が僅かに触れる程度では逃がさない（＝下段に留める・クライアント指摘）。
+                         const barCenterX = viewAreaRect ? (viewAreaRect.left + viewAreaRect.right) / 2 : vw / 2;
+                         const CENTER_MARGIN = 40; // バー中央のこの範囲をパネルが覆うときのみ回避
+                         const coversBarCenter =
+                           cameraPanelRect.left < barCenterX + CENTER_MARGIN &&
+                           cameraPanelRect.right > barCenterX - CENTER_MARGIN;
+                         return inBottomBand && coversBarCenter
+                           ? Math.max(24, vh - cameraPanelRect.top + 8)
+                           : 24;
                        })(),
                      }}
                    >

@@ -66,8 +66,8 @@ export function MovablePanel({
   zIndex?: number;
   /** パネル上で mousedown したら最前面へ（App が採番を更新）。 */
   onFocus?: () => void;
-  /** パネルの画面上の矩形（倍率込みの top/bottom）を通知。重なり回避（位置依存）に使う。消滅時は null。 */
-  onRect?: (rect: { top: number; bottom: number } | null) => void;
+  /** パネルの画面上の矩形（倍率込み・top/bottom/left/right）を通知。重なり回避（位置依存）に使う。消滅時は null。 */
+  onRect?: (rect: { top: number; bottom: number; left: number; right: number } | null) => void;
   children: ReactNode;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
@@ -159,7 +159,7 @@ export function MovablePanel({
     if (!el || !onRect) return;
     const notify = () => {
       const r = el.getBoundingClientRect();
-      onRect({ top: r.top, bottom: r.bottom });
+      onRect({ top: r.top, bottom: r.bottom, left: r.left, right: r.right });
     };
     notify();
     const ro = new ResizeObserver(notify);
@@ -174,7 +174,7 @@ export function MovablePanel({
     const el = rootRef.current;
     if (!el || !onRect) return;
     const r = el.getBoundingClientRect();
-    onRect({ top: r.top, bottom: r.bottom });
+    onRect({ top: r.top, bottom: r.bottom, left: r.left, right: r.right });
   }, [onRect, pos, scale]);
 
   // ドラッグ（window で move/up を拾い、パネル外でも追従）。
