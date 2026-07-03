@@ -305,6 +305,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const lastFurnitureHoverCursorRef = useRef<Point | null>(null);
   /** 選択家具の回転リング上のみホバー（描画ハイライト用） */
   const furnitureRingHoverRef = useRef(false);
+  // 自由梁の回転リングのホバー強調（家具と同様・260703 クライアント要望）。
+  const beamRingHoverRef = useRef(false);
 
   /** ズームアウト時の描画ループ暴走を防ぐ */
   const MAX_VIEW_GRID_ITER = 600;
@@ -368,6 +370,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   /** リングヒット：弧付近のみ。内側の広い誤検出を減らす非対称帯 */
   const RING_HIT_INNER_PX = 6;
   const RING_HIT_OUTER_PX = 12;
+  // 自由梁の回転リングは操作しやすいよう外側の当たり幅を広げ、回転を優先させる（260703 クライアント要望）。
+  const BEAM_RING_HIT_OUTER_PX = 20;
 
   const FURNITURE_ROTATION_SNAP_RAD = (10 * Math.PI) / 180;
 
@@ -609,6 +613,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const ringR = getFurnitureRotationRingRadiusPx(width, depth, z);
     const dist = Math.hypot(pixels.x - centerPx.x, pixels.y - centerPx.y);
     return dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + RING_HIT_OUTER_PX;
+  };
+
+  /** 選択中の自由梁の回転リング帯にポインタが当たるか（ホバー強調＋回転優先用・260703）。ポインタ下の作図と同一幾何。 */
+  const hitTestBeamRotationRing = (pixels: Point): boolean => {
+    const sel = beamsRef.current.find((b) => b.id === selectedBeamIdRef.current && b.wallIndex === undefined);
+    if (!sel) return false;
+    const cPx = worldToScreen({ x: sel.cx, y: sel.cy });
+    const ringR = getFurnitureRotationRingRadiusPx(sel.widthMm, sel.widthMm, viewZoomRef.current);
+    const dist = Math.hypot(pixels.x - cPx.x, pixels.y - cPx.y);
+    return dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + BEAM_RING_HIT_OUTER_PX;
   };
 
   /** 足跡 or 回転リングのどちらかに当たる最前面の家具（リングのみでも拾う） */
@@ -1031,7 +1045,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         const cPx = worldToScreen({ x: sel.cx, y: sel.cy });
         const ringR = getFurnitureRotationRingRadiusPx(sel.widthMm, sel.widthMm, viewZoomRef.current);
         const dist = Math.hypot(pixels.x - cPx.x, pixels.y - cPx.y);
-        if (dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + RING_HIT_OUTER_PX) {
+        // 回転リング帯（外側を広めに）を本体ヒットより先に判定し、リング範囲では回転を優先する（260703 クライアント要望）。
+        if (dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + BEAM_RING_HIT_OUTER_PX) {
           beamDragRef.current = { id: sel.id, mode: 'rotate', startMm: mm, startCx: sel.cx, startCy: sel.cy };
           tryPointerCapture(e);
           return;
@@ -1545,6 +1560,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       furnitureRingHoverRef.current = false;
       canvas.style.cursor = 'auto';
     }
+
+    // 自由梁の回転リングのホバー強調（家具と同様・天伏図の選択/梁モード時・260703 クライアント要望）。
+    if (isCeilingView && (isSelectMode || isBeamMode) && !beamDragRef.current) {
+      const onBeamRing = hitTestBeamRotationRing(pixels);
+      beamRingHoverRef.current = onBeamRing;
+      if (onBeamRing && canvas) canvas.style.cursor = 'grab';
+    } else {
+      beamRingHoverRef.current = false;
+    }
   };
 
   const handlePointerUp = () => {
@@ -1601,6 +1625,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     lastMousePixelsRef.current = null;
     lastFurnitureHoverCursorRef.current = null;
     furnitureRingHoverRef.current = false;
+    beamRingHoverRef.current = false;
     if (canvasRef.current) canvasRef.current.style.cursor = 'auto';
   };
 
@@ -2435,13 +2460,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             // リングは梁中央の近くに置く（梁幅基準・長さ基準だと両端へ広がるため・260623）。
             const ringR = getFurnitureRotationRingRadiusPx(beam.widthMm, beam.widthMm, currentZoom);
             const rotating = beamDragRef.current?.mode === 'rotate' && beamDragRef.current.id === beam.id;
+            // ホバー時は家具の回転リングと同様に水色でハイライト（260703 クライアント要望）。回転中は除外。
+            const beamRingHi = beamRingHoverRef.current && !rotating;
+            const beamRingStroke = beamRingHi ? '#93c5fd' : '#2563eb';
             ctx.save();
             ctx.translate(cPx.x, cPx.y);
             drawFurnitureRotationRingIcon(ctx, ringR, {
               dashed: rotating,
               lineWidth: Math.max(1.5, 2.2 * getArrowGizmoScale(currentZoom)),
-              strokeStyle: '#2563eb',
-              fillStyle: '#2563eb',
+              strokeStyle: beamRingStroke,
+              fillStyle: beamRingStroke,
               gizmoScale: getArrowGizmoScale(currentZoom),
             });
             ctx.restore();

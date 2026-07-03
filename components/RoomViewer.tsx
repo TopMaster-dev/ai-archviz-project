@@ -299,6 +299,15 @@ const Beam3DMesh: React.FC<{
     if (isWallBeam) return;
     const p = intersectAtY(e.clientX, e.clientY, by);
     if (!p) return;
+    // 回転ギズモの操作範囲内で押下したら回転を優先（移動より優先・260703）。
+    // リング帯（家具と同じ判定）に乗っていれば回転ドラッグへ切替える。
+    {
+      const ringR = Math.max(0.3, widthM);
+      if (isPointerOnFurnitureRingXZ({ x: p.x, z: p.z }, { x: bx, z: bz }, ringR)) {
+        startRotate(e);
+        return;
+      }
+    }
     dragRef.current = { mode: 'move', startCx: beam.cx, startCy: beam.cy, startWx: p.x, startWz: p.z, planeY: by, cbx: bx, cbz: bz };
     liveRef.current = { cx: beam.cx, cy: beam.cy, angleDeg: beam.angleDeg, lengthMm: beam.lengthMm };
     setIsDragging(true); // ドラッグ中は箱＋スケールでライブ表現（角柱から切替）
@@ -314,6 +323,33 @@ const Beam3DMesh: React.FC<{
   };
 
   const [isDragging, setIsDragging] = useState(false);
+  // 回転ギズモのハイライト（家具と同仕様・260703）。ウィンドウの pointermove で
+  // リング帯の内外を判定する ringHoverDist と、リングメッシュ自身の onPointerOver
+  // による ringMeshHover のいずれかで点灯する。自由梁のみ（壁梁は回転不可）。
+  const [ringHoverDist, setRingHoverDist] = useState(false);
+  const [ringMeshHover, setRingMeshHover] = useState(false);
+  const ringHighlight = ringHoverDist || ringMeshHover;
+
+  // リング帯上にポインタが乗っているかをウィンドウ全体の pointermove で追跡（家具と同仕様）。
+  // ドラッグ中は判定しない。壁梁・非選択・非編集時はハイライトを消す。
+  useEffect(() => {
+    if (!isSelected || isWallBeam || !editable) {
+      setRingHoverDist(false);
+      return;
+    }
+    const onMove = (e: PointerEvent) => {
+      if (dragRef.current) return;
+      const p = intersectAtY(e.clientX, e.clientY, by);
+      if (!p) {
+        setRingHoverDist(false);
+        return;
+      }
+      const ringR = Math.max(0.3, widthM);
+      setRingHoverDist(isPointerOnFurnitureRingXZ({ x: p.x, z: p.z }, { x: bx, z: bz }, ringR));
+    };
+    window.addEventListener('pointermove', onMove);
+    return () => window.removeEventListener('pointermove', onMove);
+  }, [isSelected, isWallBeam, editable, intersectAtY, by, bx, bz, widthM]);
 
   // 壁梁のコーナー接合（2b の 3D 版）。2D と同じ getWallBeamBandCornersMm でマイターした
   // 室内側バンドの四隅を、天井(by+h/2)から下端(by-h/2)まで押し出した角柱として描く。
@@ -379,11 +415,16 @@ const Beam3DMesh: React.FC<{
         <group position={[bx, by, bz]}>
           <FurnitureRotationRing3D
             radius={Math.max(0.3, widthM)}
-            highlighted={false}
+            highlighted={ringHighlight}
             isDashed={isDragging}
             onRingPointerDown={startRotate}
-            onRingPointerOver={() => {}}
-            onRingPointerOut={() => {}}
+            onRingPointerOver={(e) => {
+              if (dragRef.current) return;
+              const p = intersectAtY(e.clientX, e.clientY, by);
+              const ringR = Math.max(0.3, widthM);
+              setRingMeshHover(!!p && isPointerOnFurnitureRingXZ({ x: p.x, z: p.z }, { x: bx, z: bz }, ringR));
+            }}
+            onRingPointerOut={() => setRingMeshHover(false)}
           />
         </group>
       )}
