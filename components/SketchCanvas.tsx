@@ -2594,9 +2594,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               天伏図
             </button>
           </div>
-          {/* 天伏図の透明度を平面/天伏トグルと同じグループ（同一カード）内へ（260630・クライアント要望） */}
+          {/* 非アクティブ図面の透明度を平面/天伏トグルと同じグループ（同一カード）内へ（260630・クライアント要望）。
+              ラベルは調整対象＝「今表示していない側の図面」を示す（260703・クライアント要望）:
+              平面図の表示時→天伏図の透明度 / 天伏図の表示時→平面図の透明度。 */}
           <div className="mt-2 flex items-center gap-2 border-t border-white/5 px-1 pt-2 text-[10px] text-neutral-400">
-            <span title="非アクティブな図面（平面/天伏）の表示濃度">天伏図の透明度</span>
+            <span title="非アクティブな図面（平面/天伏）の表示濃度">
+              {isCeilingView ? '平面図の透明度' : '天伏図の透明度'}
+            </span>
             <input
               type="range"
               min={0}
