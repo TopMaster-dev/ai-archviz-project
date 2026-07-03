@@ -1052,6 +1052,35 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           return;
         }
       }
+      // 壁梁も選択ツールで選択できるようにする（260703 クライアント要望）。壁固定なので移動/回転はせず選択のみ。
+      // 描画（getWallSegment から幾何導出 → 室内側へ widthMm のバンド）と同じ幾何でヒット判定する。
+      if (isSelectMode) {
+        const centroid = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
+        for (const b of beamsRef.current) {
+          if (b.wallIndex === undefined) continue; // 壁梁のみ
+          const w = getWallSegment(pointsMm, b.wallIndex);
+          if (!w) continue;
+          const cxw = (w.p1.x + w.p2.x) / 2;
+          const cyw = (w.p1.y + w.p2.y) / 2;
+          const rad = Math.atan2(w.dy, w.dx);
+          const ux = Math.cos(rad);
+          const uy = Math.sin(rad);
+          // 室内側（重心方向）の法線。壁梁は壁線から室内側へ widthMm のバンドとして描かれる。
+          let px = -uy;
+          let py = ux;
+          if (centroid && px * (centroid.x - cxw) + py * (centroid.y - cyw) < 0) { px = -px; py = -py; }
+          const bandCx = cxw + px * (b.widthMm / 2);
+          const bandCy = cyw + py * (b.widthMm / 2);
+          const rx = mm.x - bandCx;
+          const ry = mm.y - bandCy;
+          const along = rx * ux + ry * uy;
+          const perp = rx * px + ry * py;
+          if (Math.abs(along) <= w.length / 2 && Math.abs(perp) <= b.widthMm / 2) {
+            setSelectedBeamId(b.id);
+            return;
+          }
+        }
+      }
     }
 
     // --- 梁モード: 壁にスナップして壁梁、空きスペースなら自由梁を配置 ---
