@@ -1402,6 +1402,24 @@ const App: React.FC = () => {
   // 逃げるための位置依存判定に使う（260703 検証B: 高さのみだとパネルを動かした後に空中へ浮く不具合を回避）。
   const [cameraPanelRect, setCameraPanelRect] = useState<{ top: number; bottom: number } | null>(null);
 
+  // 操作パネル3枚（視点操作/オブジェクト情報/マテリアル）の最前面制御と移動可能領域（260703(2) クライアント要望）。
+  // 最後に mousedown したパネルを最前面へ＝他パネルの下や画面外に潜って取り出せなくなるのを防ぐ。z は 41..43（ヘッダ z-50 未満）。
+  const [panelOrder, setPanelOrder] = useState<string[]>(['info', 'assets', 'camera']);
+  const bringPanelToFront = useCallback((id: string) => {
+    setPanelOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]));
+  }, []);
+  const panelZ = (id: string) => 41 + Math.max(0, panelOrder.indexOf(id));
+  // ドラッグ可能領域＝3Dプレビュー内（上部ヘッダの下〜画面端の少し内側）。パネルが画面外/ヘッダへ飛び出さないよう制限。
+  const getPreviewBounds = useCallback(
+    () => ({
+      left: 8,
+      top: 24 + headerHeight + 8,
+      right: (typeof window !== 'undefined' ? window.innerWidth : 1200) - 8,
+      bottom: (typeof window !== 'undefined' ? window.innerHeight : 800) - 8,
+    }),
+    [headerHeight],
+  );
+
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
     setRenderState((prev) => {
@@ -3685,7 +3703,16 @@ const App: React.FC = () => {
                         };
 
                         return (
-                            <div className={`absolute top-6 right-6 ${propertyPanelWidthClass} flex flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark`}>
+                            // オブジェクト情報/プロパティ列もフローティング化（移動・拡大・最前面・プレビュー内制限・260703(2)）。
+                            <MovablePanel
+                                storageKey="arise.property-panel.v1"
+                                label="オブジェクト情報"
+                                anchor="top-right"
+                                getBounds={getPreviewBounds}
+                                zIndex={panelZ('info')}
+                                onFocus={() => bringPanelToFront('info')}
+                            >
+                            <div className={`${propertyPanelWidthClass} flex flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark`}>
                                 {!hasAnySelection && (
                                     <div className={`${propertyCardBaseClass} px-4 py-4`}>
                                         <p className="text-[11px] font-black uppercase tracking-widest text-emerald-300">プロパティ</p>
@@ -4411,6 +4438,7 @@ const App: React.FC = () => {
                                     );
                                 })()}
                             </div>
+                            </MovablePanel>
                         );
                     })()}
                     </div>
@@ -4433,7 +4461,15 @@ const App: React.FC = () => {
                                 {/* 視点操作パネルはドラッグ移動・拡大縮小できるフローティングに（260703 クライアント要望）。
                                     家具ギズモに被って選択できない問題を、任意位置・任意サイズへ動かして回避できる。
                                     fixed 配置のためこの flex 行のレイアウト（デバッグ左・家具ストリップ右）には影響しない。 */}
-                                <MovablePanel storageKey="arise.camera-panel.v1" label="視点操作" onRect={setCameraPanelRect}>
+                                <MovablePanel
+                                    storageKey="arise.camera-panel.v1"
+                                    label="視点操作"
+                                    anchor="bottom-center"
+                                    getBounds={getPreviewBounds}
+                                    zIndex={panelZ('camera')}
+                                    onFocus={() => bringPanelToFront('camera')}
+                                    onRect={setCameraPanelRect}
+                                >
                                     <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2">
                                         <CameraPresetBar
                                             presets={cameraPresets}
@@ -4471,7 +4507,15 @@ const App: React.FC = () => {
                                     </div>
                                 </MovablePanel>
 
-                                <div className="flex-1 flex justify-end">
+                                {/* マテリアル/家具カタログもフローティング化（移動・拡大・最前面・プレビュー内制限・260703(2)）。 */}
+                                <MovablePanel
+                                    storageKey="arise.asset-strip.v1"
+                                    label="マテリアル"
+                                    anchor="bottom-right"
+                                    getBounds={getPreviewBounds}
+                                    zIndex={panelZ('assets')}
+                                    onFocus={() => bringPanelToFront('assets')}
+                                >
                                     <FurnitureAssetStrip
                                         processedCatalog={processedCatalog}
                                         assetCategories={assetCategories}
@@ -4483,7 +4527,7 @@ const App: React.FC = () => {
                                         fetchErrorMessage={furnitureCatalogErrorText}
                                         onUploadModel={handleUploadModelClick}
                                     />
-                                </div>
+                                </MovablePanel>
                             </div>
                     </>
                 </div>
