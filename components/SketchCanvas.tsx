@@ -306,7 +306,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   /** 家具ドラッグ／回転は ref のみ更新し pointerup で React へ1回コミット（pointermove 毎の setState を避ける） */
   type FurnitureInteractionPreview =
-    | { kind: 'move'; id: string; centerMm: Point }
+    // members/dxMm/dzMm: 複数選択の移動プレビュー。非ドラッグメンバーも同差分でライブ追従させる（260703）。
+    | { kind: 'move'; id: string; centerMm: Point; members?: Set<string>; dxMm?: number; dzMm?: number }
     | { kind: 'rotate'; id: string; yaw: number }
     // グループ回転プレビュー（260703）: members 全員を centroidXZ まわりに dTheta 回すライブ表示。
     | { kind: 'groupRotate'; members: Set<string>; centroidXZ: Vec2XZ; dTheta: number };
@@ -606,6 +607,17 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       const nx = pv.centroidXZ.x + dx * cos + dz * sin;
       const nz = pv.centroidXZ.z - dx * sin + dz * cos;
       return { center: furniturePositionToMm([nx, item.position[1], nz], centerMm), yaw: base.yaw + pv.dTheta };
+    }
+    // 複数選択の移動: 非ドラッグメンバーもドラッグ対象と同差分でライブ追従（1テンポ遅れの解消・260703）。
+    if (
+      pv.kind === 'move' &&
+      pv.id !== item.id &&
+      pv.members &&
+      pv.members.has(item.id) &&
+      pv.dxMm !== undefined &&
+      pv.dzMm !== undefined
+    ) {
+      return { center: { x: base.center.x + pv.dxMm, y: base.center.y + pv.dzMm }, yaw: base.yaw };
     }
     if (pv.id === item.id) {
       if (pv.kind === 'move') return { center: pv.centerMm, yaw: base.yaw };
@@ -1227,7 +1239,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         setSelectedPointIndex(null);
         setSelectedEdgeIndex(null);
         const onBody = hitTestFurnitureItem(mm, furnitureHit);
-        const onRing = hitTestFurnitureRotationRing(pixels, furnitureHit);
+        // グループ回転ギズモ表示中は個別リングでの単体回転を無効化（隠れた個別リング帯を掴んで片方だけ回る
+        // 不具合の修正・260703）。回転はグループリングが担い、ボディはグループ移動へ流す。
+        const onRing = !resolveGroupRotateContext() && hitTestFurnitureRotationRing(pixels, furnitureHit);
         let startedInteraction = false;
         if (onRing) {
           const fItem = furnitureItems.find((f) => f.id === furnitureHit.id);
@@ -1552,7 +1566,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           const prevCenter = furniturePositionToMm(item.position, centerMm);
           nextMm = slideFurnitureCenterMmWithWallContact(prevCenter, mm, yaw, width, depth, pointsMm);
         }
-        furnitureInteractionPreviewRef.current = { kind: 'move', id: draggingFurnitureId, centerMm: nextMm };
+        // 複数選択（グループ含む）中はメンバーも同差分でライブ追従（コミットと同じ raw selectedIds 集合・260703）。
+        const orig = furniturePositionToMm(item.position, centerMm);
+        const sel = useProjectStore.getState().selectedIds;
+        const members = sel.length > 1 && sel.includes(draggingFurnitureId) ? new Set(sel) : undefined;
+        furnitureInteractionPreviewRef.current = {
+          kind: 'move',
+          id: draggingFurnitureId,
+          centerMm: nextMm,
+          members,
+          dxMm: nextMm.x - orig.x,
+          dzMm: nextMm.y - orig.y,
+        };
       }
       if (canvas) canvas.style.cursor = 'grabbing';
     } else if (draggingPointIndex !== null) {

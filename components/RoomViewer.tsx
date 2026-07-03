@@ -1534,6 +1534,8 @@ const GLTFFurniture: React.FC<{
     onPostDragGuard?: () => void;
     /** グループ回転ギズモ表示中は個別リングを抑止（移動はそのまま可能・260703）。 */
     suppressRing?: boolean;
+    /** 全家具メッシュのレジストリ（グループ移動で非ドラッグメンバーもリアルタイム追従させる用・260703）。 */
+    meshRegistry?: React.MutableRefObject<Map<string, THREE.Group>>;
 }> = ({
     item,
     isSelected,
@@ -1550,12 +1552,15 @@ const GLTFFurniture: React.FC<{
     onFurnitureDragEnd,
     onHoverNameChange,
     onPostDragGuard,
-    suppressRing
+    suppressRing,
+    meshRegistry
 }) => {
     const [isHovered, setIsHovered] = useState(false);
     const groupRef = useRef<THREE.Group>(null);
     const draggingRef = useRef(false);
     const dragKindRef = useRef<'move' | 'rotate' | null>(null);
+    // 移動ドラッグ中に一緒に動かすメンバー集合（ドラッグ確定前からメッシュを直接動かしリアルタイム追従させる）。
+    const moveMembersRef = useRef<Set<string> | null>(null);
     const lastWorldRef = useRef(new THREE.Vector3());
     /** 回転ドラッグ開始時（累積 lastAngle ではスナップ時に逆回転しやすい） */
     const rotateDragStartYawRef = useRef(0);
@@ -1568,6 +1573,25 @@ const GLTFFurniture: React.FC<{
     const tmpPos = useMemo(() => new THREE.Vector3(), []);
 
     const ringRadiusM = useMemo(() => getFurnitureRingRadiusM(item), [item]);
+
+    // group の position/rotation/scale を memo 化して参照を安定させる（260703 検証 M1）。
+    // 未 memo だと毎レンダ新規 Vector3/Euler になり、R3F は「変化」と見なして item 値へ再適用する。
+    // その結果、グループ移動でメッシュを直接動かしている非ドラッグメンバーが、ドラッグ中の再レンダ
+    // （他要素の hover 等）で store 位置へ戻ってしまう。参照が安定なら再適用されず、直接移動が保たれる。
+    const posVec = useMemo(() => new THREE.Vector3(...item.position), [item.position]);
+    const rotEuler = useMemo(() => new THREE.Euler(...item.rotation), [item.rotation]);
+    const scaleVec = useMemo(() => new THREE.Vector3(...item.scale), [item.scale]);
+
+    // メッシュレジストリへ自身の group を登録（グループ移動で他メンバーのメッシュを直接動かすため）。
+    useEffect(() => {
+        if (!meshRegistry) return;
+        const reg = meshRegistry;
+        const g = groupRef.current;
+        if (g) reg.current.set(item.id, g);
+        return () => {
+            reg.current.delete(item.id);
+        };
+    }, [item.id, meshRegistry]);
 
     const showTc =
         isSelected &&
@@ -1662,6 +1686,7 @@ const GLTFFurniture: React.FC<{
         commitTransform();
         draggingRef.current = false;
         dragKindRef.current = null;
+        moveMembersRef.current = null;
         setPointerBusy(false);
         setIsRotateDragging(false);
         setRingMeshHover(false);
@@ -1678,6 +1703,8 @@ const GLTFFurniture: React.FC<{
             if (dragKindRef.current === 'move') {
                 const dx = p.x - lastWorldRef.current.x;
                 const dz = p.z - lastWorldRef.current.z;
+                const prevX = g.position.x;
+                const prevZ = g.position.z;
                 if (centerMm && polygonMm && polygonMm.length >= 3) {
                     const prevCenterMm = furniturePositionToMm(
                         [g.position.x, g.position.y, g.position.z],
@@ -1704,6 +1731,21 @@ const GLTFFurniture: React.FC<{
                     g.position.z += dz;
                 }
                 lastWorldRef.current.copy(p);
+                // グループ/複数選択のメンバーを、ドラッグ対象と同じフレーム差分で直接動かしリアルタイム追従。
+                // 確定(commit)時の applyFurniturePatch は「対象の総差分」で全員動かすため、ここの積算＝総差分に一致し飛びが無い。
+                if (moveMembersRef.current && meshRegistry) {
+                    const ddx = g.position.x - prevX;
+                    const ddz = g.position.z - prevZ;
+                    if (ddx !== 0 || ddz !== 0) {
+                        for (const mid of moveMembersRef.current) {
+                            const mg = meshRegistry.current.get(mid);
+                            if (mg) {
+                                mg.position.x += ddx;
+                                mg.position.z += ddz;
+                            }
+                        }
+                    }
+                }
             } else if (dragKindRef.current === 'rotate') {
                 g.updateMatrixWorld(true);
                 const wx = new THREE.Vector3();
@@ -1787,7 +1829,9 @@ const GLTFFurniture: React.FC<{
         }
         if (!p) return;
         const ringR = ringRadiusM;
-        const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR, FURNITURE_RING_RADIAL_TOLERANCE_M);
+        // グループ回転ギズモ表示中(suppressRing→showRing=false)は、個別リングでの単体回転を起こさない
+        // （隠れた個別リング帯を掴んで片方だけ回る不具合の修正・260703 クライアント報告）。回転はグループギズモが担う。
+        const onRingArc = showRing && isPointerOnFurnitureRingXZ(p, wx, ringR, FURNITURE_RING_RADIAL_TOLERANCE_M);
         const { width, depth } = getFurnitureFootprintMm(item);
         const wM = width / MM_PER_METER;
         const dM = depth / MM_PER_METER;
@@ -1816,6 +1860,12 @@ const GLTFFurniture: React.FC<{
             lastWorldRef.current.copy(p);
             draggingRef.current = true;
             dragKindRef.current = 'move';
+            // 一緒に動かすメンバー（所属グループ ∪ 複数選択）を控える。ドラッグ中に各メッシュを直接動かして
+            // リアルタイム追従させる（従来はドラッグ確定=pointerupまで動かず「1テンポ遅れ」だった・260703 報告）。
+            const st = useProjectStore.getState();
+            const mm = resolveMoveMembers(item.id, st.scene.groups, st.selectedIds);
+            mm.delete(item.id);
+            moveMembersRef.current = mm.size > 0 ? mm : null;
         } else {
             return;
         }
@@ -1879,9 +1929,9 @@ const GLTFFurniture: React.FC<{
                 ref={groupRef}
                 name={`${FURNITURE_NAME_PREFIX}${item.id}`}
                 visible={true}
-                position={new THREE.Vector3(...item.position)}
-                rotation={new THREE.Euler(...item.rotation)}
-                scale={new THREE.Vector3(...item.scale)}
+                position={posVec}
+                rotation={rotEuler}
+                scale={scaleVec}
             >
                 <group
                     onPointerDown={onBodyPointerDown}
@@ -3408,6 +3458,9 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
     return names;
   }, [activeMeshes, activeFurnitureId, selectedIds, selectedOpeningId, selectedBeam3DId]);
 
+  // 全家具メッシュのレジストリ（id→THREE.Group）。グループ移動で非ドラッグメンバーもドラッグ中に直接動かす（260703）。
+  const furnitureMeshRegistry = useRef<Map<string, THREE.Group>>(new Map());
+
   // グループ回転ギズモ（260703 クライアント要望「グループを一括回転」）: 複数選択/グループ(2件以上)の重心・
   // 半径・平面Y を算出。members<2 のときは null（＝個別リングのまま）。重心は剛体回転で不変なのでドラッグ中も安定。
   const groups = useStore(useProjectStore, (s) => s.scene.groups);
@@ -3609,6 +3662,7 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             onPostDragGuard={markPostDragGuard}
                             onHoverNameChange={safeHoverNameChange}
                             suppressRing={!!groupSelection}
+                            meshRegistry={furnitureMeshRegistry}
                         />
                     ))}
                     {/* グループ回転ギズモ（複数選択/グループの重心に1つ・全員を重心まわりに一括回転・260703） */}
