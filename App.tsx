@@ -1315,7 +1315,7 @@ const App: React.FC = () => {
 
   // ログイン時のみ存在するプロジェクトセッション（ゲストでは null）。一覧サムネ保存に使う（2c-i）。
   const projectSession = useOptionalProjectSession();
-  const { profile: authProfile } = useAuth();
+  const { profile: authProfile, configured: authConfigured, userId: authUserId } = useAuth();
   // 2a: プロジェクト種別。'photo' のときは写真AI編集専用UIにする。
   const activeKind = useProjectStore((s) => s.kind);
   // 2a: 写真専用オーバーレイからホームへ戻るための goHome（ゲストでは null）。
@@ -2283,6 +2283,7 @@ const App: React.FC = () => {
   const [pendingMaterialBrand, setPendingMaterialBrand] = useState('');
   const [pendingMaterialModelNumber, setPendingMaterialModelNumber] = useState('');
   const [pendingMaterialPrice, setPendingMaterialPrice] = useState('');
+  const materialUploadBusyRef = useRef(false); // 建材アップロードの二重送信ガード（3Dモデルと同方針）。
   const closeMaterialPopup = () => {
     setPendingMaterialPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
     setPendingMaterialFiles([]);
@@ -2303,48 +2304,128 @@ const App: React.FC = () => {
     setPendingMaterialName(deriveUploadName(files[0].name));
     setPendingMaterialPrice('');
   };
-  const commitMaterialUpload = () => {
+  // 建材（テクスチャ）を user-uploads（Supabase Storage＋user_uploads 台帳）へ保存してから素材パレットへ追加する。
+  // 260703 クライアント報告の修正: 従来は base64 のメモリ内 Product を作るだけで永続化していなかったため、
+  //   ・再度プロジェクトを開くと素材が消える（台帳に無く mergeTextureUploads が拾えない）
+  //   ・ホームの「マイアップロード」容量に計上されない（storage.objects に実体が無い）
+  // という不具合になっていた。3Dモデルアップロード（commitModelUpload）と同じく uploadUserFile で永続化する。
+  const applyProductToActiveMeshes = (product: Product) => {
+    if (activeMeshes.length === 0) return;
+    setSelections((prev) => {
+      const next = { ...prev };
+      activeMeshes.forEach((meshName) => { next[meshName] = product; });
+      return next;
+    });
+  };
+  const commitMaterialUpload = async () => {
+    if (materialUploadBusyRef.current) return; // 二重送信ガード（3Dモデルと同方針）。
     const files = pendingMaterialFiles;
+    if (files.length === 0) return;
+    materialUploadBusyRef.current = true;
     const chosen = pendingMaterialCategory; // null=共通（crossCategory）
     const enteredName = pendingMaterialName.trim();
-    // 商品金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。空/0/不正は 0（未設定）＝3Dモデルと同方針。
+    const enteredBrand = pendingMaterialBrand.trim();
+    const enteredModelNumber = pendingMaterialModelNumber.trim();
+    // 商品金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。空/0/不正は未設定＝3Dモデルと同方針。
     const priceNum = Math.round(Number(pendingMaterialPrice));
-    const price = pendingMaterialPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : 0;
-    files.forEach((file) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (typeof reader.result === 'string') {
-          const newProduct: Product = {
-            id: `custom-${Date.now()}-${Math.random()}`,
-            name: enteredName || file.name.split('.')[0],
-            // メーカー名未入力時は「マイアップロード」に分類する（260702 クライアント要望）。
-            // 従来は 'Custom' で「CUSTOM」グループに入っていた。ホームのアップロード建材と同じ既定に揃える。
-            brand: pendingMaterialBrand.trim() || USER_UPLOAD_BRAND,
-            modelNumber: pendingMaterialModelNumber.trim() || undefined,
-            category: chosen ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
-            crossCategory: chosen === null,
-            pricePerUnit: price,
-            unit: '㎡',
-            lossFactor: 0,
-            textureUrl: reader.result as string,
-            color: '#ffffff',
-            pbr: { roughness: 0.8, metalness: 0, reflectivity: 0, glossiness: 'Matte', normalMapStrength: 0 },
-            promptHint: '(ユーザーアップロード)',
-          };
-          setProducts((prev) => [newProduct, ...prev]);
-          // 選択中メッシュがあれば即適用（従来挙動を維持）。
-          if (activeMeshes.length > 0) {
-            setSelections((prev) => {
-              const next = { ...prev };
-              activeMeshes.forEach((meshName) => { next[meshName] = newProduct; });
-              return next;
-            });
+    const price = pendingMaterialPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : undefined;
+    // 単一ファイルは入力名を優先、複数は各ファイル名（重複名を避ける）。
+    const nameFor = (file: File) => (files.length === 1 ? enteredName || deriveUploadName(file.name) : deriveUploadName(file.name));
+    // ログイン済み（Supabase 構成済み）のときだけ Storage へ永続化。ゲスト/未構成は従来どおりメモリ内（base64）。
+    const canPersist = authConfigured && !!authUserId;
+    useLoadingStore.getState().show('material-upload', '建材をアップロード中…');
+    try {
+      if (canPersist) {
+        // 容量のソフト上限チェック（ホーム/3Dモデルと同じ挙動）。全ファイルの合計で判定。
+        const [models, textures] = await Promise.all([listUserUploads('model'), listUserUploads('texture')]);
+        const currentTotal = [...models, ...textures].reduce((sum, u) => sum + (u.bytes ?? 0), 0);
+        const addBytes = files.reduce((sum, f) => sum + f.size, 0);
+        const capMsg = checkStorageCapacity(currentTotal, addBytes);
+        if (capMsg) { alert(capMsg); return; } // 失敗＝ポップアップは閉じない（再試行可）
+        // 逐次アップロード。各ファイルは成功時点で Storage＋台帳へ確定するため、途中失敗しても
+        // 成功済みはパレットへ反映し、pending からは除去する（残りだけ再試行＝成功済みの二重アップロード/二重計上を防ぐ）。
+        const newProducts: Product[] = [];
+        let uploadErr: unknown = null;
+        let succeeded = 0;
+        for (const file of files) {
+          try {
+            const metadata: Record<string, unknown> = {};
+            if (chosen) metadata.category = chosen; // 共通=未設定
+            const nm = nameFor(file);
+            if (nm) metadata.name = nm;
+            if (enteredBrand) metadata.brand = enteredBrand;
+            if (enteredModelNumber) metadata.modelNumber = enteredModelNumber;
+            if (price !== undefined) metadata.price = price;
+            const row = await uploadUserFile(file, 'texture', { metadata });
+            newProducts.push(uploadToProduct(row)); // storageUrl 由来＝リロード後も mergeTextureUploads が拾う
+            succeeded++;
+          } catch (e) {
+            uploadErr = e;
+            break;
           }
         }
-      };
-      reader.readAsDataURL(file);
-    });
-    closeMaterialPopup();
+        // 成功分は必ずパレットへ反映（既に永続化済み＝失敗しても取りこぼさない・重複はidでdedup）。
+        if (newProducts.length > 0) {
+          setProducts((prev) => {
+            const seen = new Set(prev.map((p) => p.id));
+            const add = newProducts.filter((p) => !seen.has(p.id));
+            return add.length ? [...add, ...prev] : prev;
+          });
+          applyProductToActiveMeshes(newProducts[0]); // 選択メッシュへ先頭素材を適用
+        }
+        if (uploadErr) {
+          // 成功済みを pending から除去し、残り（失敗ファイル以降）だけ再試行させる（二重アップロード防止）。
+          const remaining = files.slice(succeeded);
+          setPendingMaterialFiles(remaining);
+          setPendingMaterialPreview((prev) => {
+            if (prev) URL.revokeObjectURL(prev);
+            return remaining.length > 0 ? URL.createObjectURL(remaining[0]) : null;
+          });
+          throw uploadErr; // 下の catch で alert（ポップアップは開いたまま）
+        }
+        closeMaterialPopup(); // 全て成功時のみ閉じる
+      } else {
+        // ゲスト/未ログイン: 従来どおりメモリ内（base64）で扱う（永続化・容量計上はされない）。
+        await Promise.all(
+          files.map(
+            (file) =>
+              new Promise<void>((resolve) => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  if (typeof reader.result === 'string') {
+                    const newProduct: Product = {
+                      id: `custom-${Date.now()}-${Math.random()}`,
+                      name: nameFor(file) || file.name.split('.')[0],
+                      brand: enteredBrand || USER_UPLOAD_BRAND,
+                      modelNumber: enteredModelNumber || undefined,
+                      category: chosen ?? 'Wall',
+                      crossCategory: chosen === null,
+                      pricePerUnit: price ?? 0,
+                      unit: '㎡',
+                      lossFactor: 0,
+                      textureUrl: reader.result as string,
+                      color: '#ffffff',
+                      pbr: { roughness: 0.8, metalness: 0, reflectivity: 0, glossiness: 'Matte', normalMapStrength: 0 },
+                      promptHint: '(ユーザーアップロード)',
+                    };
+                    setProducts((prev) => [newProduct, ...prev]);
+                    applyProductToActiveMeshes(newProduct);
+                  }
+                  resolve();
+                };
+                reader.readAsDataURL(file);
+              }),
+          ),
+        );
+        closeMaterialPopup();
+      }
+    } catch (e) {
+      console.warn('建材のアップロードに失敗:', e);
+      alert(e instanceof Error ? e.message : '建材のアップロードに失敗しました。');
+    } finally {
+      useLoadingStore.getState().hide('material-upload');
+      materialUploadBusyRef.current = false;
+    }
   };
 
   const handleProductSelect = (product: Product) => {
