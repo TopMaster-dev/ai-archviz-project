@@ -12,6 +12,8 @@ import {
   EXPORT_PREVIEW_LABEL,
   EXPORT_PREVIEW_OPTION_ID,
   EXPORT_RENDER_INPUT_MAX_SIDE,
+  EXPORT_UPSCALE_PROMPT,
+  exportPaperFooterLines,
   exportPresetFooterLines,
   exportPresetsForRatio,
   exportPreviewFooterLines,
@@ -19,7 +21,9 @@ import {
 } from '../utils/printExportSpec.js';
 import { pickClosestCropRatio } from '../utils/cropToAspect.js';
 import { aspectLabelForKey, ratioValueForKey } from '../utils/renderAspect.js';
+import { paperPixelDims, type PaperOrientation, type PaperSize } from '../utils/paperExport.js';
 import { resizeDataUrlToSize } from '../utils/resizeDataUrl.js';
+import { fitDataUrlToSize } from '../utils/fitDataUrl.js';
 import { applyFreePlanOutputLimits } from '../utils/freePlanImage.js';
 import {
   ENABLE_FREE_PLAN_HIRES_DL_LIMIT,
@@ -28,13 +32,19 @@ import {
   incrementHiResDownloadCount,
   isOverHiResLimit,
 } from '../utils/freePlanHiResLimit.js';
-import { buildPreviewFileName, buildHiResFileName } from '../utils/exportFileName.js';
+import { buildPreviewFileName, buildHiResFileName, buildPaperFileName } from '../utils/exportFileName.js';
 
-const RENDER_PROMPT =
-  'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。';
+// 用紙サイズ書き出し（第3段 260703）。対応比率で生成した画像を用紙枠へ余白付きで配置する。
+const PAPER_PRESETS: { paper: PaperSize; dpi: number; label: string }[] = [
+  { paper: 'A3', dpi: 300, label: 'A3・300dpi（大判プレゼン）' },
+  { paper: 'A4', dpi: 300, label: 'A4・300dpi（標準）' },
+];
 
 const PRESET_COUNT = EXPORT_PRESETS_16_9.length;
-const PREVIEW_INDEX = PRESET_COUNT;
+const PAPER_COUNT = PAPER_PRESETS.length;
+// 選択肢の並び: [dpiプリセット×PRESET_COUNT][用紙×PAPER_COUNT][プレビュー]。
+const PAPER_START = PRESET_COUNT;
+const PREVIEW_INDEX = PRESET_COUNT + PAPER_COUNT;
 
 type Props = {
   open: boolean;
@@ -86,9 +96,15 @@ export function HighResExportDialog({
   );
 
   const isPreview = selectedIndex === PREVIEW_INDEX;
-  const dpiPreset: ExportPreset16x9 | null = !isPreview
-    ? (presets[selectedIndex] ?? presets[0]!)
-    : null;
+  const isPaper = selectedIndex >= PAPER_START && selectedIndex < PREVIEW_INDEX;
+  const dpiPreset: ExportPreset16x9 | null =
+    !isPreview && !isPaper ? (presets[selectedIndex] ?? presets[0]!) : null;
+  const paperPreset = isPaper ? (PAPER_PRESETS[selectedIndex - PAPER_START] ?? PAPER_PRESETS[0]!) : null;
+  // 用紙の向きは「生成に使う対応比率」から決める（横長比率→横向き用紙）。exportRatioKey は sourceNatural から
+  // 導かれるが、読込前/失敗時も 16:9 にフォールバックし、生成される画像の向きと必ず一致する（正方は縦向き扱い）。
+  const paperOrientation: PaperOrientation = ratioValueForKey(exportRatioKey) > 1 ? 'landscape' : 'portrait';
+  const paperRatioLabel = paperOrientation === 'landscape' ? '1.414 : 1' : '1 : 1.414';
+  const paperDims = paperPreset ? paperPixelDims(paperPreset.paper, paperPreset.dpi, paperOrientation) : null;
 
   useEffect(() => {
     if (open) {
@@ -124,12 +140,22 @@ export function HighResExportDialog({
     img.src = sourceImageDataUrl;
   }, [open, sourceImageDataUrl]);
 
-  const width = isPreview ? (sourceNatural?.w ?? 0) : dpiPreset!.width;
-  const height = isPreview ? (sourceNatural?.h ?? 0) : dpiPreset!.height;
-  const aspectLabel = aspectLabelForKey(exportRatioKey);
-  const aspectDesc = width > 0 && height > 0 ? describePixelAspect(width, height) : '—';
+  const width = isPreview ? (sourceNatural?.w ?? 0) : isPaper ? (paperDims?.w ?? 0) : dpiPreset!.width;
+  const height = isPreview ? (sourceNatural?.h ?? 0) : isPaper ? (paperDims?.h ?? 0) : dpiPreset!.height;
+  const contentAspectLabel = aspectLabelForKey(exportRatioKey);
+  const aspectLabel = isPaper ? `${paperPreset!.paper}（${paperRatioLabel}）` : contentAspectLabel;
+  // 用紙は「用紙比率 / 内側の画像比率」を示す（ピクセル実比の丸めで汚い表記になるのを避ける）。
+  const aspectDesc = isPaper
+    ? `画像 ${contentAspectLabel}`
+    : width > 0 && height > 0
+      ? describePixelAspect(width, height)
+      : '—';
 
-  const footerLines = isPreview ? exportPreviewFooterLines() : exportPresetFooterLines(dpiPreset!, aspectLabel);
+  const footerLines = isPreview
+    ? exportPreviewFooterLines()
+    : isPaper
+      ? exportPaperFooterLines(paperPreset!.paper, contentAspectLabel, paperDims ?? { w: 0, h: 0 }, paperRatioLabel)
+      : exportPresetFooterLines(dpiPreset!, contentAspectLabel);
 
   // #4: 保持済みの result を使ってダウンロードをトリガー（再生成・API 呼び出し・カウント消費なし）。
   // ブラウザの「保存ダイアログ」をキャンセルしても、これで何度でも保存し直せる。
@@ -177,7 +203,9 @@ export function HighResExportDialog({
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
         body: JSON.stringify({
           image: inputImage,
-          prompt: RENDER_PROMPT,
+          // 第3段: プレビュー画像の構図を忠実に保つ img2img 用プロンプト（創作し直さない）。
+          prompt: EXPORT_UPSCALE_PROMPT,
+          // 生成は常に「対応比率」で行う。用紙は生成後に枠へ収める（Gemini は用紙比率を直接生成不可）。
           aspectRatio: exportRatioKey,
           imageSize: EXPORT_GEMINI_IMAGE_SIZE,
         }),
@@ -187,17 +215,30 @@ export function HighResExportDialog({
       // トークン計測（row 58・無効時は no-op）。高解像度書き出しも生成1回。
       void recordAiUsage({ feature: 'export', usage: data.usage, model: data.model, imageCount: 1 });
       let url = data.url as string;
-      const p = dpiPreset!;
-      url = await resizeDataUrlToSize(url, p.width, p.height);
+      // 用紙: 対応比率の生成画像を用紙枠へ contain（白余白）で配置。dpi プリセット: 目標ピクセルへリサイズ。
+      let fileName: string;
+      if (isPaper) {
+        const pd = paperDims ?? paperPixelDims(paperPreset!.paper, paperPreset!.dpi, paperOrientation);
+        url = await fitDataUrlToSize(url, pd.w, pd.h, 'contain', '#ffffff');
+        fileName = buildPaperFileName(projectName, {
+          paper: paperPreset!.paper,
+          dpi: paperPreset!.dpi,
+          width: pd.w,
+          height: pd.h,
+        });
+      } else {
+        const p = dpiPreset!;
+        url = await resizeDataUrlToSize(url, p.width, p.height);
+        fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
+      }
       // フリープラン: 今月の無償高解像度DL（3回）超過時は、解像度は維持したまま透かしのみ合成（260624）。
       if (isOverHiResLimit(userId, isFreePlan)) {
         url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
       }
       // #4: 高コストな再レンダ結果を保持し、保存をキャンセルしても再ダウンロードできるようにする（ダイアログは閉じない）。
-      // ファイル名 = 日付＋プロジェクト名＋dpi＋寸法＋.png（#1: プリセット毎に区別できる）。
       const exportResult: ExportResult = {
         url,
-        fileName: buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height }),
+        fileName,
         kind: 'hiRes',
       };
       setResult(exportResult);
@@ -215,7 +256,7 @@ export function HighResExportDialog({
   if (!open) return null;
 
   const pixelSummary =
-    isPreview && sourceNaturalLoading ? (
+    (isPreview || isPaper) && sourceNaturalLoading ? (
       <span className="text-neutral-500">読み込み中…</span>
     ) : width > 0 && height > 0 ? (
       <span className="text-white font-mono">
@@ -252,7 +293,7 @@ export function HighResExportDialog({
           {!result && (
             <>
           <p className="text-[10px] text-neutral-500 leading-relaxed">
-            高解像（300–150 dpi 相当）はクラウド API で再レンダ後に目標ピクセルへ合わせます。プレビュー用は再生成しません。
+            高解像（300–150 dpi 相当）と用紙サイズ（A3/A4）はクラウド API で高精細化してから書き出します（構図は維持）。用紙は対応比率の画像を用紙枠へ余白付きで配置します。プレビュー用は再生成しません。
           </p>
           <div className="space-y-2">
             {presets.map((p, i) => (
@@ -281,6 +322,37 @@ export function HighResExportDialog({
                 </span>
               </label>
             ))}
+            <p className="pt-1 text-[9px] font-black uppercase tracking-widest text-neutral-500">用紙サイズ（余白付き）</p>
+            {PAPER_PRESETS.map((pp, j) => {
+              const idx = PAPER_START + j;
+              const dims = paperPixelDims(pp.paper, pp.dpi, paperOrientation);
+              return (
+                <label
+                  key={pp.paper}
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                    idx === selectedIndex
+                      ? 'border-emerald-500/50 bg-emerald-950/30'
+                      : 'border-white/10 bg-black/30 hover:border-white/20'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="exportPreset"
+                    className="mt-0.5"
+                    checked={idx === selectedIndex}
+                    onChange={() => setSelectedIndex(idx)}
+                    disabled={busy || sourceNaturalLoading}
+                  />
+                  <span>
+                    <span className="text-white font-bold">{pp.paper}</span>
+                    <span className="block text-neutral-400 mt-0.5">{pp.label}</span>
+                    <span className="font-mono text-neutral-500">
+                      {sourceNaturalLoading ? '読み込み中…' : `${dims.w} × ${dims.h} px`}
+                    </span>
+                  </span>
+                </label>
+              );
+            })}
             <label
               key={EXPORT_PREVIEW_OPTION_ID}
               className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${

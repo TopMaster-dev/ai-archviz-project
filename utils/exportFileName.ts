@@ -39,3 +39,16 @@ export function buildHiResFileName(
   const safe = sanitizeFileNamePart((projectName ?? '').trim()) || 'プロジェクト';
   return `${exportDateStamp(now)}_${safe}_${spec.dpi}dpi_${spec.width}x${spec.height}.png`;
 }
+
+/**
+ * 用紙サイズ書き出しのファイル名 = 日付＋プロジェクト名＋用紙＋DPI＋寸法＋.png（第3段 260703）。
+ * 例: 2026-07-03_リビング_A4_300dpi_2480x3508.png
+ */
+export function buildPaperFileName(
+  projectName: string | null | undefined,
+  spec: { paper: string; dpi: number; width: number; height: number },
+  now: Date = new Date(),
+): string {
+  const safe = sanitizeFileNamePart((projectName ?? '').trim()) || 'プロジェクト';
+  return `${exportDateStamp(now)}_${safe}_${spec.paper}_${spec.dpi}dpi_${spec.width}x${spec.height}.png`;
+}

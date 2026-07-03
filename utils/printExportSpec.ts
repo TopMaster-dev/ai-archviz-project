@@ -108,6 +108,32 @@ export function exportPresetFooterLines(preset: ExportPreset16x9, aspectLabel?: 
   ];
 }
 
+/**
+ * 高解像度書き出し（img2img）のプロンプト（第3段 260703）。プレビュー画像の構図・視点・色・配置を厳密に
+ * 維持したまま解像度と細部だけを高める（新規要素の追加・構図変更を禁止）＝プレビューとの差異を抑える。
+ * ※プレビューAIレンダの創作用プロンプト（useAiRenderer）とは別。書き出しは「今見えている絵の高精細版」。
+ */
+export const EXPORT_UPSCALE_PROMPT =
+  'この画像を、内容を変えずに高解像度化（アップスケール）してください。構図・視点・画角・色味・' +
+  '光の当たり方・素材や仕上げの質感・写っているオブジェクトの位置と形状は一切変更しないでください。' +
+  '既存の要素を追加・削除・置き換えたり、レイアウトや構図を変えたりしてはいけません。' +
+  '存在しない模様やディテールを新たに創作せず、いま写っているものだけを、より鮮明・高精細に描き直してください。';
+
+/** 用紙サイズ書き出しの注意書き（list-disc 用・第3段 260703）。paperRatioLabel は向きに応じ '1 : 1.414' / '1.414 : 1'。 */
+export function exportPaperFooterLines(
+  paperLabel: string,
+  imageAspectLabel: string,
+  px: { w: number; h: number },
+  paperRatioLabel = '1 : 1.414',
+): string[] {
+  return [
+    `${paperLabel}（用紙比率 ${paperRatioLabel}）に、${imageAspectLabel} で生成した画像を中央へ余白付きで配置します（${px.w}×${px.h}px）。`,
+    'AI は用紙比率を直接生成できないため、対応比率で生成した画像を用紙枠へ収める方式です（生成し直さないので構図は変わりません）。',
+    '余白は白で塗られます。フチなし印刷や別レイアウトが必要な場合は編集ソフトで調整してください。',
+    '最終出力は印刷所・DTP の指定に合わせてください。',
+  ];
+}
+
 /** 画像書き出しダイアログの「プレビュー用」行 */
 export const EXPORT_PREVIEW_OPTION_ID = 'preview';
 
