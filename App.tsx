@@ -2210,7 +2210,7 @@ const App: React.FC = () => {
   };
 
   // 家具選択時に壁/床・建具の選択を解除するハンドラー（完全排他）。
-  // additive(shift/ctrl) のときは store.selectedIds をトグルして複数選択（260623・Cフェーズ2）。
+  // additive(Shift) のときは store.selectedIds をトグルして複数選択（260623・Cフェーズ2 / 260703 Shift専用に）。
   const handleFurnitureSelect = (id: string | null, additive = false) => {
     const store = useProjectStore.getState();
     if (id === null) {
@@ -3279,7 +3279,7 @@ const App: React.FC = () => {
             style={viewMode === '3D' ? { paddingTop: canvasTopInset } : undefined}
           >
              {/* 選択オブジェクトの操作バー（260702 クライアント要望「複数選択・グループ化・コピペ」を分かりやすく）。
-                 複数選択は Shift/Ctrl+クリック（従来から可能）。ここでグループ化/解除/コピー/貼り付けをボタン化して発見しやすくする。 */}
+                 複数選択は Shift+クリック（260703 クライアント要望で Shift 専用）。ここでグループ化/解除/コピー/貼り付けをボタン化して発見しやすくする。 */}
              {(viewMode === 'sketch' || viewMode === '3D') && !renderState.isRendering && !aiEditOpen &&
                (selectedFurnitureIds.length > 0 || clipboardCount > 0) && (() => {
                  const sel = new Set(selectedFurnitureIds);

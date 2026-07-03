@@ -985,7 +985,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     if (pixels.x < rulerSize || pixels.y < rulerSize) return;
     const mm = screenToWorld(pixels);
     const furnitureHit = resolveFurnitureHit(mm, pixels);
-    if (e.button === 2 || e.shiftKey) {
+    // Shift+クリックで家具を複数選択する場合はパンさせず選択へ流す（260703 クライアント要望「複数選択は Shift」）。
+    // 従来 Shift はパン専用で、家具クリックより先に return していたため 2D では Shift 複数選択ができなかった。
+    // それ以外の Shift（空白部・ドロー/梁モード等）は従来どおりパンする。右クリックドラッグは常にパン。
+    const shiftHitForSelect = furnitureHit ? furnitureItems.find((f) => f.id === furnitureHit.id) : null;
+    const shiftSelectsFurniture =
+      (isSelectMode || isAddFurniture) && !!shiftHitForSelect && !!shiftHitForSelect.ceilingMount === isCeilingView;
+    if (e.button === 2 || (e.shiftKey && !shiftSelectsFurniture)) {
       setIsPanning(true);
       lastMousePixelsRef.current = pixels;
       tryPointerCapture(e);
@@ -1142,8 +1148,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       const fhItem = furnitureHit ? furnitureItems.find((f) => f.id === furnitureHit.id) : null;
       const fhInLayer = !!fhItem && !!fhItem.ceilingMount === isCeilingView;
       if (furnitureHit && fhInLayer) {
-        // shift / ctrl / cmd 押下時は複数選択（トグル）。それ以外は単一選択（260623・Cフェーズ2）。
-        onFurnitureSelect(furnitureHit.id, e.shiftKey || e.ctrlKey || e.metaKey);
+        // Shift 押下時は複数選択（トグル）。それ以外は単一選択（260703 クライアント要望で Ctrl/Cmd は除外し Shift 専用に）。
+        onFurnitureSelect(furnitureHit.id, e.shiftKey);
         onOpeningSelect(null);
         setSelectedPointIndex(null);
         setSelectedEdgeIndex(null);

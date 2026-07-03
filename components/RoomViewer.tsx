@@ -1608,8 +1608,8 @@ const GLTFFurniture: React.FC<{
     const onBodyPointerDown = (e: ThreeEvent<PointerEvent>) => {
         if (captureStep === 'mask' || maskMode || snapshotMode) return;
         e.stopPropagation();
-        // shift / ctrl / cmd: 複数選択トグル（移動は開始しない）。260623・Cフェーズ2b
-        const additive = e.nativeEvent.shiftKey || e.nativeEvent.ctrlKey || e.nativeEvent.metaKey;
+        // Shift: 複数選択トグル（移動は開始しない）。260703 クライアント要望で Ctrl/Cmd は除外し Shift 専用に。
+        const additive = e.nativeEvent.shiftKey;
         if (additive) {
             onSelect?.(true);
             return;
@@ -1826,8 +1826,8 @@ const CustomBIMScene = ({
           if (lowerName.includes('floor')) category = 'Floor';
           else if (lowerName.includes('ceiling')) category = 'Ceiling';
           
-          // Multi-selection: pass flag if Shift/Ctrl/Meta is pressed
-          onMeshClick(category, meshName, e.shiftKey || e.metaKey || e.ctrlKey);
+          // Multi-selection: Shift のみ（260703 クライアント要望で Ctrl/Cmd は除外）。
+          onMeshClick(category, meshName, e.shiftKey);
         }}
         onPointerOver={(e: any) => {
           e.stopPropagation();
@@ -2217,7 +2217,7 @@ const WallSegment: React.FC<{
         position={[0, actualWallY, 0]}
         onClick={(e) => {
           e.stopPropagation();
-          if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey || e.metaKey || e.ctrlKey);
+          if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey);
         }}
         onPointerOver={(e) => {
           e.stopPropagation();
@@ -2352,7 +2352,7 @@ const WallSegment: React.FC<{
               position={[0, yOffset + bbHeightM / 2, 0]}
               onClick={(e) => {
                 e.stopPropagation();
-                if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey || e.metaKey || e.ctrlKey);
+                if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey);
               }}
               onPointerOver={(e) => {
                 e.stopPropagation();
@@ -2456,7 +2456,7 @@ const UpperBandSegment: React.FC<{
       ref={ref}
       name="Sketch_UpperBand"
       position={[0, yTop + bandM / 2, 0]}
-      onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Wall', 'Sketch_UpperBand', e.shiftKey || e.metaKey || e.ctrlKey); }}
+      onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Wall', 'Sketch_UpperBand', e.shiftKey); }}
       onPointerOver={(e) => { e.stopPropagation(); onHoverNameChange?.('Sketch_UpperBand'); }}
       onPointerOut={() => onHoverNameChange?.(null)}
       receiveShadow={shadowEnabled}
@@ -2540,7 +2540,7 @@ const SketchRoom = ({
         name="Sketch_Floor"
         rotation={[-Math.PI / 2, 0, 0]} 
         position={[0, 0, 0]} 
-        onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Floor', 'Sketch_Floor', e.shiftKey || e.metaKey || e.ctrlKey); }}
+        onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Floor', 'Sketch_Floor', e.shiftKey); }}
         onPointerOver={(e) => {
           e.stopPropagation();
           onHoverNameChange?.('Sketch_Floor');
@@ -2563,7 +2563,7 @@ const SketchRoom = ({
         position={[0, skeletonCeiling && skeletonUpperWallMm > 0 ? height + skeletonUpperWallMm / 1000 : height, 0]}
         rotation={[Math.PI / 2, 0, 0]}
         scale={[1, 1, 1]}
-        onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Ceiling', 'Sketch_Ceiling', e.shiftKey || e.metaKey || e.ctrlKey); }}
+        onClick={(e) => { e.stopPropagation(); if (!isDraggingRef.current) onMeshClick('Ceiling', 'Sketch_Ceiling', e.shiftKey); }}
         onPointerOver={(e) => {
           e.stopPropagation();
           onHoverNameChange?.('Sketch_Ceiling');
