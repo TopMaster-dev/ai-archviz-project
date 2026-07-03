@@ -1409,16 +1409,39 @@ const App: React.FC = () => {
     setPanelOrder((o) => (o[o.length - 1] === id ? o : [...o.filter((x) => x !== id), id]));
   }, []);
   const panelZ = (id: string) => 41 + Math.max(0, panelOrder.indexOf(id));
-  // ドラッグ可能領域＝3Dプレビュー内（上部ヘッダの下〜画面端の少し内側）。パネルが画面外/ヘッダへ飛び出さないよう制限。
-  const getPreviewBounds = useCallback(
-    () => ({
-      left: 8,
-      top: 24 + headerHeight + 8,
-      right: (typeof window !== 'undefined' ? window.innerWidth : 1200) - 8,
-      bottom: (typeof window !== 'undefined' ? window.innerHeight : 800) - 8,
-    }),
-    [headerHeight],
-  );
+  // 3Dビュー領域（flex-1・右のマテリアル/見積サイドバーの左まで）の実測矩形。パネルの移動範囲＝この領域内に限定し、
+  // 右サイドバーの下や画面外へ飛び出さないようにする（260703(3) クライアント要望「赤枠＝3Dプレビュー内に収める」）。
+  const [viewAreaRect, setViewAreaRect] = useState<{ left: number; top: number; right: number; bottom: number } | null>(null);
+  const viewAreaObserverRef = useRef<ResizeObserver | null>(null);
+  const setViewAreaNode = useCallback((node: HTMLDivElement | null) => {
+    viewAreaObserverRef.current?.disconnect();
+    viewAreaObserverRef.current = null;
+    if (!node) {
+      setViewAreaRect(null);
+      return;
+    }
+    const update = () => {
+      const r = node.getBoundingClientRect();
+      setViewAreaRect({ left: r.left, top: r.top, right: r.right, bottom: r.bottom });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    viewAreaObserverRef.current = ro;
+  }, []);
+  useEffect(() => () => { viewAreaObserverRef.current?.disconnect(); }, []);
+  // ドラッグ可能領域＝3Dビュー領域内（上部ヘッダの下〜領域端の少し内側）。右サイドバーは除外（viewAreaRect の右端まで）。
+  const getPreviewBounds = useCallback(() => {
+    const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
+    const vh = typeof window !== 'undefined' ? window.innerHeight : 800;
+    const va = viewAreaRect;
+    return {
+      left: (va?.left ?? 0) + 8,
+      top: (va?.top ?? 0) + 24 + headerHeight + 8,
+      right: (va?.right ?? vw) - 8,
+      bottom: (va?.bottom ?? vh) - 8,
+    };
+  }, [viewAreaRect, headerHeight]);
 
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
@@ -3373,7 +3396,7 @@ const App: React.FC = () => {
 
 
       {/* Main Content Area (Full Screen Workspace) */}
-      <div className="flex-1 relative flex flex-col min-w-0 z-10 bg-[#050505]">
+      <div ref={setViewAreaNode} className="flex-1 relative flex flex-col min-w-0 z-10 bg-[#050505]">
           
           {/* View Area */}
           <div
