@@ -1397,6 +1397,25 @@ const App: React.FC = () => {
   // → キャンバスは常に Undo/Redo アイコンの約15px下から始まり、ツールバー領域に食い込まない。未計測時は132で代替。
   const canvasTopInset = headerHeight > 0 ? headerHeight + 89 : 132;
 
+  // 3D下部のカメラ操作バー行の実測高さ(px)。選択操作バーをこの上へ積んで重なりを防ぐ（260703 クライアント報告）。
+  // カメラバーは折り返しで高さが変わるため固定オフセットでなく実測で追従する（headerBar と同方式）。
+  const [cameraRowHeight, setCameraRowHeight] = useState(0);
+  const cameraRowObserverRef = useRef<ResizeObserver | null>(null);
+  const setCameraRowNode = useCallback((node: HTMLDivElement | null) => {
+    cameraRowObserverRef.current?.disconnect();
+    cameraRowObserverRef.current = null;
+    if (!node) {
+      setCameraRowHeight(0);
+      return;
+    }
+    const update = () => setCameraRowHeight(Math.round(node.getBoundingClientRect().height));
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    cameraRowObserverRef.current = ro;
+  }, []);
+  useEffect(() => () => { cameraRowObserverRef.current?.disconnect(); }, []);
+
   const { versions: aiEditVersions, activeVersionId: aiEditActiveVersionId } = aiEditSession;
   useEffect(() => {
     setRenderState((prev) => {
@@ -3367,7 +3386,11 @@ const App: React.FC = () => {
                  const grouped = furnitureGroups.some((g) => g.memberIds.some((id) => sel.has(id)));
                  const canGroup = selectedFurnitureIds.length >= 2 && !grouped;
                  return (
-                   <div className="pointer-events-none absolute bottom-6 left-1/2 z-40 -translate-x-1/2">
+                   <div
+                     className="pointer-events-none absolute left-1/2 z-40 -translate-x-1/2"
+                     // 3D ではカメラ操作バー行の実測高さ分だけ上へ積んで重なりを防ぐ（260703）。2D/未計測は従来の bottom-6(24px)。
+                     style={{ bottom: viewMode === '3D' && cameraRowHeight > 0 ? cameraRowHeight + 24 + 8 : 24 }}
+                   >
                      <div className="glass pointer-events-auto flex items-center gap-1 rounded-2xl border border-white/10 bg-black/60 px-2 py-1.5 shadow-xl backdrop-blur-md">
                        <span className="px-1.5 text-[10px] font-black uppercase tracking-widest text-neutral-400">
                          {selectedFurnitureIds.length > 0 ? `${selectedFurnitureIds.length}件選択` : 'コピー済'}
@@ -4399,7 +4422,7 @@ const App: React.FC = () => {
                     </div>
 
                             {/* --- BOTTOM ROW (Debug, Camera presets, Furniture) --- */}
-                            <div className="absolute bottom-6 left-6 right-6 z-40 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
+                            <div ref={setCameraRowNode} className="absolute bottom-6 left-6 right-6 z-40 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
                                 <div className="flex-1 min-w-0 flex justify-start">
                                     {renderState.debugBaseUrl ? (
                                         <div className="group cursor-pointer pointer-events-auto animate-in fade-in slide-in-from-bottom-4" onClick={() => setShowDebugModal(true)}>

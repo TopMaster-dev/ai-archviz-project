@@ -50,3 +50,56 @@ export function resolveMoveMembers(
   if (group && group.memberIds.length > 1) for (const m of group.memberIds) set.add(m);
   return set;
 }
+
+export interface Vec2XZ {
+  x: number;
+  z: number;
+}
+
+/** メンバー position(XZ) の平均（重心）。メンバー不在は null。 */
+export function computeGroupCentroidXZ(
+  items: ReadonlyArray<FurnitureItem>,
+  memberIds: Set<string>
+): Vec2XZ | null {
+  let sx = 0;
+  let sz = 0;
+  let n = 0;
+  for (const f of items) {
+    if (!memberIds.has(f.id)) continue;
+    sx += f.position[0];
+    sz += f.position[2];
+    n++;
+  }
+  return n === 0 ? null : { x: sx / n, z: sz / n };
+}
+
+/**
+ * グループ回転（2D/3D共通・純関数）。260703 クライアント要望「グループを一括で回転」。
+ * centroidXZ を軸に memberIds 全員を XZ 平面で dTheta 回し、各メンバーの yaw(rotation[1]) にも dTheta を加算する。
+ * Y は保持。memberIds 外は不変。dTheta は 3D yaw 系（RoomViewer の単体回転 atan2(dx,dz)＋yaw += delta と一致）:
+ *   x' = cx + dx·cos + dz·sin
+ *   z' = cz − dx·sin + dz·cos     （符号は 3D 単体回転と一致・検証済み）
+ * memberIds.size < 2 または dTheta === 0 は no-op（参照そのまま返す）。
+ */
+export function applyGroupRotation(
+  prev: FurnitureItem[],
+  memberIds: Set<string>,
+  centroidXZ: Vec2XZ,
+  dTheta: number
+): FurnitureItem[] {
+  if (dTheta === 0 || memberIds.size < 2) return prev;
+  const cos = Math.cos(dTheta);
+  const sin = Math.sin(dTheta);
+  return prev.map((f) => {
+    if (!memberIds.has(f.id)) return f;
+    const dx = f.position[0] - centroidXZ.x;
+    const dz = f.position[2] - centroidXZ.z;
+    const nx = centroidXZ.x + dx * cos + dz * sin;
+    const nz = centroidXZ.z - dx * sin + dz * cos;
+    return {
+      ...f,
+      position: [nx, f.position[1], nz] as [number, number, number],
+      rotation: [f.rotation[0], (f.rotation[1] || 0) + dTheta, f.rotation[2]] as [number, number, number],
+    };
+  });
+}

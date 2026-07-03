@@ -29,6 +29,7 @@ import {
   isFurnitureFootprintInsidePolygon,
   slideFurnitureCenterMmWithWallContact
 } from '../utils/sketchTransform.js';
+import { applyGroupRotation, computeGroupCentroidXZ, resolveMoveMembers, type Vec2XZ } from '../utils/furnitureGroupMove.js';
 
 const SKETCH_VIEW_DEFAULT_ZOOM = 0.08;
 
@@ -105,6 +106,13 @@ function getFurnitureRotationRingRadiusPx(widthMm: number, depthMm: number, zoom
   const minR = 22 * getArrowGizmoScale(zoom);
   const maxR = 130 * getArrowGizmoScale(zoom);
   return Math.max(minR, Math.min(maxR, r));
+}
+
+/** グループ回転リングの半径(px)。重心から最遠メンバー端までの実距離(mm)＋余白。個別リングより一回り大きい。 */
+function getGroupRotationRingRadiusPx(maxMemberDistMm: number, zoom: number) {
+  const scale = getArrowGizmoScale(zoom);
+  const r = maxMemberDistMm * zoom + 14 * scale;
+  return Math.max(40 * scale, Math.min(260 * scale, r));
 }
 
 /** 非有限寸法・座標で Canvas API が固まるのを防ぐ */
@@ -299,7 +307,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   /** 家具ドラッグ／回転は ref のみ更新し pointerup で React へ1回コミット（pointermove 毎の setState を避ける） */
   type FurnitureInteractionPreview =
     | { kind: 'move'; id: string; centerMm: Point }
-    | { kind: 'rotate'; id: string; yaw: number };
+    | { kind: 'rotate'; id: string; yaw: number }
+    // グループ回転プレビュー（260703）: members 全員を centroidXZ まわりに dTheta 回すライブ表示。
+    | { kind: 'groupRotate'; members: Set<string>; centroidXZ: Vec2XZ; dTheta: number };
   const furnitureInteractionPreviewRef = useRef<FurnitureInteractionPreview | null>(null);
   /** 家具ホバー時の resolveFurnitureHit を間引く（直近サンプル位置） */
   const lastFurnitureHoverCursorRef = useRef<Point | null>(null);
@@ -307,6 +317,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const furnitureRingHoverRef = useRef(false);
   // 自由梁の回転リングのホバー強調（家具と同様・260703 クライアント要望）。
   const beamRingHoverRef = useRef(false);
+  // グループ回転（260703）: ドラッグ開始時の {members, centroidXZ, sketchAngle0}、およびリングのホバー強調。
+  const groupRotateDragStartRef = useRef<{ members: Set<string>; centroidXZ: Vec2XZ; sketchAngle0: number } | null>(null);
+  const groupRingHoverRef = useRef(false);
 
   /** ズームアウト時の描画ループ暴走を防ぐ */
   const MAX_VIEW_GRID_ITER = 600;
@@ -370,6 +383,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   /** リングヒット：弧付近のみ。内側の広い誤検出を減らす非対称帯 */
   const RING_HIT_INNER_PX = 6;
   const RING_HIT_OUTER_PX = 12;
+  // 家具の回転リングは判定が敏感すぎて移動しづらいとの報告（260703）→ 家具のみ当たり帯を狭める。
+  const FURNITURE_RING_HIT_INNER_PX = 4;
+  const FURNITURE_RING_HIT_OUTER_PX = 8;
   // 自由梁の回転リングは操作しやすいよう外側の当たり幅を広げ、回転を優先させる（260703 クライアント要望）。
   const BEAM_RING_HIT_OUTER_PX = 20;
 
@@ -574,11 +590,24 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     return { center, yaw };
   };
 
-  /** RAF 描画用: ドラッグ／回転プレビューをマージ */
+  /** RAF 描画用: ドラッグ／回転／グループ回転プレビューをマージ */
   const getFurniturePoseMmForDraw = (item: FurnitureItem) => {
     const base = getFurniturePoseMm(item);
     const pv = furnitureInteractionPreviewRef.current;
-    if (pv && pv.id === item.id) {
+    if (!pv) return base;
+    if (pv.kind === 'groupRotate') {
+      if (!pv.members.has(item.id)) return base;
+      // applyGroupRotation と同一の 3D form（nx=dx·cos+dz·sin, nz=−dx·sin+dz·cos）でライブ回転。
+      // ※符号を helper と必ず一致させる（不一致だと離した瞬間にスナップして見える）。
+      const cos = Math.cos(pv.dTheta);
+      const sin = Math.sin(pv.dTheta);
+      const dx = item.position[0] - pv.centroidXZ.x;
+      const dz = item.position[2] - pv.centroidXZ.z;
+      const nx = pv.centroidXZ.x + dx * cos + dz * sin;
+      const nz = pv.centroidXZ.z - dx * sin + dz * cos;
+      return { center: furniturePositionToMm([nx, item.position[1], nz], centerMm), yaw: base.yaw + pv.dTheta };
+    }
+    if (pv.id === item.id) {
       if (pv.kind === 'move') return { center: pv.centerMm, yaw: base.yaw };
       if (pv.kind === 'rotate') return { center: base.center, yaw: pv.yaw };
     }
@@ -612,7 +641,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const z = viewZoomRef.current;
     const ringR = getFurnitureRotationRingRadiusPx(width, depth, z);
     const dist = Math.hypot(pixels.x - centerPx.x, pixels.y - centerPx.y);
-    return dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + RING_HIT_OUTER_PX;
+    return dist >= ringR - FURNITURE_RING_HIT_INNER_PX && dist <= ringR + FURNITURE_RING_HIT_OUTER_PX;
   };
 
   /** 選択中の自由梁の回転リング帯にポインタが当たるか（ホバー強調＋回転優先用・260703）。ポインタ下の作図と同一幾何。 */
@@ -623,6 +652,37 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const ringR = getFurnitureRotationRingRadiusPx(sel.widthMm, sel.widthMm, viewZoomRef.current);
     const dist = Math.hypot(pixels.x - cPx.x, pixels.y - cPx.y);
     return dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + BEAM_RING_HIT_OUTER_PX;
+  };
+
+  /** グループ回転（260703）: 複数選択/グループ(2件以上)の重心・メンバー・リング半径用の最遠距離を求める。無ければ null。 */
+  const resolveGroupRotateContext = () => {
+    const state = useProjectStore.getState();
+    const sel = state.selectedIds;
+    if (sel.length < 1) return null;
+    const members = resolveMoveMembers(sel[0], state.scene.groups, sel);
+    if (members.size < 2) return null;
+    const centroidXZ = computeGroupCentroidXZ(furnitureItemsRef.current, members);
+    if (!centroidXZ) return null;
+    const centroidMm = furniturePositionToMm([centroidXZ.x, 0, centroidXZ.z], centerMm);
+    let maxDistMm = 0;
+    for (const f of furnitureItemsRef.current) {
+      if (!members.has(f.id)) continue;
+      const c = furniturePositionToMm(f.position, centerMm);
+      const { width, depth } = getFurnitureFootprintMm(f);
+      const d = Math.hypot(c.x - centroidMm.x, c.y - centroidMm.y) + Math.hypot(width, depth) / 2;
+      if (d > maxDistMm) maxDistMm = d;
+    }
+    return { members, centroidXZ, centroidMm, maxDistMm };
+  };
+
+  /** グループ回転リングの帯にポインタが当たるか。当たれば context、外れは null（回転優先の判定に使う）。 */
+  const hitTestGroupRotationRing = (pixels: Point) => {
+    const ctx = resolveGroupRotateContext();
+    if (!ctx) return null;
+    const cPx = worldToScreen(ctx.centroidMm);
+    const ringR = getGroupRotationRingRadiusPx(ctx.maxDistMm, viewZoomRef.current);
+    const dist = Math.hypot(pixels.x - cPx.x, pixels.y - cPx.y);
+    return dist >= ringR - RING_HIT_INNER_PX && dist <= ringR + RING_HIT_OUTER_PX ? ctx : null;
   };
 
   /** 足跡 or 回転リングのどちらかに当たる最前面の家具（リングのみでも拾う） */
@@ -1144,6 +1204,19 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
     // --- SELECT MODE ---
     if (isSelectMode || isAddFurniture) {
+      // グループ回転リングを最優先で判定（個別家具のボディ/リングより先）。当たればグループ回転ドラッグ開始（260703）。
+      const groupCtx = hitTestGroupRotationRing(pixels);
+      if (groupCtx) {
+        groupRotateDragStartRef.current = {
+          members: groupCtx.members,
+          centroidXZ: groupCtx.centroidXZ,
+          sketchAngle0: Math.atan2(mm.y - groupCtx.centroidMm.y, mm.x - groupCtx.centroidMm.x),
+        };
+        setRotatingFurnitureId('__group__'); // センチネル（回転中フラグ。実体は groupRotateDragStartRef）
+        lastMousePixelsRef.current = pixels;
+        tryPointerCapture(e);
+        return;
+      }
       // 天伏図では現在レイヤ（天井家具）以外の家具は選択しない。平面図では床家具のみ（260623）。
       const fhItem = furnitureHit ? furnitureItems.find((f) => f.id === furnitureHit.id) : null;
       const fhInLayer = !!fhItem && !!fhItem.ceilingMount === isCeilingView;
@@ -1426,6 +1499,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       predictedWallPointRef.current = null;
     }
 
+    if (groupRotateDragStartRef.current) {
+      // グループ回転（260703）: 重心基準の角度差(yaw系・10°スナップ)でプレビュー。単体回転より先に処理し return。
+      const st = groupRotateDragStartRef.current;
+      const cMm = furniturePositionToMm([st.centroidXZ.x, 0, st.centroidXZ.z], centerMm);
+      const sketchAngle = Math.atan2(mm.y - cMm.y, mm.x - cMm.x);
+      let dTheta = sketchAngleToYaw(sketchAngle) - sketchAngleToYaw(st.sketchAngle0);
+      dTheta = Math.round(dTheta / FURNITURE_ROTATION_SNAP_RAD) * FURNITURE_ROTATION_SNAP_RAD;
+      furnitureInteractionPreviewRef.current = { kind: 'groupRotate', members: st.members, centroidXZ: st.centroidXZ, dTheta };
+      if (canvas) canvas.style.cursor = 'grabbing';
+      return;
+    }
+
     if (rotatingFurnitureId) {
       const item = furnitureItems.find((f) => f.id === rotatingFurnitureId);
       if (item) {
@@ -1575,6 +1660,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     } else {
       beamRingHoverRef.current = false;
     }
+
+    // グループ回転リングのホバー強調（複数選択/グループ時・選択モード・ドラッグ外・260703）。
+    if ((isSelectMode || isAddFurniture) && !groupRotateDragStartRef.current) {
+      const onGroupRing = !!hitTestGroupRotationRing(pixels);
+      groupRingHoverRef.current = onGroupRing;
+      if (onGroupRing && canvas) canvas.style.cursor = 'grab';
+    } else {
+      groupRingHoverRef.current = false;
+    }
   };
 
   const handlePointerUp = () => {
@@ -1593,7 +1687,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     }
     const pv = furnitureInteractionPreviewRef.current;
     furnitureInteractionPreviewRef.current = null;
-    if (pv?.kind === 'move') {
+    if (pv?.kind === 'groupRotate') {
+      // グループ回転を確定（全メンバーを重心まわりに dTheta 回転＝2D/3D共通の純関数）。
+      onFurnitureUpdate((prev) => applyGroupRotation(prev, pv.members, pv.centroidXZ, pv.dTheta));
+    } else if (pv?.kind === 'move') {
       const moveSet = new Set(useProjectStore.getState().selectedIds);
       onFurnitureUpdate((prev) => {
         const dragged = prev.find((f) => f.id === pv.id);
@@ -1626,12 +1723,14 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     setDraggingFurnitureId(null);
     setRotatingFurnitureId(null);
     furnitureRotateDragStartRef.current = null;
+    groupRotateDragStartRef.current = null;
     rotationWallOkRef.current = true;
     setIsPanning(false);
     lastMousePixelsRef.current = null;
     lastFurnitureHoverCursorRef.current = null;
     furnitureRingHoverRef.current = false;
     beamRingHoverRef.current = false;
+    groupRingHoverRef.current = false;
     if (canvasRef.current) canvasRef.current.style.cursor = 'auto';
   };
 
@@ -2072,6 +2171,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         });
         ctx.filter = 'none';
 
+        // グループ回転ギズモ（260703）: 複数選択/グループ(2件以上)時は個別リングを隠し重心に1つ描く。1フレーム1回だけ解決。
+        const groupRing = resolveGroupRotateContext();
+        const groupActive = !!groupRing;
+
         // Draw Furniture (2D footprint)
         furnitureItemsRef.current.forEach((item) => {
           // 床家具/天井家具を現在のビューに応じて減衰（天伏図では床家具、平面図では天井家具）。
@@ -2154,7 +2257,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
           ctx.restore();
 
-          if (isSelected) {
+          if (isSelected && !groupActive) {
             const ringR = getFurnitureRotationRingRadiusPx(width, depth, currentZoom);
             const lw = fullGizmo ? gizmoStroke : Math.max(1, gizmoStroke * 0.85);
             const ringHi =
@@ -2208,6 +2311,36 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               ctx.restore();
             });
             ctx.setLineDash([]);
+            ctx.restore();
+          }
+        }
+
+        // グループ回転リング（重心に1つ・260703）。ドラッグ中は破線、ホバー/ドラッグで強調色。中心に十字。
+        if (groupRing) {
+          const cPx = worldToScreen(groupRing.centroidMm);
+          if (Number.isFinite(cPx.x) && Number.isFinite(cPx.y)) {
+            const gScale = getArrowGizmoScale(currentZoom);
+            const ringR = getGroupRotationRingRadiusPx(groupRing.maxDistMm, currentZoom);
+            const dragging = !!groupRotateDragStartRef.current;
+            const ringStroke = groupRingHoverRef.current || dragging ? '#93c5fd' : '#2563eb';
+            ctx.save();
+            ctx.translate(cPx.x, cPx.y);
+            drawFurnitureRotationRingIcon(ctx, ringR, {
+              dashed: dragging,
+              lineWidth: Math.max(1.5, 2.2 * gScale),
+              strokeStyle: ringStroke,
+              fillStyle: ringStroke,
+              gizmoScale: gScale,
+            });
+            const cs = 5 * gScale;
+            ctx.strokeStyle = ringStroke;
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(-cs, 0);
+            ctx.lineTo(cs, 0);
+            ctx.moveTo(0, -cs);
+            ctx.lineTo(0, cs);
+            ctx.stroke();
             ctx.restore();
           }
         }

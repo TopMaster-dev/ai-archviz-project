@@ -52,7 +52,7 @@ import { Point } from '../types.js';
 import type { Beam } from '../lib/project/projectState.js';
 import { effectiveTextureShortEdgeMeters, effectiveTextureTileMeters } from '../lib/materialPhysical.js';
 import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
-import { applyFurniturePatch, resolveMoveMembers } from '../utils/furnitureGroupMove.js';
+import { applyFurniturePatch, resolveMoveMembers, applyGroupRotation, computeGroupCentroidXZ, type Vec2XZ } from '../utils/furnitureGroupMove.js';
 import { solidRectsForSegment } from '../utils/wallOpeningTiling.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
@@ -1136,8 +1136,10 @@ const RING_ARC_Y = 0.05;
 const RING_VIS_TUBE_R = 0.016;
 /** 可視チューブの約 2.5 倍。レイで弧を拾いやすくする */
 const RING_HIT_TUBE_R = 0.04;
-/** リング円周からの許容（m） */
+/** リング円周からの許容（m）。梁の回転リング用（260703 で梁は広めに維持）。 */
 const RING_RADIAL_TOLERANCE_M = 0.065;
+/** 家具の回転リングは判定が敏感すぎて移動しづらいとの報告（260703）→ 家具のみ狭める。 */
+const FURNITURE_RING_RADIAL_TOLERANCE_M = 0.03;
 /** 移動開始判定：足跡矩形を各辺方向に拡張（m） */
 const MOVE_FOOTPRINT_MARGIN_M = 0.05;
 /** 2D の FURNITURE_ROTATION_SNAP_RAD と同じ（10°） */
@@ -1330,15 +1332,164 @@ const FurnitureRotationRing3D: React.FC<{
 function isPointerOnFurnitureRingXZ(
     p: { x: number; z: number },
     wx: { x: number; z: number },
-    ringR: number
+    ringR: number,
+    toleranceM: number = RING_RADIAL_TOLERANCE_M
 ): boolean {
     const dx = p.x - wx.x;
     const dz = p.z - wx.z;
     const dist = Math.hypot(dx, dz);
-    if (Math.abs(dist - ringR) > RING_RADIAL_TOLERANCE_M) return false;
+    if (Math.abs(dist - ringR) > toleranceM) return false;
     const theta = Math.atan2(dz, dx);
     return isOnRingArcAngles(theta);
 }
+
+/**
+ * グループ回転ギズモ（260703 クライアント要望）。複数選択/グループの重心に1つだけ回転リングを表示し、
+ * ドラッグで全メンバーを重心まわりに一括回転する（各メンバーの位置と yaw を applyGroupRotation で更新）。
+ * ドラッグ中の可変コンテキスト（重心・メンバー・半径・コールバック）は ref で保持し、増分回転の再購読を防ぐ。
+ * 増分は「開始角からの累積スナップ差分」を1回ずつ流すので、prev に対する回転合成が正しく積み上がる。
+ */
+const GroupRotationGizmo3D: React.FC<{
+    centroidXZ: Vec2XZ;
+    planeY: number;
+    radius: number;
+    memberIds: Set<string>;
+    onGroupRotate: (memberIds: Set<string>, centroidXZ: Vec2XZ, dTheta: number) => void;
+    onDragStart?: () => void;
+    onDragEnd?: () => void;
+    onPostDragGuard?: () => void;
+}> = ({ centroidXZ, planeY, radius, memberIds, onGroupRotate, onDragStart, onDragEnd, onPostDragGuard }) => {
+    const { camera, gl } = useThree();
+    const plane = useMemo(() => new THREE.Plane(), []);
+    const raycaster = useMemo(() => new THREE.Raycaster(), []);
+    const ndc = useMemo(() => new THREE.Vector2(), []);
+    const tmpHit = useMemo(() => new THREE.Vector3(), []);
+    const draggingRef = useRef(false);
+    const startAngleRef = useRef(0);
+    const lastSnappedRef = useRef(0);
+    // Undo履歴対策（260703 検証 M1）: 最初の増分は記録し(＝ドラッグ前状態を past に積む)、以降は temporal を
+    // pause して1ドラッグ=1 Undo にする。resume はドラッグ終了・アンマウントの両方で確実に行う（paused 取り残し防止）。
+    const pausedRef = useRef(false);
+    const [isDragging, setIsDragging] = useState(false);
+    const [ringHoverDist, setRingHoverDist] = useState(false);
+    const [ringMeshHover, setRingMeshHover] = useState(false);
+    const ringHighlight = ringHoverDist || ringMeshHover;
+
+    // ドラッグ中に変化しうる（＝毎レンダ更新される）値は ref 経由で読み、ドラッグ効果を再購読させない。
+    const ctxRef = useRef({ centroidXZ, memberIds, radius, planeY, onGroupRotate });
+    ctxRef.current = { centroidXZ, memberIds, radius, planeY, onGroupRotate };
+
+    const intersect = useCallback(
+        (clientX: number, clientY: number) => {
+            const rect = gl.domElement.getBoundingClientRect();
+            ndc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+            ndc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+            raycaster.setFromCamera(ndc, camera);
+            plane.setFromNormalAndCoplanarPoint(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, ctxRef.current.planeY, 0));
+            return raycaster.ray.intersectPlane(plane, tmpHit) ? tmpHit.clone() : null;
+        },
+        [camera, gl, ndc, plane, raycaster, tmpHit]
+    );
+
+    // 重心基準の方位（3D 単体回転 atan2(dx,dz) と同系＝applyGroupRotation の dTheta 系に一致）。
+    const angleAt = (p: THREE.Vector3) => Math.atan2(p.x - ctxRef.current.centroidXZ.x, p.z - ctxRef.current.centroidXZ.z);
+
+    const startRotate = (e: ThreeEvent<PointerEvent>) => {
+        e.stopPropagation();
+        const p = intersect(e.clientX, e.clientY);
+        if (!p) return;
+        startAngleRef.current = angleAt(p);
+        lastSnappedRef.current = 0;
+        draggingRef.current = true;
+        setIsDragging(true);
+        onDragStart?.();
+    };
+
+    // ホバー帯判定（ドラッグ外）。
+    useEffect(() => {
+        const onMove = (e: PointerEvent) => {
+            if (draggingRef.current) return;
+            const p = intersect(e.clientX, e.clientY);
+            const c = ctxRef.current;
+            setRingHoverDist(
+                !!p && isPointerOnFurnitureRingXZ({ x: p.x, z: p.z }, c.centroidXZ, c.radius, FURNITURE_RING_RADIAL_TOLERANCE_M)
+            );
+        };
+        window.addEventListener('pointermove', onMove);
+        return () => window.removeEventListener('pointermove', onMove);
+    }, [intersect]);
+
+    // 回転ドラッグ（累積スナップ差分を増分で流す）。
+    useEffect(() => {
+        const onMove = (e: PointerEvent) => {
+            if (!draggingRef.current) return;
+            const p = intersect(e.clientX, e.clientY);
+            if (!p) return;
+            const delta = angleAt(p) - startAngleRef.current;
+            const snapped = Math.round(delta / FURNITURE_ROTATION_SNAP_RAD) * FURNITURE_ROTATION_SNAP_RAD;
+            const inc = snapped - lastSnappedRef.current;
+            if (inc !== 0) {
+                lastSnappedRef.current = snapped;
+                const c = ctxRef.current;
+                c.onGroupRotate(c.memberIds, c.centroidXZ, inc);
+                // 最初の増分（ドラッグ前→現在）を記録した直後に pause。以降の増分は履歴に積まない。
+                if (!pausedRef.current) {
+                    useProjectStore.temporal.getState().pause();
+                    pausedRef.current = true;
+                }
+            }
+        };
+        const onUp = () => {
+            if (!draggingRef.current) return;
+            draggingRef.current = false;
+            setIsDragging(false);
+            if (pausedRef.current) {
+                useProjectStore.temporal.getState().resume();
+                pausedRef.current = false;
+            }
+            onPostDragGuard?.();
+            onDragEnd?.();
+        };
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', onUp);
+        return () => {
+            window.removeEventListener('pointermove', onMove);
+            window.removeEventListener('pointerup', onUp);
+            window.removeEventListener('pointercancel', onUp);
+        };
+    }, [intersect, onDragEnd, onPostDragGuard]);
+
+    const handleRingOver = (e: ThreeEvent<PointerEvent>) => {
+        if (draggingRef.current) return;
+        const p = intersect(e.clientX, e.clientY);
+        const c = ctxRef.current;
+        setRingMeshHover(
+            !!p && isPointerOnFurnitureRingXZ({ x: p.x, z: p.z }, c.centroidXZ, c.radius, FURNITURE_RING_RADIAL_TOLERANCE_M)
+        );
+    };
+
+    // アンマウント時（ドラッグ中に選択解除等で消えた場合）に paused を取り残さない安全策。
+    useEffect(() => () => {
+        if (pausedRef.current) {
+            useProjectStore.temporal.getState().resume();
+            pausedRef.current = false;
+        }
+    }, []);
+
+    return (
+        <group position={[centroidXZ.x, planeY, centroidXZ.z]}>
+            <FurnitureRotationRing3D
+                radius={radius}
+                highlighted={ringHighlight}
+                isDashed={isDragging}
+                onRingPointerDown={startRotate}
+                onRingPointerOver={handleRingOver}
+                onRingPointerOut={() => setRingMeshHover(false)}
+            />
+        </group>
+    );
+};
 
 /** 家具グループの世界座標にリングを追従（移動ドラッグ中も位置一致） */
 const FurnitureRingAnchor: React.FC<{
@@ -1381,6 +1532,8 @@ const GLTFFurniture: React.FC<{
     onFurnitureDragEnd?: () => void;
     onHoverNameChange?: (name: string | null) => void;
     onPostDragGuard?: () => void;
+    /** グループ回転ギズモ表示中は個別リングを抑止（移動はそのまま可能・260703）。 */
+    suppressRing?: boolean;
 }> = ({
     item,
     isSelected,
@@ -1396,7 +1549,8 @@ const GLTFFurniture: React.FC<{
     onFurnitureDragStart,
     onFurnitureDragEnd,
     onHoverNameChange,
-    onPostDragGuard
+    onPostDragGuard,
+    suppressRing
 }) => {
     const [isHovered, setIsHovered] = useState(false);
     const groupRef = useRef<THREE.Group>(null);
@@ -1424,6 +1578,8 @@ const GLTFFurniture: React.FC<{
         !snapshotMode &&
         !maskMode &&
         captureStep !== 'mask';
+    // 個別の回転リング表示。グループ回転ギズモ表示中(suppressRing)は隠す（移動=onBodyPointerDown は showTc のまま維持）。
+    const showRing = showTc && !suppressRing;
 
     const [pointerBusy, setPointerBusy] = useState(false);
     const [ringHoverDist, setRingHoverDist] = useState(false);
@@ -1477,7 +1633,7 @@ const GLTFFurniture: React.FC<{
     );
 
     useEffect(() => {
-        if (!showTc || !isSelected || snapshotMode || maskMode) {
+        if (!showRing || !isSelected || snapshotMode || maskMode) {
             setRingHoverDist(false);
             return;
         }
@@ -1494,12 +1650,12 @@ const GLTFFurniture: React.FC<{
             const wx = new THREE.Vector3();
             g.getWorldPosition(wx);
             const ringR = ringRadiusM;
-            const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR);
+            const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR, FURNITURE_RING_RADIAL_TOLERANCE_M);
             setRingHoverDist(onRingArc);
         };
         window.addEventListener('pointermove', onMove);
         return () => window.removeEventListener('pointermove', onMove);
-    }, [showTc, isSelected, snapshotMode, maskMode, intersectFloor, item, ringRadiusM]);
+    }, [showRing, isSelected, snapshotMode, maskMode, intersectFloor, item, ringRadiusM]);
 
     const endDrag = useCallback(() => {
         if (!draggingRef.current) return;
@@ -1631,7 +1787,7 @@ const GLTFFurniture: React.FC<{
         }
         if (!p) return;
         const ringR = ringRadiusM;
-        const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR);
+        const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR, FURNITURE_RING_RADIAL_TOLERANCE_M);
         const { width, depth } = getFurnitureFootprintMm(item);
         const wM = width / MM_PER_METER;
         const dM = depth / MM_PER_METER;
@@ -1673,7 +1829,7 @@ const GLTFFurniture: React.FC<{
     };
 
     const onRingPointerDown = (e: ThreeEvent<PointerEvent>) => {
-        if (captureStep === 'mask' || maskMode || snapshotMode || !showTc) return;
+        if (captureStep === 'mask' || maskMode || snapshotMode || !showRing) return;
         e.stopPropagation();
         const g = groupRef.current;
         const p = intersectFloor(e.clientX, e.clientY);
@@ -1682,7 +1838,7 @@ const GLTFFurniture: React.FC<{
         const wx = new THREE.Vector3();
         g.getWorldPosition(wx);
         const ringR = ringRadiusM;
-        if (!isPointerOnFurnitureRingXZ(p, wx, ringR)) return;
+        if (!isPointerOnFurnitureRingXZ(p, wx, ringR, FURNITURE_RING_RADIAL_TOLERANCE_M)) return;
         rotateDragStartYawRef.current = g.rotation.y;
         rotateDragStartAngleRef.current = Math.atan2(p.x - wx.x, p.z - wx.z);
         draggingRef.current = true;
@@ -1711,7 +1867,7 @@ const GLTFFurniture: React.FC<{
             const wx = new THREE.Vector3();
             g.getWorldPosition(wx);
             const ringR2 = ringRadiusM;
-            const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR2);
+            const onRingArc = isPointerOnFurnitureRingXZ(p, wx, ringR2, FURNITURE_RING_RADIAL_TOLERANCE_M);
             setRingMeshHover(onRingArc);
         },
         [intersectFloor, item, ringRadiusM]
@@ -1769,7 +1925,7 @@ const GLTFFurniture: React.FC<{
                     </Html>
                 )}
             </group>
-            {showTc && (
+            {showRing && (
                 <FurnitureRingAnchor furnitureGroupRef={groupRef}>
                     <FurnitureRotationRing3D
                         radius={ringRadiusM}
@@ -3252,6 +3408,29 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
     return names;
   }, [activeMeshes, activeFurnitureId, selectedIds, selectedOpeningId, selectedBeam3DId]);
 
+  // グループ回転ギズモ（260703 クライアント要望「グループを一括回転」）: 複数選択/グループ(2件以上)の重心・
+  // 半径・平面Y を算出。members<2 のときは null（＝個別リングのまま）。重心は剛体回転で不変なのでドラッグ中も安定。
+  const groups = useStore(useProjectStore, (s) => s.scene.groups);
+  const groupSelection = useMemo(() => {
+    const seed = activeFurnitureId ?? selectedIds[0] ?? null;
+    if (!seed) return null;
+    const members = resolveMoveMembers(seed, groups, selectedIds);
+    if (members.size < 2) return null;
+    const centroid = computeGroupCentroidXZ(furnitureItems, members);
+    if (!centroid) return null;
+    let sy = 0;
+    let n = 0;
+    let maxR = 0;
+    for (const f of furnitureItems) {
+      if (!members.has(f.id)) continue;
+      sy += f.position[1];
+      n++;
+      const r = Math.hypot(f.position[0] - centroid.x, f.position[2] - centroid.z) + getFurnitureRingRadiusM(f);
+      if (r > maxR) maxR = r;
+    }
+    return { members, centroid, planeY: n ? sy / n : 0, radius: Math.max(0.5, maxR) };
+  }, [activeFurnitureId, selectedIds, groups, furnitureItems]);
+
   return (
     <div className="w-full h-full bg-[#0a0a0a] relative">
       <Canvas 
@@ -3429,8 +3608,26 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             onFurnitureDragEnd={endDragInteraction}
                             onPostDragGuard={markPostDragGuard}
                             onHoverNameChange={safeHoverNameChange}
+                            suppressRing={!!groupSelection}
                         />
                     ))}
+                    {/* グループ回転ギズモ（複数選択/グループの重心に1つ・全員を重心まわりに一括回転・260703） */}
+                    {!hideFurniture && groupSelection && sketchFloorPolygon && !snapshotMode && !maskMode && captureStep !== 'mask' && (
+                      <GroupRotationGizmo3D
+                        centroidXZ={groupSelection.centroid}
+                        planeY={groupSelection.planeY}
+                        radius={groupSelection.radius}
+                        memberIds={groupSelection.members}
+                        onGroupRotate={(members, centroid, dTheta) => {
+                          // 剛体回転（2D グループ回転と同様に壁クランプしない）。クランプすると回転が非剛体化して
+                          // 重心がずれ、増分回転の基準角と食い違って「歩く」ため（260703 検証 w1）。はみ出しは移動で戻せる。
+                          onFurnitureUpdate((prev) => applyGroupRotation(prev, members, centroid, dTheta));
+                        }}
+                        onDragStart={beginDragInteraction}
+                        onDragEnd={endDragInteraction}
+                        onPostDragGuard={markPostDragGuard}
+                      />
+                    )}
                     <Beams3D
                       beams={beams}
                       centerMm={sketchFloorPolygon?.centerMm}
