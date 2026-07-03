@@ -69,6 +69,10 @@ export interface ProjectStoreState {
   // aiEdit（写真AI編集の永続化・2a。Undo 対象外、autosave は temporal 起因のため別途保存する）
   setAiEdit(aiEdit: ProjectState['aiEdit']): void;
 
+  // camera（カメラ視点プリセット・Undo 対象外。per-project 永続化＝toProjectState/loadProjectState 経由。
+  // 260703: 旧 localStorage 実装（ブラウザ単位）では別ブラウザで保存視点が消えたため Supabase 永続化へ移行）
+  setCameraPresets(presets: ProjectState['camera']['presets']): void;
+
   // load / replace
   loadProjectState(state: ProjectState): void;
   reset(): void;
@@ -183,6 +187,11 @@ export const useProjectStore = create<ProjectStoreState>()(
       setAiEdit: (aiEdit) =>
         set((s) => {
           s.aiEdit = aiEdit;
+        }),
+
+      setCameraPresets: (presets) =>
+        set((s) => {
+          s.camera.presets = presets;
         }),
 
       loadProjectState: (state) =>

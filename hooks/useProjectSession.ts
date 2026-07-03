@@ -60,6 +60,8 @@ export interface ProjectSession {
   setProjectThumbnail(dataUrl: string): Promise<void>;
   /** 写真AI編集（2a）の現在ストア内容をデバウンス保存する。aiEdit は temporal 対象外で autosave されないため別途呼ぶ。 */
   persistAiEdit(): void;
+  /** カメラ視点プリセットの現在ストア内容をデバウンス保存する。camera も temporal 対象外で autosave されないため別途呼ぶ（260703）。 */
+  persistCamera(): void;
   /**
    * 保存直前フックの登録。flush（切替・離脱時 flushSave）の直前に呼ばれる。2Dのライブ下書き
    * （pendingPoints は App ローカル state）を保存前にストアへ確定する用途。null で解除（260624）。
@@ -98,8 +100,9 @@ function messageOf(e: unknown): string {
  * 単一インスタンス前提: ストアは singleton のため、この hook は ProjectSessionProvider 経由で
  * 1 度だけ呼ぶこと（複数呼び出しは autosave ループの二重化になる）。
  *
- * 注意: 現時点でストア管理下にあるのは sketch / scene / materials。aiEdit / camera は
- *       別 state のため未永続化（該当スライス移行時に対応）。
+ * 注意: sketch / scene / materials / estimate は temporal（Undo）由来の autosave で保存する。
+ *       aiEdit / camera は Undo 対象外のため autosave されず、persistAiEdit / persistCamera の
+ *       デバウンス保存で per-project に永続化する（いずれも data 全体を書き込む）。
  */
 export function useProjectSession(): ProjectSession {
   const { configured, userId, profile, refreshProfile } = useAuth();
@@ -193,6 +196,15 @@ export function useProjectSession(): ProjectSession {
   // aiEdit（AIレンダ/編集履歴）のデバウンス保存タイマー（下の persistAiEdit が設定）。ストア差し替え前に
   // 必ず取り消し、古いタイマーが発火して「別プロジェクトの内容を旧 id の行へ書き込む」事故を防ぐ。
   const aiEditSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // カメラ視点プリセット（temporal 対象外）のデバウンス保存タイマー。aiEdit と同様、ストア差替（loadInto）や
+  // 離脱フラッシュ（flushSave）の前に必ず取り消し、古いタイマー発火で別プロジェクトへ書き込む事故を防ぐ（260703）。
+  const cameraSaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // デバウンス保存の発火時に「今開いているプロジェクト」を確認するための最新 projectId（毎レンダ更新）。
+  // loadInto/flushSave のタイマー取消に加えた二重の安全策: ログイン/リロードの初回読込（loadProjectState を
+  // loadInto を通さず直接呼ぶ経路）でストアが別プロジェクトへ差し替わっても、保留タイマーが旧 id へ現在ストアを
+  // 書き込む（別プロジェクト混入）ことを防ぐ。切替時は flush が編集を同期確定済みのため取りこぼしは無い（260703）。
+  const currentProjectIdRef = useRef<string | null>(null);
+  currentProjectIdRef.current = projectId;
 
   // 保存直前フック。2Dスケッチのライブ下書き（pendingPoints）は App のローカル state にあり、
   // 3D生成/3D切替時しかストアへコミットされない。離脱・切替の flush 直前にこれを呼び、未コミットの
@@ -217,6 +229,10 @@ export function useProjectSession(): ProjectSession {
     if (aiEditSaveTimer.current) {
       clearTimeout(aiEditSaveTimer.current);
       aiEditSaveTimer.current = null;
+    }
+    if (cameraSaveTimer.current) {
+      clearTimeout(cameraSaveTimer.current);
+      cameraSaveTimer.current = null;
     }
     useProjectStore.getState().loadProjectState(data);
     useProjectStore.temporal.getState().clear();
@@ -413,8 +429,26 @@ export function useProjectSession(): ProjectSession {
     const id = projectId;
     if (aiEditSaveTimer.current) clearTimeout(aiEditSaveTimer.current);
     aiEditSaveTimer.current = setTimeout(() => {
+      // 発火までに別プロジェクトへ切替わっていたら、現在ストア（別プロジェクト）を旧 id へ書き込まない。
+      if (currentProjectIdRef.current !== id) return;
       void saveProject(id, { data: useProjectStore.getState().toProjectState() }).catch((e) =>
         console.error('[project session] aiEdit save failed', e),
+      );
+    }, 800);
+  }, [configured, userId, projectId]);
+
+  // カメラ視点プリセットの保存（260703・クライアント要望）。camera も temporal（Undo）対象外のため通常 autosave
+  // されない。プリセットを追加/改名/削除するたびにデバウンスして data 全体（camera を含む）を保存する。
+  // これで別ブラウザ/端末でも保存視点が復元される（旧 localStorage 実装はブラウザ単位のため消えていた）。
+  const persistCamera = useCallback(() => {
+    if (!configured || !userId || !projectId) return;
+    const id = projectId;
+    if (cameraSaveTimer.current) clearTimeout(cameraSaveTimer.current);
+    cameraSaveTimer.current = setTimeout(() => {
+      // 発火までに別プロジェクトへ切替わっていたら、現在ストア（別プロジェクト）を旧 id へ書き込まない。
+      if (currentProjectIdRef.current !== id) return;
+      void saveProject(id, { data: useProjectStore.getState().toProjectState() }).catch((e) =>
+        console.error('[project session] camera save failed', e),
       );
     }, 800);
   }, [configured, userId, projectId]);
@@ -433,6 +467,10 @@ export function useProjectSession(): ProjectSession {
     if (aiEditSaveTimer.current) {
       clearTimeout(aiEditSaveTimer.current);
       aiEditSaveTimer.current = null;
+    }
+    if (cameraSaveTimer.current) {
+      clearTimeout(cameraSaveTimer.current);
+      cameraSaveTimer.current = null;
     }
     setStatus('saving');
     // タイムアウトでリクエストを中断する。UI を必ず解放し、かつ中断後に stale な保存が
@@ -497,6 +535,7 @@ export function useProjectSession(): ProjectSession {
     restoreDeletedProject,
     setProjectThumbnail,
     persistAiEdit,
+    persistCamera,
     registerBeforeSave,
     flushSave,
   };

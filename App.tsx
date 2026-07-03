@@ -52,7 +52,9 @@ import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
 import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
 
-const CAMERA_PRESETS_STORAGE_KEY = 'archviz-camera-presets-v1';
+// カメラ視点プリセットは per-project でストア（＝Supabase の projects.data）へ永続化する（260703）。
+// 旧実装は localStorage（ブラウザ単位・全プロジェクト共通）だったため、別ブラウザ/端末では保存視点が
+// 見えなかった。ストア（projectStore.camera.presets）＋ persistCamera へ移行済み。
 const MAX_CAMERA_PRESETS = 12;
 
 type CameraMode = 'orbit' | 'walk';
@@ -1408,6 +1410,7 @@ const App: React.FC = () => {
   // === aiEdit（AIレンダ/編集履歴）の per-project クラウド永続化（260619: photo 専用から全プロジェクトへ拡張） ===
   const photoProjectId = projectSession?.projectId ?? null;
   const persistAiEdit = projectSession?.persistAiEdit;
+  const persistCamera = projectSession?.persistCamera;
   const replaceAllAiEdit = aiEditSession.replaceAll;
   const lastSeededPhotoProjectRef = useRef<string | null>(null);
   const skipNextAiEditPersistRef = useRef(false);
@@ -1518,28 +1521,22 @@ const App: React.FC = () => {
   const cameraBlendTokenRef = useRef(0);
   const [cameraBlendRequest, setCameraBlendRequest] = useState<CameraBlendRequest | null>(null);
   const [lastAppliedPresetId, setLastAppliedPresetId] = useState<string | null>(null);
-  const [cameraPresets, setCameraPresets] = useState<CameraPreset[]>(() => {
-    try {
-      const raw = localStorage.getItem(CAMERA_PRESETS_STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      if (!Array.isArray(parsed)) return [];
-      return parsed.filter(
-        (p: unknown): p is CameraPreset =>
-          typeof p === 'object' &&
-          p !== null &&
-          typeof (p as CameraPreset).id === 'string' &&
-          typeof (p as CameraPreset).label === 'string' &&
-          Array.isArray((p as CameraPreset).position) &&
-          (p as CameraPreset).position.length === 3 &&
-          Array.isArray((p as CameraPreset).target) &&
-          (p as CameraPreset).target.length === 3 &&
-          typeof (p as CameraPreset).fov === 'number'
-      );
-    } catch {
-      return [];
-    }
-  });
+  // カメラ視点プリセットは per-project でストアに保持し、Supabase（projects.data）へ永続化する（260703）。
+  // 読み込み時は loadProjectState 経由でストアへ入るため購読で自動反映。書き込みは setState 互換の
+  // ブリッジ（家具と同方式）でストアへ流し、temporal 対象外のため persistCamera でデバウンス保存する。
+  const cameraPresets = useProjectStore((s) => s.camera.presets);
+  const setCameraPresets = useCallback<React.Dispatch<React.SetStateAction<CameraPreset[]>>>(
+    (action) => {
+      const current = useProjectStore.getState().camera.presets;
+      const next =
+        typeof action === 'function'
+          ? (action as (prev: CameraPreset[]) => CameraPreset[])(current)
+          : action;
+      useProjectStore.getState().setCameraPresets(next);
+      persistCamera?.();
+    },
+    [persistCamera]
+  );
 
   const [cameraMode, setCameraMode] = useState<CameraMode>('orbit');
   const [cameraFov, setCameraFov] = useState(50);
@@ -1550,14 +1547,6 @@ const App: React.FC = () => {
   const [walkSpawnXZ, setWalkSpawnXZ] = useState<[number, number] | null>(null);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem(CAMERA_PRESETS_STORAGE_KEY, JSON.stringify(cameraPresets));
-    } catch {
-      /* quota / private mode */
-    }
-  }, [cameraPresets]);
 
   const requestCameraBlend = useCallback(
     (position: [number, number, number], target: [number, number, number], fov: number) => {
@@ -1796,12 +1785,14 @@ const App: React.FC = () => {
       setCameraPresets((prev) => prev.map((p) => (p.id === id ? { ...p, label: trimmed } : p)));
     }
     setPresetNameDialog(null);
-  }, [presetNameDialog, presetNameInput]);
+    // setCameraPresets は persistCamera（projectId を束縛）に依存し安定でないため deps に含める。
+    // 省くと切替後に古い projectId へ保存する（別プロジェクトへ書き込む）リスクがある（260703）。
+  }, [presetNameDialog, presetNameInput, setCameraPresets]);
 
   const handleDeleteCameraPreset = useCallback((id: string) => {
     setCameraPresets((prev) => prev.filter((p) => p.id !== id));
     setLastAppliedPresetId((cur) => (cur === id ? null : cur));
-  }, []);
+  }, [setCameraPresets]);
 
   const handleRenameCameraPreset = useCallback(
     (id: string) => {
