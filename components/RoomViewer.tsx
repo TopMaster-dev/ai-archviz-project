@@ -53,6 +53,7 @@ import type { Beam } from '../lib/project/projectState.js';
 import { effectiveTextureShortEdgeMeters, effectiveTextureTileMeters } from '../lib/materialPhysical.js';
 import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 import { applyFurniturePatch, resolveMoveMembers } from '../utils/furnitureGroupMove.js';
+import { solidRectsForSegment } from '../utils/wallOpeningTiling.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -2168,68 +2169,36 @@ const WallSegment: React.FC<{
 }) => {
   const meshRef = useRef<THREE.Mesh>(null);
 
-  const wallShape = useMemo(() => {
-    const s = new THREE.Shape();
-    s.moveTo(-lengthM / 2, -actualWallH / 2);
-    s.lineTo(lengthM / 2, -actualWallH / 2);
-    s.lineTo(lengthM / 2, actualWallH / 2);
-    s.lineTo(-lengthM / 2, actualWallH / 2);
-    s.lineTo(-lengthM / 2, -actualWallH / 2);
-
-    const sorted = [...openingsInSegment].sort((a: Opening, b: Opening) => a.ratioPosition - b.ratioPosition);
-    const halfH = actualWallH / 2;
-    const minYL = -halfH + HOLE_INSET_EPS_M;
-    const maxYL = halfH - HOLE_INSET_EPS_M;
-    const wallBottomNoInsetYL = -halfH;
-    const minXL = -lengthM / 2 + HOLE_INSET_EPS_M;
-    const maxXL = lengthM / 2 - HOLE_INSET_EPS_M;
-
-    sorted.forEach((op: Opening) => {
+  // 壁セグメントを「開口を差し引いた実体矩形（タイル）群」として構築する（260703）。
+  // 旧: 1枚の外周矩形＋穴（holes）方式は、開口がセグメント全高をまたぐと壁が左右2本の柱へ分断され、
+  //     単一 THREE.Shape では非連結領域を表現できず境界に極薄の帯を残していた（腰壁分割線の継ぎ目/穴あけ破綻）。
+  // 新: solidRectsForSegment でセグメント矩形−開口の実体矩形を求め、THREE.ShapeGeometry(配列) で描く。
+  //     分断された柱も欠けず、穴が外周に接する退化ポリゴンも生じない。UVは頂点座標(m)＝実寸タイリングを維持。
+  const wallShapes = useMemo(() => {
+    // 開口をセグメントのローカル座標（中心原点・m）へ変換し、セグメント範囲へ縦クリップする。
+    const localOpenings = openingsInSegment.map((op: Opening) => {
       const openingBottom = getOpeningBottomM(op);
       const openingTop = openingBottom + op.height / 1000;
-      let clippedBottom = Math.max(openingBottom, segmentMinY);
-      let clippedTop = Math.min(openingTop, segmentMaxY);
-      if (clippedBottom >= clippedTop) return;
-
-      let holeH = clippedTop - clippedBottom;
-      if (holeH <= MIN_WALL_HOLE_HEIGHT_M) return;
-
+      const clippedBottom = Math.max(openingBottom, segmentMinY);
+      const clippedTop = Math.min(openingTop, segmentMaxY);
       const holeX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
       const holeW = getEffectiveOpeningWidthMm(op) / 1000;
-      let hy = (clippedBottom + clippedTop) / 2 - actualWallY;
-      let hh = holeH / 2;
-      let hx = holeX;
-      let hw = holeW / 2;
-
-      let yBot = hy - hh;
-      let yTop = hy + hh;
-      // 巾木との共有境界（segmentMinY）に接する穴だけは下端EPSを外し、境界スリバーを防ぐ
-      const touchesSegmentBottom = Math.abs(clippedBottom - segmentMinY) <= HOLE_INSET_EPS_M;
-      yBot = Math.max(yBot, touchesSegmentBottom ? wallBottomNoInsetYL : minYL);
-      yTop = Math.min(yTop, maxYL);
-      if (yTop <= yBot) return;
-      hy = (yTop + yBot) / 2;
-      hh = (yTop - yBot) / 2;
-      if (hh * 2 <= MIN_WALL_HOLE_HEIGHT_M) return;
-
-      let xL = hx - hw;
-      let xR = hx + hw;
-      xL = Math.max(xL, minXL);
-      xR = Math.min(xR, maxXL);
-      if (xR <= xL) return;
-      hx = (xL + xR) / 2;
-      hw = (xR - xL) / 2;
-
-      const holePath = new THREE.Path();
-      // 外周と逆巻き（時計回り）— ShapeUtils.triangulateShape が穴として正しく認識する
-      holePath.moveTo(hx - hw, hy - hh);
-      holePath.lineTo(hx - hw, hy + hh);
-      holePath.lineTo(hx + hw, hy + hh);
-      holePath.lineTo(hx + hw, hy - hh);
-      holePath.lineTo(hx - hw, hy - hh);
-      s.holes.push(holePath);
+      return {
+        xL: holeX - holeW / 2,
+        xR: holeX + holeW / 2,
+        yB: clippedBottom - actualWallY,
+        yT: clippedTop - actualWallY,
+      };
     });
-    return s;
+    return solidRectsForSegment(lengthM / 2, actualWallH / 2, localOpenings).map((r) => {
+      const s = new THREE.Shape();
+      s.moveTo(r.xL, r.yB);
+      s.lineTo(r.xR, r.yB);
+      s.lineTo(r.xR, r.yT);
+      s.lineTo(r.xL, r.yT);
+      s.lineTo(r.xL, r.yB);
+      return s;
+    });
   }, [
     lengthM,
     actualWallH,
@@ -2258,7 +2227,7 @@ const WallSegment: React.FC<{
         castShadow={shadowEnabled}
         receiveShadow={shadowEnabled}
       >
-        <shapeGeometry args={[wallShape]} />
+        <shapeGeometry args={[wallShapes]} />
         {/* 壁は片面ジオメトリ。凹形状でも面が裏返って消えないよう両面描画する（260611 Sec3） */}
         <Suspense fallback={<meshStandardMaterial color="#cccccc" side={THREE.DoubleSide} />}>
           <DynamicMaterial
@@ -2650,7 +2619,9 @@ const SketchRoom = ({
         const divs = wallDivisions[i] || 1;
         const bottomProd = selections[`${wallName}_0`];
         const bottomProdId = bottomProd ? bottomProd.id : 'default_no_tex';
-        const wainscotHeight = materialSettings[bottomProdId]?.wainscotHeight ?? 900;
+        // 腰壁高さは天井高さ−1mm(height*1000-1)を上限にクランプ（保存値が天井超過でも上段が高さ0に潰れて
+        // 天井を貫かないよう防御・260703）。下限 1mm。
+        const wainscotHeight = Math.min(height * 1000 - 1, Math.max(1, materialSettings[bottomProdId]?.wainscotHeight ?? 900));
 
         return (
           <group key={i} visible={!cutAwayWall} position={[(p.x + next.x) / 2, 0, (p.z + next.z) / 2]} rotation={[0, rotationY, 0]}>

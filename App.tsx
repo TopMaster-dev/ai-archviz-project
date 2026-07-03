@@ -2589,7 +2589,8 @@ const App: React.FC = () => {
         const subIdx = parseInt(parts[1], 10);
         const bottomProd = selections[`Sketch_Wall_${baseIdx}_0`];
         const bottomProdId = bottomProd ? bottomProd.id : 'default_no_tex';
-        const bottomHeight = materialSettings[bottomProdId]?.wainscotHeight ?? 900;
+        // 見積面積も3D描画と同じく腰壁高さを天井高さ−1mmでクランプ（天井超過の保存値で下段面積が過大になるのを防ぐ・260703）。
+        const bottomHeight = Math.min(roomHeight - 1, Math.max(1, materialSettings[bottomProdId]?.wainscotHeight ?? 900));
         const segHeight = subIdx === 0 ? bottomHeight : Math.max(0, roomHeight - bottomHeight);
         grossArea = (distMm * segHeight) / 1000000;
         if (subIdx === 0) {
@@ -3833,7 +3834,9 @@ const App: React.FC = () => {
                                                                     onChange={(v) =>
                                                                         setMaterialSettings((prev) => ({
                                                                             ...prev,
-                                                                            [prodId]: { ...prev[prodId], wainscotHeight: v },
+                                                                            // 腰壁の高さは天井高さを上限にクランプ（無限に上げられる不具合の修正・260703）。
+                                                                            // 上限は天井高さ−1mm（上段が高さ0に潰れて天井を貫く極薄スリバーを防ぐ）、下限は 1mm。
+                                                                            [prodId]: { ...prev[prodId], wainscotHeight: Math.min(roomHeight - 1, Math.max(1, Math.round(v))) },
                                                                         }))
                                                                     }
                                                                     dragSensitivity={5}
