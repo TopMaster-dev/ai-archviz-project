@@ -4,10 +4,11 @@ import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import {
-  PREVIEW_ASPECT_RATIO,
   PREVIEW_GEMINI_IMAGE_SIZE,
   PREVIEW_RENDER_MAX_SIDE,
 } from '../utils/printExportSpec.js';
+import { normalizeRenderAspectKey } from '../utils/renderAspect.js';
+import { useProjectStore } from '../lib/store/projectStore.js';
 
 export type UseAiRendererOptions = {
   /** キャンバスからの AI レンダリング成功時（編集セッションの v0 シード用など） */
@@ -57,13 +58,17 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
       const rawImage = canvas.toDataURL('image/png');
       const previewImage = await downscaleDataUrlIfNeeded(rawImage, PREVIEW_RENDER_MAX_SIDE);
 
+      // 3Dビューは選択比率にレターボックス表示され、キャプチャもその比率になる。生成比率を一致させて
+      // 構図ズレ/引き伸ばしを防ぐ（第2段 260703・未指定は 16:9）。
+      const aspectRatio = normalizeRenderAspectKey(useProjectStore.getState().camera.renderAspectRatio);
+
       const res = await fetch('/api/render', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
         body: JSON.stringify({
           image: previewImage,
           prompt: 'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。',
-          aspectRatio: PREVIEW_ASPECT_RATIO,
+          aspectRatio,
           imageSize: PREVIEW_GEMINI_IMAGE_SIZE,
         }),
       });

@@ -72,6 +72,8 @@ export interface ProjectStoreState {
   // camera（カメラ視点プリセット・Undo 対象外。per-project 永続化＝toProjectState/loadProjectState 経由。
   // 260703: 旧 localStorage 実装（ブラウザ単位）では別ブラウザで保存視点が消えたため Supabase 永続化へ移行）
   setCameraPresets(presets: ProjectState['camera']['presets']): void;
+  // 3Dレンダリング比率（Undo 対象外・camera スライス。persistCamera でデバウンス保存・260703 第2段）。
+  setRenderAspectRatio(key: string): void;
 
   // load / replace
   loadProjectState(state: ProjectState): void;
@@ -194,6 +196,11 @@ export const useProjectStore = create<ProjectStoreState>()(
           s.camera.presets = presets;
         }),
 
+      setRenderAspectRatio: (key) =>
+        set((s) => {
+          s.camera.renderAspectRatio = key;
+        }),
+
       loadProjectState: (state) =>
         set((s) => {
           // 旧スキーマ/部分的な project.data（beams や aiEdit 等が欠ける、または DB 既定の {} ）を
@@ -240,6 +247,7 @@ export const useProjectStore = create<ProjectStoreState>()(
           };
           s.camera = {
             presets: src.camera?.presets ?? d.camera.presets,
+            renderAspectRatio: src.camera?.renderAspectRatio ?? d.camera.renderAspectRatio,
           };
           s.estimate = {
             aiItems: src.estimate?.aiItems ?? d.estimate.aiItems,

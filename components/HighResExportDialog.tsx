@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
@@ -13,10 +13,12 @@ import {
   EXPORT_PREVIEW_OPTION_ID,
   EXPORT_RENDER_INPUT_MAX_SIDE,
   exportPresetFooterLines,
+  exportPresetsForRatio,
   exportPreviewFooterLines,
-  PREVIEW_ASPECT_RATIO,
   type ExportPreset16x9,
 } from '../utils/printExportSpec.js';
+import { pickClosestCropRatio } from '../utils/cropToAspect.js';
+import { aspectLabelForKey, ratioValueForKey } from '../utils/renderAspect.js';
 import { resizeDataUrlToSize } from '../utils/resizeDataUrl.js';
 import { applyFreePlanOutputLimits } from '../utils/freePlanImage.js';
 import {
@@ -72,9 +74,20 @@ export function HighResExportDialog({
   // （高コストな高解像度の再レンダを無駄にしない）。
   const [result, setResult] = useState<ExportResult | null>(null);
 
+  // 書き出し比率は「元画像の実寸から最も近い対応比率」で決める（第2段 260703）。
+  // 3Dレンダ由来なら選択したレンダ比率に、写真編集由来なら（第1段の）クロップ比率に自然に一致する。
+  // 読み込み前は 16:9 相当（従来どおり）。
+  const exportRatioKey = sourceNatural
+    ? pickClosestCropRatio(sourceNatural.w, sourceNatural.h).key
+    : '16:9';
+  const presets = useMemo(
+    () => exportPresetsForRatio(ratioValueForKey(exportRatioKey)),
+    [exportRatioKey],
+  );
+
   const isPreview = selectedIndex === PREVIEW_INDEX;
   const dpiPreset: ExportPreset16x9 | null = !isPreview
-    ? (EXPORT_PRESETS_16_9[selectedIndex] ?? EXPORT_PRESETS_16_9[0]!)
+    ? (presets[selectedIndex] ?? presets[0]!)
     : null;
 
   useEffect(() => {
@@ -113,10 +126,10 @@ export function HighResExportDialog({
 
   const width = isPreview ? (sourceNatural?.w ?? 0) : dpiPreset!.width;
   const height = isPreview ? (sourceNatural?.h ?? 0) : dpiPreset!.height;
-  const aspectLabel = '16 : 9';
+  const aspectLabel = aspectLabelForKey(exportRatioKey);
   const aspectDesc = width > 0 && height > 0 ? describePixelAspect(width, height) : '—';
 
-  const footerLines = isPreview ? exportPreviewFooterLines() : exportPresetFooterLines(dpiPreset!);
+  const footerLines = isPreview ? exportPreviewFooterLines() : exportPresetFooterLines(dpiPreset!, aspectLabel);
 
   // #4: 保持済みの result を使ってダウンロードをトリガー（再生成・API 呼び出し・カウント消費なし）。
   // ブラウザの「保存ダイアログ」をキャンセルしても、これで何度でも保存し直せる。
@@ -165,7 +178,7 @@ export function HighResExportDialog({
         body: JSON.stringify({
           image: inputImage,
           prompt: RENDER_PROMPT,
-          aspectRatio: PREVIEW_ASPECT_RATIO,
+          aspectRatio: exportRatioKey,
           imageSize: EXPORT_GEMINI_IMAGE_SIZE,
         }),
       });
@@ -242,7 +255,7 @@ export function HighResExportDialog({
             高解像（300–150 dpi 相当）はクラウド API で再レンダ後に目標ピクセルへ合わせます。プレビュー用は再生成しません。
           </p>
           <div className="space-y-2">
-            {EXPORT_PRESETS_16_9.map((p, i) => (
+            {presets.map((p, i) => (
               <label
                 key={p.id}
                 className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
@@ -257,7 +270,7 @@ export function HighResExportDialog({
                   className="mt-0.5"
                   checked={i === selectedIndex}
                   onChange={() => setSelectedIndex(i)}
-                  disabled={busy}
+                  disabled={busy || sourceNaturalLoading}
                 />
                 <span>
                   <span className="text-white font-bold">{p.dpi} dpi</span>
@@ -355,7 +368,7 @@ export function HighResExportDialog({
               </button>
               <button
                 type="button"
-                disabled={busy || !sourceImageDataUrl || (isPreview && sourceNaturalLoading)}
+                disabled={busy || !sourceImageDataUrl || sourceNaturalLoading}
                 onClick={() => void runExport()}
                 className="px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-sm font-bold text-white disabled:opacity-40 flex items-center gap-2"
               >

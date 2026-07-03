@@ -107,6 +107,8 @@ export interface ProjectState {
   };
   camera: {
     presets: CameraPreset[];
+    /** 3Dレンダリング比率（'16:9' 等・第2段 260703）。3Dビュー表示比率・AIレンダ比率・書き出しに連動。未指定は '16:9'。 */
+    renderAspectRatio?: string;
   };
   /** 概算見積の手動「AI追加アイテム」（3D未配置の見積行）。永続化対象（260619 クライアント要望）。 */
   estimate: {
@@ -122,7 +124,7 @@ export function createEmptyProjectState(): ProjectState {
     scene: { roomHeightMm: 2400, furniture: [], groups: [], beams: [] },
     materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },
-    camera: { presets: [] },
+    camera: { presets: [], renderAspectRatio: '16:9' },
     estimate: { aiItems: [] },
   };
 }

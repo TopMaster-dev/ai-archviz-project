@@ -9,6 +9,7 @@ import { RoomViewer } from './components/RoomViewer.js';
 import { ModelRoot } from './components/ModelRoot.js';
 import { ModelFilePreview } from './components/ModelFilePreview.js';
 import { CameraPresetBar } from './components/CameraPresetBar.js';
+import { ratioValueForKey, containBox, normalizeRenderAspectKey } from './utils/renderAspect.js';
 import { MovablePanel } from './components/MovablePanel.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
@@ -1430,6 +1431,24 @@ const App: React.FC = () => {
     viewAreaObserverRef.current = ro;
   }, []);
   useEffect(() => () => { viewAreaObserverRef.current?.disconnect(); }, []);
+  // 3Dビュー描画枠の外寸（レターボックス計算用・第2段 260703）。選択比率に応じて内側の3D枠を contain フィット
+  // させ、見た目＝キャプチャ＝AIレンダ比率を一致させて構図ズレ/引き伸ばしを防ぐ。3Dモード時のみ計測。
+  const [renderViewport, setRenderViewport] = useState<{ w: number; h: number } | null>(null);
+  const renderViewportObserverRef = useRef<ResizeObserver | null>(null);
+  const setRenderViewportNode = useCallback((node: HTMLDivElement | null) => {
+    renderViewportObserverRef.current?.disconnect();
+    renderViewportObserverRef.current = null;
+    if (!node) {
+      setRenderViewport(null);
+      return;
+    }
+    const update = () => setRenderViewport({ w: node.clientWidth, h: node.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    renderViewportObserverRef.current = ro;
+  }, []);
+  useEffect(() => () => { renderViewportObserverRef.current?.disconnect(); }, []);
   // ドラッグ可能領域＝3Dビュー領域内（上部ヘッダの下〜領域端の少し内側）。右サイドバーは除外（viewAreaRect の右端まで）。
   const getPreviewBounds = useCallback(() => {
     const vw = typeof window !== 'undefined' ? window.innerWidth : 1200;
@@ -1583,6 +1602,22 @@ const App: React.FC = () => {
     },
     [persistCamera]
   );
+  // 3Dレンダリング比率（camera スライス・Undo 対象外）。視点操作パネルから選択し、3Dビュー表示・AIレンダ・
+  // 書き出しに連動させる（第2段 260703）。読込は購読で自動反映、書込は setCameraPresets と同方式で永続化。
+  const renderAspectRatio = normalizeRenderAspectKey(
+    useProjectStore((s) => s.camera.renderAspectRatio),
+  );
+  const setRenderAspectRatio = useCallback(
+    (key: string) => {
+      useProjectStore.getState().setRenderAspectRatio(key);
+      persistCamera?.();
+    },
+    [persistCamera]
+  );
+  // 選択比率で3Dビューを contain フィットさせる内側枠の実寸（px）。未計測時は null（＝枠いっぱいにフォールバック）。
+  const renderInnerBox = renderViewport
+    ? containBox(renderViewport.w, renderViewport.h, ratioValueForKey(renderAspectRatio))
+    : null;
 
   const [cameraMode, setCameraMode] = useState<CameraMode>('orbit');
   const [cameraFov, setCameraFov] = useState(50);
@@ -3597,10 +3632,19 @@ const App: React.FC = () => {
              )}
 
              {viewMode === '3D' && (
-                // ビューエリアの高さいっぱいに広げる（幅は w-full のまま）。以前は aspect-video で
-                // 16:9 に固定 → items-end で下寄せされ、上部に黒い余白が出ていた。h-full で解消。
-                <div className="relative w-full h-full overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/10 bg-[#0a0a0a]">
-                     <RoomViewer 
+                // 外枠は領域いっぱい（レターボックスの黒帯）。内側の3D枠を選択比率へ contain フィットさせ、
+                // 見た目＝キャプチャ＝AIレンダ比率を一致させる（第2段 260703・未計測時は枠いっぱいにフォールバック）。
+                <div ref={setRenderViewportNode} className="relative w-full h-full overflow-hidden bg-[#0a0a0a]">
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div
+                      className="relative overflow-hidden shadow-[0_0_50px_rgba(0,0,0,0.5)] ring-1 ring-white/10 bg-[#0a0a0a]"
+                      style={
+                        renderInnerBox
+                          ? { width: Math.round(renderInnerBox.w), height: Math.round(renderInnerBox.h) }
+                          : { width: '100%', height: '100%' }
+                      }
+                    >
+                     <RoomViewer
                         selections={selections as any} 
                         onMeshClick={handleMeshClick} 
                         activeCategory={activeCategory} 
@@ -3652,8 +3696,10 @@ const App: React.FC = () => {
                         walkDigitalInputRef={walkDigitalInputRef}
                         cameraWalkStateRef={cameraWalkStateRef}
                     />
+                    </div>
+                  </div>
 
-                    {/* --- フローティングUIを16:9のキャンバス「内部」に配置 --- */}
+                    {/* --- フローティングUIをビュー領域全体（レターボックス外枠）に重ねて配置 --- */}
                     <>
                     {/* Right Side: Material / Opening / 家具の基本情報 */}
                     <div className="absolute inset-0 z-50 pointer-events-none">
@@ -4509,6 +4555,8 @@ const App: React.FC = () => {
                                             onCameraFovChange={setCameraFov}
                                             eyeHeightMm={eyeHeightMm}
                                             onEyeHeightMmChange={setEyeHeightMm}
+                                            renderAspectRatio={renderAspectRatio}
+                                            onRenderAspectRatioChange={setRenderAspectRatio}
                                             onSaveCurrent={handleSaveCameraPreset}
                                             onApply={applyCameraPreset}
                                             onDelete={handleDeleteCameraPreset}

@@ -30,6 +30,28 @@ export const EXPORT_PRESETS_16_9: ExportPreset16x9[] = [
 /** 300dpi 相当の長辺（後方互換・他モジュール用） */
 export const PRINT_EXPORT_LONG_EDGE_PX = EXPORT_PRESETS_16_9[0]!.width;
 
+/**
+ * 任意比率の書き出しプリセット（第2段・260703）。長辺を A3（420mm）× dpi 相当のピクセルにし、
+ * 比率(ratioValue=幅/高さ)から短辺を導く。横長は幅＝長辺、縦長は高さ＝長辺（向きを保つ）。
+ * ratioValue=16/9 のときは EXPORT_PRESETS_16_9 と同一寸法になる（後方互換）。
+ */
+export function exportPresetsForRatio(ratioValue: number): ExportPreset16x9[] {
+  const r = ratioValue > 0 ? ratioValue : 16 / 9;
+  const labels: Array<[number, string]> = [
+    [300, '美術印刷・近くで見るポスター'],
+    [250, '一般的なカタログ・プレゼン用'],
+    [200, '離れて見る・コスト優先'],
+    [150, '最低限'],
+  ];
+  return labels.map(([dpi, label]) => {
+    const longEdge = longEdgePxForA3Dpi(dpi);
+    // 横長（r>=1）は長辺＝幅、縦長（r<1）は長辺＝高さ。
+    const width = r >= 1 ? longEdge : Math.max(1, Math.round(longEdge * r));
+    const height = r >= 1 ? Math.max(1, Math.round(longEdge / r)) : longEdge;
+    return { id: String(dpi), dpi, label, width, height };
+  });
+}
+
 export const PREVIEW_RENDER_MAX_SIDE = 1600;
 
 export const PREVIEW_GEMINI_IMAGE_SIZE = '1K';
@@ -70,10 +92,16 @@ export function describePixelAspect(width: number, height: number): string {
   return `${rw}:${rh}（${r.toFixed(3)}）`;
 }
 
-/** 選択プリセット直下に表示する注意書き（list-disc 用・文頭に中黒は付けない） */
-export function exportPresetFooterLines(preset: ExportPreset16x9): string[] {
+/**
+ * 選択プリセット直下に表示する注意書き（list-disc 用・文頭に中黒は付けない）。
+ * aspectLabel を渡すと比率をその表記（'3 : 4' 等）で示す。未指定はピクセル実比から導出（丸め由来の
+ * 非整数比になり得るため、呼び出し側で選択比率のラベルを渡すのが望ましい・260703 第2段）。
+ */
+export function exportPresetFooterLines(preset: ExportPreset16x9, aspectLabel?: string): string[] {
+  const longEdge = Math.max(preset.width, preset.height);
+  const ratioText = aspectLabel ?? describePixelAspect(preset.width, preset.height);
   return [
-    `A3 長辺（420mm）を ${preset.dpi}dpi としたときの長辺ピクセル（約 ${preset.width}px）に相当する 16:9 です。`,
+    `A3 長辺（420mm）を ${preset.dpi}dpi としたときの長辺ピクセル（約 ${longEdge}px）に相当する ${ratioText} です。`,
     '元画像がプレビュー用の低解像度の場合、細部は AI 補完に依存します。',
     'アプリ内の表示は低解像のままです。印刷にはダウンロード画像を使用してください。',
     '最終出力は印刷所・DTP の指定に合わせてください。',

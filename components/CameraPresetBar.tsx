@@ -1,7 +1,8 @@
 import React from 'react';
-import { Plus, Pencil, X } from 'lucide-react';
+import { Plus, Pencil, X, RectangleHorizontal } from 'lucide-react';
 import type { CameraPreset } from '../types.js';
 import { NumericField } from './NumericField.js';
+import { RENDER_ASPECT_RATIOS } from '../utils/renderAspect.js';
 
 const MAX_VISIBLE_CHIPS = 8;
 
@@ -17,6 +18,9 @@ interface CameraPresetBarProps {
   onCameraFovChange: (fov: number) => void;
   eyeHeightMm: number;
   onEyeHeightMmChange: (mm: number) => void;
+  /** 3Dレンダリング比率（'16:9' 等・第2段 260703）。3Dビュー表示・AIレンダ・書き出しに連動。 */
+  renderAspectRatio: string;
+  onRenderAspectRatioChange: (key: string) => void;
   onSaveCurrent: () => void;
   onApply: (preset: CameraPreset) => void;
   onDelete: (id: string) => void;
@@ -33,6 +37,8 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
   onCameraFovChange,
   eyeHeightMm,
   onEyeHeightMmChange,
+  renderAspectRatio,
+  onRenderAspectRatioChange,
   onSaveCurrent,
   onApply,
   onDelete,
@@ -57,6 +63,25 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
             className="w-[88px] accent-emerald-500 disabled:opacity-30"
           />
           <span className="text-[10px] font-mono text-white/80 w-8">{Math.round(cameraFov)}°</span>
+        </div>
+        <div className="w-px h-6 bg-white/15 shrink-0" aria-hidden />
+        <div className="flex items-center gap-1.5 shrink-0">
+          <RectangleHorizontal className="w-3.5 h-3.5 text-neutral-400 shrink-0" aria-hidden />
+          <span className="text-[9px] font-black uppercase text-neutral-500 tracking-wider">比率</span>
+          <select
+            value={renderAspectRatio}
+            disabled={disabled}
+            onChange={(e) => onRenderAspectRatioChange(e.target.value)}
+            title="3Dビューの表示・AIレンダリング・書き出しの画面比率"
+            aria-label="レンダリング比率"
+            className="rounded-lg bg-black/40 border border-white/15 text-white/90 text-[10px] font-bold px-1.5 py-1 accent-emerald-500 disabled:opacity-30 focus:outline-none focus:border-emerald-500/60"
+          >
+            {RENDER_ASPECT_RATIOS.map((r) => (
+              <option key={r.key} value={r.key} className="bg-zinc-900 text-white">
+                {r.label}
+              </option>
+            ))}
+          </select>
         </div>
         <div className="w-px h-6 bg-white/15 shrink-0" aria-hidden />
         <div className="glass p-0.5 rounded-xl border border-white/10 flex shrink-0">
