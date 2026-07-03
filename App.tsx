@@ -3866,7 +3866,9 @@ const App: React.FC = () => {
                                                                                 onChange={(v) =>
                                                                                     setMaterialSettings((prev) => ({
                                                                                         ...prev,
-                                                                                        [prodId]: { ...prev[prodId], baseboardHeight: v },
+                                                                                        // 巾木の高さは床〜天井の範囲内にクランプ（天井超過で巾木上の壁が潰れる不具合の修正・260703）。
+                                                                                        // 上限=天井高さ−1mm、下限=1mm。腰壁時のセグメント上限は3D描画側で更にクランプ。
+                                                                                        [prodId]: { ...prev[prodId], baseboardHeight: Math.min(roomHeight - 1, Math.max(1, Math.round(v))) },
                                                                                     }))
                                                                                 }
                                                                                 dragSensitivity={2}

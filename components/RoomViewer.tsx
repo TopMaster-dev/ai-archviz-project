@@ -2636,7 +2636,9 @@ const SketchRoom = ({
 
                 const isBottom = j === 0;
                 const bbEnabled = isBottom && (matSettings.baseboardEnabled ?? false);
-                const bbHeightM = (matSettings.baseboardHeight ?? 60) / 1000;
+                // 巾木の高さはセグメント高さ−1mmを上限にクランプ（保存値が天井/腰壁を超えても、巾木上の壁が
+                // 高さ0以下に潰れない防御・260703）。＝床〜天井（腰壁時は床〜腰壁）の範囲に収める。
+                const bbHeightM = Math.min(Math.max(0, (matSettings.baseboardHeight ?? 60) / 1000), Math.max(0, segHeight - 0.001));
                 const bbColor = matSettings.baseboardColor ?? '#ffffff';
                 const openingStyle = materialSettings.__openings__ ?? {};
                 const doorColor = openingStyle.doorColor ?? '#8b4513';
