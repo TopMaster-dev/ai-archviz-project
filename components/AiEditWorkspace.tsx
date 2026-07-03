@@ -45,6 +45,7 @@ import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
 import { EditorHelpButton } from './EditorHelpButton.js';
 import { RenderInfoColumn } from './RenderInfoColumn.js';
+import { ImageCropDialog } from './ImageCropDialog.js';
 
 function normalizeImageDataUrl(raw: string | null | undefined): string | null {
   if (!raw) return null;
@@ -344,14 +345,25 @@ export function AiEditWorkspace({
     }
   };
 
-  // 写真専用モード（2a）: アップロード写真をベース画像(v0)として登録。保存サイズを抑えるため縮小。
+  // 写真専用モード（2a）: アップロード写真をベース画像(v0)として登録。
+  // 260703: アップロード直後に「AI対応比率へのクロップ画面」を挟む（構図ズレの根本解決・クライアント合意）。
+  //   file→クロップ画面(cropSrc)→確定でクロップ画像を縮小してベース登録。
+  const [cropSrc, setCropSrc] = useState<string | null>(null);
   const onPickBaseFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
     e.target.value = '';
     if (!f || !f.type.startsWith('image/')) return;
     try {
       const url = await readFileAsDataUrl(f);
-      const sized = await downscaleDataUrlIfNeeded(url, 1536);
+      setCropSrc(url); // クロップ画面を開く
+    } catch {
+      /* ignore */
+    }
+  };
+  const handleCropConfirm = async (cropped: string) => {
+    setCropSrc(null);
+    try {
+      const sized = await downscaleDataUrlIfNeeded(cropped, 1536);
       onUploadBaseImage?.(sized);
     } catch {
       /* ignore */
@@ -804,12 +816,29 @@ export function AiEditWorkspace({
             </p>
           )}
         </div>
+        {/* アップロード直後のクロップ画面（AI対応比率へ・構図ズレ根本解決・260703）。
+            空状態（activeVersion なし）でも写真アップロードはここから始まるため、このブランチにも配置する。 */}
+        {cropSrc && (
+          <ImageCropDialog
+            imageDataUrl={cropSrc}
+            onConfirm={handleCropConfirm}
+            onCancel={() => setCropSrc(null)}
+          />
+        )}
       </div>
     );
   }
 
   return (
     <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950 text-white pl-3 pr-0 pt-0 pb-0 gap-3">
+      {/* アップロード直後のクロップ画面（AI対応比率へ・構図ズレ根本解決・260703）。 */}
+      {cropSrc && (
+        <ImageCropDialog
+          imageDataUrl={cropSrc}
+          onConfirm={handleCropConfirm}
+          onCancel={() => setCropSrc(null)}
+        />
+      )}
       {/* 上部バー: モード切替（左）＋ 書き出し（右）。狭幅は折り返す（中央固定だとモード切替に重なるため）。 */}
       <div className="absolute top-6 left-6 right-6 z-50 flex flex-wrap items-start justify-between gap-2 pointer-events-none">
         {renderModeBarOrHome()}
