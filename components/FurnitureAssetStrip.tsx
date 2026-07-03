@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /** `processedCatalog` の1件（App の handleAddFurniture に渡る形） */
@@ -35,6 +35,52 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   const barClass =
     'glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-1.5 bg-black/40 backdrop-blur-xl shadow-2xl h-[72px]';
 
+  // ホバーでポップアップを開閉するタイマー（260703(5) クライアント指摘③④）。
+  // ③ カーソルが離れたら少し待って自動で閉じる（×不要）。バー↔ポップアップ間の隙間を跨ぐ猶予も兼ねる。
+  // ④ 初回オープンは少し遅延させ、ドラッグ等で一瞬カテゴリに乗っただけでは開かないようにする（誤オープン防止）。
+  const openTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearOpenTimer = () => {
+    if (openTimerRef.current) { clearTimeout(openTimerRef.current); openTimerRef.current = null; }
+  };
+  const clearCloseTimer = () => {
+    if (closeTimerRef.current) { clearTimeout(closeTimerRef.current); closeTimerRef.current = null; }
+  };
+  useEffect(() => () => { clearOpenTimer(); clearCloseTimer(); }, []);
+
+  const scheduleClose = useCallback(() => {
+    clearOpenTimer();
+    clearCloseTimer();
+    closeTimerRef.current = setTimeout(() => onSelectedAssetCategoryChange(null), 260);
+  }, [onSelectedAssetCategoryChange]);
+
+  const cancelClose = useCallback(() => clearCloseTimer(), []);
+
+  // ホバーで開く。既に開いていれば即座にカテゴリ切替、閉じている場合のみ少し遅延して開く（誤オープン防止・④）。
+  const hoverOpen = useCallback(
+    (cat: string) => {
+      clearCloseTimer();
+      if (selectedAssetCategory) {
+        clearOpenTimer();
+        onSelectedAssetCategoryChange(cat);
+        return;
+      }
+      clearOpenTimer();
+      openTimerRef.current = setTimeout(() => onSelectedAssetCategoryChange(cat), 140);
+    },
+    [selectedAssetCategory, onSelectedAssetCategoryChange],
+  );
+
+  // クリックは即時トグル（保留中のタイマーは破棄）。
+  const clickToggle = useCallback(
+    (cat: string) => {
+      clearOpenTimer();
+      clearCloseTimer();
+      onSelectedAssetCategoryChange(selectedAssetCategory === cat ? null : cat);
+    },
+    [selectedAssetCategory, onSelectedAssetCategoryChange],
+  );
+
   if (fetchStatus === 'loading') {
     return (
       <div className="relative flex items-center gap-3 pointer-events-auto">
@@ -70,7 +116,11 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   }
 
   return (
-    <div className="relative flex items-center gap-3 pointer-events-auto">
+    <div
+      className="relative flex items-center gap-3 pointer-events-auto"
+      onMouseEnter={cancelClose}
+      onMouseLeave={scheduleClose}
+    >
       {selectedAssetCategory && (
         <div className="absolute bottom-[calc(100%+16px)] right-0 w-[min(90vw,360px)] glass p-4 rounded-3xl border border-white/10 bg-black/80 backdrop-blur-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 safe-r">
           <div className="flex justify-between items-center mb-3 px-1">
@@ -128,9 +178,13 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
           <button
             key={cat}
             type="button"
-            onClick={() => onSelectedAssetCategoryChange(selectedAssetCategory === cat ? null : cat)}
+            onClick={() => clickToggle(cat)}
             // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。
-            onMouseEnter={() => onSelectedAssetCategoryChange(cat)}
+            // 260703(5): 初回は少し遅延して開き、離れたら自動で閉じる（③④）。
+            onMouseEnter={() => hoverOpen(cat)}
+            // ボタンから隙間（gap の余白）へ抜けたら保留中のオープンを取消（閉じている時のみ・誤オープンの残路を塞ぐ）。
+            // 既に開いている場合は切替に遅延を使わないため触らない（自動クローズはコンテナ側 onMouseLeave が担当）。
+            onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
             className={`h-full w-[60px] rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
               selectedAssetCategory === cat
                 ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'

@@ -3646,6 +3646,9 @@ const App: React.FC = () => {
              {viewMode === '3D' && (
                 // 外枠は領域いっぱい（レターボックスの黒帯）。内側の3D枠を選択比率へ contain フィットさせ、
                 // 見た目＝キャプチャ＝AIレンダ比率を一致させる（第2段 260703・未計測時は枠いっぱいにフォールバック）。
+                // 注意: この div（や上位）に transform / opacity<1 / filter / will-change / contain:paint / isolate を
+                // 付けないこと。新しいスタッキング文脈になると (a) fixed パネル3枚が別文脈に分かれ panelZ で前後を
+                // 競えなくなる（260703(5) ① の再発）＋ (b) overflow-hidden が fixed パネルをクリップし始める。
                 <div ref={setRenderViewportNode} className="relative w-full h-full overflow-hidden bg-[#0a0a0a]">
                   <div className="absolute inset-0 flex items-center justify-center">
                     <div
@@ -3713,8 +3716,11 @@ const App: React.FC = () => {
 
                     {/* --- フローティングUIをビュー領域全体（レターボックス外枠）に重ねて配置 --- */}
                     <>
-                    {/* Right Side: Material / Opening / 家具の基本情報 */}
-                    <div className="absolute inset-0 z-50 pointer-events-none">
+                    {/* Right Side: Material / Opening / 家具の基本情報。
+                        z-index はここで固定しない（付けると別スタッキング文脈になり、下部の視点/3Dオブジェクトパネルと
+                        panelZ で前後を競えず、このパネルが常に最前面になってしまう・260703(5) クライアント指摘①）。
+                        各 MovablePanel は fixed＋自前 zIndex(41..43) を持つので、ラッパの z を外すと3枚が同一ルート文脈で競える。 */}
+                    <div className="absolute inset-0 pointer-events-none">
                     {(() => {
                         const hasAnySelection = activeMeshes.length > 0 || !!selectedOpeningId || !!activeFurnitureId || !!selectedBeam3DId;
                         const selectedBeam = selectedBeam3DId ? beams.find((b) => b.id === selectedBeam3DId) : null;
@@ -4524,11 +4530,13 @@ const App: React.FC = () => {
                     })()}
                     </div>
 
-                            {/* --- BOTTOM ROW (Debug, Furniture) --- 視点操作パネルは MovablePanel(fixed)で別描画。 */}
-                            <div className="absolute bottom-6 left-6 right-6 z-40 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
+                            {/* --- BOTTOM ROW (Debug, Furniture) --- 視点/3Dオブジェクトパネルは MovablePanel(fixed・自前 z)で別描画。
+                                この行に z を付けると別スタッキング文脈になり panelZ で前後を競えないため z は付けない（260703(5) ①）。
+                                中の管理者向けデバッグサムネのみ自前 z を持たせてキャンバス(z-10)の上に出す。 */}
+                            <div className="absolute bottom-6 left-6 right-6 flex flex-wrap items-end justify-between gap-2 md:gap-3 pointer-events-none">
                                 <div className="flex-1 min-w-0 flex justify-start">
                                     {renderState.debugBaseUrl ? (
-                                        <div className="group cursor-pointer pointer-events-auto animate-in fade-in slide-in-from-bottom-4" onClick={() => setShowDebugModal(true)}>
+                                        <div className="group relative z-30 cursor-pointer pointer-events-auto animate-in fade-in slide-in-from-bottom-4" onClick={() => setShowDebugModal(true)}>
                                             <div className="relative border border-white/20 bg-black p-1 rounded-xl shadow-2xl transition-transform hover:scale-105 overflow-hidden w-40">
                                                 <div className="absolute top-0 left-0 right-0 bg-black/80 backdrop-blur text-white text-[8px] px-2 py-1 font-bold z-10 flex justify-between items-center">
                                                     <span>デバッグ</span><span className="text-emerald-400">READY</span>
@@ -4593,7 +4601,7 @@ const App: React.FC = () => {
                                 {/* マテリアル/家具カタログもフローティング化（移動・拡大・最前面・プレビュー内制限・260703(2)）。 */}
                                 <MovablePanel
                                     storageKey="arise.asset-strip.v1"
-                                    label="マテリアル"
+                                    label="3Dオブジェクト"
                                     anchor="bottom-right"
                                     getBounds={getPreviewBounds}
                                     zIndex={panelZ('assets')}
