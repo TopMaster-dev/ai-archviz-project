@@ -362,12 +362,18 @@ export function UploadPanel({
     other: 0,
   };
   // カテゴリ表示順（クライアント要望 260629b）: ①テクスチャ ②3D ③AI生成画像 ④削除済(一時保管中)。
+  // note=ラベル脇の補足、desc=カーソルを合わせた時の説明（分かりやすさ向上・260703 クライアント要望）。
   const segments = [
-    { key: 'texture', label: 'テクスチャ', bytes: byKind.texture, color: 'bg-sky-500' },
-    { key: 'model', label: '3Dモデル', bytes: byKind.model, color: 'bg-emerald-500' },
-    { key: 'ai', label: 'AI生成画像', bytes: byKind.aiRender, color: 'bg-violet-500' },
-    { key: 'deleted', label: '削除済（一時保管中）', bytes: byKind.deleted, color: 'bg-amber-500' },
-    { key: 'other', label: 'その他', bytes: byKind.other, color: 'bg-neutral-400' },
+    { key: 'texture', label: 'テクスチャ', note: '', bytes: byKind.texture, color: 'bg-sky-500',
+      desc: 'アップロードした建材・テクスチャ画像（3Dビューや家具・建材で使用）。' },
+    { key: 'model', label: '3Dモデル', note: '', bytes: byKind.model, color: 'bg-emerald-500',
+      desc: 'アップロードした3Dモデル（家具・オブジェクト）。' },
+    { key: 'ai', label: 'AI生成画像', note: '（編集履歴の画像を含む）', bytes: byKind.aiRender, color: 'bg-violet-500',
+      desc: 'AIレンダリング・AI画像編集で生成／使用した画像。編集の元画像・生成結果・エリア編集などの編集履歴の画像を含みます。' },
+    { key: 'deleted', label: '削除済（一時保管中）', note: '', bytes: byKind.deleted, color: 'bg-amber-500',
+      desc: '削除したプロジェクトのAI生成画像。約14日間の猶予後に自動削除され、容量が解放されます。' },
+    { key: 'other', label: 'その他', note: '', bytes: byKind.other, color: 'bg-neutral-400',
+      desc: '上記以外にストレージ領域へ保存されている実体（通常は0です）。' },
   ].filter((s) => s.bytes > 0);
   // バー幅の分母: 上限超過時は実合計（=セグメント合計）でフルバー、通常は上限基準。
   const barDenom = Math.max(STORAGE_SOFT_LIMIT_BYTES, totalBytes, 1);
@@ -397,24 +403,27 @@ export function UploadPanel({
             {fmtMB(totalBytes)} / {fmtMB(STORAGE_SOFT_LIMIT_BYTES)} MB
           </span>
         </div>
-        {/* 色分けバー: 種別ごとに色を変えて1本に積む（AI生成画像も含む） */}
+        {/* 色分けバー: 種別ごとに色を変えて1本に積む（AI生成画像も含む）。カーソルを合わせると内訳と説明を表示。 */}
         <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/10">
           {segments.map((s) => (
             <div
               key={s.key}
               className={`h-full ${s.color}`}
               style={{ width: `${(s.bytes / barDenom) * 100}%` }}
-              title={`${s.label} ${fmtMB(s.bytes)}MB`}
+              title={`${s.label}${s.note}：${fmtMB(s.bytes)}MB\n${s.desc}`}
             />
           ))}
         </div>
-        {/* 凡例: 色・ラベル・容量 */}
+        {/* 凡例: 色・ラベル(＋補足)・容量。各項目にカーソルを合わせると説明（desc）を表示。 */}
         {segments.length > 0 && (
           <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-neutral-400">
             {segments.map((s) => (
-              <span key={s.key} className="inline-flex items-center gap-1">
+              <span key={s.key} className="inline-flex items-center gap-1 cursor-help" title={s.desc}>
                 <span className={`inline-block h-2 w-2 rounded-sm ${s.color}`} />
-                {s.label} {fmtMB(s.bytes)}MB
+                {s.label}
+                {s.note && <span className="text-neutral-500">{s.note}</span>}
+                {' '}
+                {fmtMB(s.bytes)}MB
               </span>
             ))}
           </div>
