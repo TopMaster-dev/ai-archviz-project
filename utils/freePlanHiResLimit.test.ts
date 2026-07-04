@@ -6,6 +6,7 @@ import {
   isOverHiResLimit,
   hiResRemaining,
   FREE_PLAN_HIRES_DL_PER_MONTH,
+  ENABLE_FREE_PLAN_HIRES_DL_LIMIT,
 } from './freePlanHiResLimit.js';
 
 const U = 'user-1';
@@ -25,7 +26,16 @@ describe('freePlanHiResLimit', () => {
     expect(hiResPeriod(new Date(2026, 11, 31))).toBe('2026-12');
   });
 
-  it('無料ユーザー: 上限まで無透かし、超過で透かし対象', () => {
+  it('無料ユーザー: フラグONなら上限まで無透かし/超過で透かし、フラグOFF（テスト期間）なら無制限', () => {
+    if (!ENABLE_FREE_PLAN_HIRES_DL_LIMIT) {
+      // 260704: 機能確認・テストマーケ中はフラグOFF＝無制限（透かし無し・カウントしない）。
+      expect(hiResRemaining(U, true, NOW)).toBe(Infinity);
+      for (let i = 0; i < FREE_PLAN_HIRES_DL_PER_MONTH + 2; i += 1) incrementHiResDownloadCount(U, true, NOW);
+      expect(isOverHiResLimit(U, true, NOW)).toBe(false);
+      expect(getHiResDownloadCount(U, true, NOW)).toBe(0);
+      return;
+    }
+    // フラグON時の本来の制限挙動（再開時に有効）。
     expect(getHiResDownloadCount(U, true, NOW)).toBe(0);
     expect(hiResRemaining(U, true, NOW)).toBe(FREE_PLAN_HIRES_DL_PER_MONTH);
     for (let i = 0; i < FREE_PLAN_HIRES_DL_PER_MONTH; i += 1) {

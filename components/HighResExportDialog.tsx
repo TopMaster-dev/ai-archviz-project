@@ -268,8 +268,8 @@ export function HighResExportDialog({
 
   return (
     <div className="fixed inset-0 z-[10002] flex items-center justify-center bg-black/75 p-4">
-      <div className="bg-zinc-900 border border-white/15 rounded-2xl max-w-md w-full shadow-xl overflow-hidden">
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      <div className="bg-zinc-900 border border-white/15 rounded-2xl max-w-md w-full shadow-xl overflow-hidden max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
           <h2 className="text-sm font-black tracking-widest uppercase text-white">画像書き出し</h2>
           <button
             type="button"
@@ -280,7 +280,7 @@ export function HighResExportDialog({
             <X className="w-5 h-5" />
           </button>
         </div>
-        <div className="p-4 space-y-3 text-xs text-neutral-300">
+        <div className="p-4 space-y-3 text-xs text-neutral-300 flex-1 min-h-0 overflow-y-auto scroll-dark">
           {result && (
             <div className="rounded-lg border border-emerald-500/40 bg-emerald-950/30 p-3">
               <p className="font-bold text-emerald-300">✓ ダウンロードを開始しました</p>
@@ -410,7 +410,7 @@ export function HighResExportDialog({
           )}
           {error && <p className="text-red-400 break-words">{error}</p>}
         </div>
-        <div className="flex gap-2 justify-end px-4 py-3 border-t border-white/10 bg-black/20">
+        <div className="flex gap-2 justify-end px-4 py-3 border-t border-white/10 bg-black/20 shrink-0">
           {result ? (
             <>
               <button
