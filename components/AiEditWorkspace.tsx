@@ -7,6 +7,7 @@ import {
   ImagePlus,
   Loader2,
   MessageCircle,
+  Paperclip,
   Plus,
   Sparkles,
   ThumbsDown,
@@ -1332,9 +1333,9 @@ export function AiEditWorkspace({
                     <button
                       type="button"
                       onClick={() => styleInputRef.current?.click()}
-                      className="flex shrink-0 items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-white/10 text-[11px] font-bold hover:bg-zinc-700"
+                      className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
                     >
-                      <ImagePlus className="w-4 h-4" />
+                      <Paperclip className="h-4 w-4" />
                       ファイルを添付
                     </button>
                     {styleImageDataUrl && (
