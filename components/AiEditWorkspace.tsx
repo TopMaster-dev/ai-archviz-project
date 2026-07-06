@@ -29,6 +29,7 @@ import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
+import { harmonizeEditToBase } from '../utils/tonalMatch.js';
 import {
   unionBBoxOfPlacements,
   padBBox,
@@ -40,6 +41,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
+import { ENABLE_HARMONIZE_FLATTEN } from '../lib/aiEditPrompt.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
@@ -206,6 +208,8 @@ export function AiEditWorkspace({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // 継ぎ目なじませ（全体を1枚に均一化）パスの opt-in（既定OFF・260706 クライアント提案）。
+  const [harmonizeSeams, setHarmonizeSeams] = useState(false);
   const [compareA, setCompareA] = useState<string | null>(null);
   const [compareB, setCompareB] = useState<string | null>(null);
   const [compareSlider, setCompareSlider] = useState(50);
@@ -507,13 +511,42 @@ export function AiEditWorkspace({
         // crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、クロップ矩形の縁は必ず見えない。
         const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
         const full = await pasteCropIntoBase(baseScaled, fittedCrop, cropPx, baseW, baseH);
-        outUrl = await compositeMaskedEdit(baseScaled, full, allPlacements, baseW, baseH);
+        // 合成前に境界の露出・色をベースへ実測合わせ（継ぎ目＝境界線を消す・決定論・260706）。失敗時は full のまま。
+        const matched = await harmonizeEditToBase(baseScaled, full, allPlacements, baseW, baseH);
+        outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
       } else {
         const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, 'cover');
-        outUrl =
-          allPlacements.length > 0
-            ? await compositeMaskedEdit(baseScaled, normalized, allPlacements, baseW, baseH)
-            : normalized;
+        if (allPlacements.length > 0) {
+          const matched = await harmonizeEditToBase(baseScaled, normalized, allPlacements, baseW, baseH);
+          outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
+        } else {
+          outUrl = normalized;
+        }
+      }
+      // 任意（opt-in・既定OFF）: 継ぎ目なじませ（全体を1枚に均一化）パス（260706 クライアント提案）。合成済み画像を
+      // 全体1枚として再生成し均一化する＝決定論補正でも残る質感位相由来の薄い継ぎ目を消す。ベース1枚のみ・低温度・
+      // 座標/オブジェクト無し（マスク外を「増殖」させない）だが、全体再生成のため『マスク外はバイト不変』の保証は
+      // このパスを ON にした時だけ外れる（プリザーブ・プロンプトで最小変更に留める）。失敗時は合成結果をそのまま使う。
+      if (ENABLE_HARMONIZE_FLATTEN && harmonizeSeams && allPlacements.length > 0) {
+        try {
+          const hres = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({
+              baseImage: outUrl,
+              harmonize: true,
+              aspectRatio: pickClosestAspectRatio(baseW, baseH),
+              imageSize,
+            }),
+          });
+          const hdata = await hres.json();
+          if (hdata.success && hdata.url) {
+            void recordAiUsage({ feature: 'ai_edit', usage: hdata.usage, model: hdata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+            outUrl = await fitDataUrlToSize(hdata.url as string, baseW, baseH, 'cover');
+          }
+        } catch {
+          /* 均一化失敗は無視＝合成結果をそのまま使う */
+        }
       }
       // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
       outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
@@ -553,7 +586,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams]);
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -1515,6 +1548,22 @@ export function AiEditWorkspace({
               {submitError && <p className="text-xs text-red-400 break-words">{submitError}</p>}
               {activeTool === 'area' && emptyCardCount > 0 && (
                 <p className="text-xs text-amber-300 font-bold">未入力{emptyCardCount}件</p>
+              )}
+              {/* 継ぎ目なじませ（全体を1枚に均一化）: 決定論の色合わせで残る薄い継ぎ目を、追加生成1回で消す opt-in（260706）。 */}
+              {activeTool === 'area' && ENABLE_HARMONIZE_FLATTEN && (
+                <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-emerald-500"
+                    checked={harmonizeSeams}
+                    onChange={(e) => setHarmonizeSeams(e.target.checked)}
+                    disabled={isSubmitting}
+                  />
+                  <span className="text-[11px] leading-snug text-neutral-300">
+                    <span className="font-bold text-neutral-100">継ぎ目をなじませる（全体を1枚に均一化）</span>
+                    <span className="block text-neutral-500">境界線が残るときにON。仕上げに全体を1回生成し直します（少し時間がかかります）。</span>
+                  </span>
+                </label>
               )}
               {projectSession?.aiCredits.active && (
                 <p className={`text-[11px] font-bold ${projectSession.aiCredits.blocked ? 'text-amber-300' : 'text-neutral-400'}`}>

@@ -46,6 +46,7 @@ export default async function handler(req: any, res: any) {
       aspectRatio?: string;
       imageSize?: string;
       coordinate?: boolean;
+      harmonize?: boolean;
       learnedHints?: unknown;
     };
 
@@ -55,6 +56,8 @@ export default async function handler(req: any, res: any) {
 
     // コーディネート（完全お任せ）モード（row 207/213）: 個別の入力は不要なため入力必須チェックを省く。
     const coordinate = body.coordinate === true;
+    // 継ぎ目なじませ（全体を1枚に均一化）パス（260706）: ベース1枚だけを入力に均一化する。個別入力は不要。
+    const harmonize = body.harmonize === true;
     // in-context反映（row 211/219）: 過去の高評価傾向。プロンプト末尾に参考添付。
     const learnedHints = Array.isArray(body.learnedHints)
       ? body.learnedHints.filter((h): h is string => typeof h === 'string' && h.trim().length > 0).slice(0, 5)
@@ -81,7 +84,7 @@ export default async function handler(req: any, res: any) {
         o.placementMemos.some((m) => m.trim().length > 0)
     );
     const areaPlacementCount = objects.reduce((sum, o) => sum + o.placements.length, 0);
-    if (!coordinate && !hasSituationInput && !hasAreaEditInput) {
+    if (!coordinate && !harmonize && !hasSituationInput && !hasAreaEditInput) {
       return res.status(400).json({
         success: false,
         error: 'AIデザインまたはエリア編集で、画像かテキストを1つ以上設定してください。',
@@ -102,7 +105,7 @@ export default async function handler(req: any, res: any) {
         ? body.imageSize.trim()
         : undefined;
     let placementNarratives: Record<string, string> | undefined;
-    if (objects.length > 0) {
+    if (!harmonize && objects.length > 0) {
       placementNarratives = await generatePlacementNarratives(apiKey, {
         baseImageDataUrl: body.baseImage,
         objects,
@@ -121,6 +124,7 @@ export default async function handler(req: any, res: any) {
       imageSize,
       placementNarratives,
       coordinate,
+      harmonize,
       learnedHints,
     });
 

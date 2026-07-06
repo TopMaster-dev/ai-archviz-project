@@ -1,5 +1,5 @@
 import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
-import { buildAiEditReferenceGuide, describeObjectPlacements } from './aiEditPrompt.js';
+import { buildAiEditReferenceGuide, buildHarmonizePrompt, describeObjectPlacements } from './aiEditPrompt.js';
 import { resolveAgentRecommendations } from './agentCatalog.js';
 import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './agentAttachments.js';
 
@@ -347,16 +347,20 @@ export async function generateGeminiImageEdit(
     coordinate?: boolean;
     /** in-context反映（row 211/219）: 過去に高評価した傾向。プロンプト末尾に参考添付。 */
     learnedHints?: string[];
+    /** 継ぎ目なじませ（全体を1枚に均一化）パス（260706）。true のとき創作系を使わずベース1枚のみを均一化する。 */
+    harmonize?: boolean;
   }
 ): Promise<{ url: string; usage: TokenUsage | null }> {
-  const instruction = buildAiEditReferenceGuide({
-    hasStyle: !!params.styleImageDataUrl,
-    styleMemo: params.styleMemo?.trim() || undefined,
-    objects: params.objects,
-    placementNarratives: params.placementNarratives,
-    coordinate: params.coordinate,
-    learnedHints: params.learnedHints,
-  });
+  const instruction = params.harmonize
+    ? buildHarmonizePrompt()
+    : buildAiEditReferenceGuide({
+        hasStyle: !!params.styleImageDataUrl,
+        styleMemo: params.styleMemo?.trim() || undefined,
+        objects: params.objects,
+        placementNarratives: params.placementNarratives,
+        coordinate: params.coordinate,
+        learnedHints: params.learnedHints,
+      });
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
     { text: instruction },
@@ -367,19 +371,22 @@ export async function generateGeminiImageEdit(
     inlineData: { mimeType: base.mimeType, data: base.base64 },
   });
 
-  if (params.styleImageDataUrl) {
+  // 均一化パスはベース1枚のみを入力（スタイル/オブジェクト参照は使わない＝全体ドリフト防止）。
+  if (!params.harmonize && params.styleImageDataUrl) {
     const st = parseImageDataUrl(params.styleImageDataUrl);
     parts.push({
       inlineData: { mimeType: st.mimeType, data: st.base64 },
     });
   }
 
-  for (const o of params.objects) {
-    if (!o.imageDataUrl) continue;
-    const ob = parseImageDataUrl(o.imageDataUrl);
-    parts.push({
-      inlineData: { mimeType: ob.mimeType, data: ob.base64 },
-    });
+  if (!params.harmonize) {
+    for (const o of params.objects) {
+      if (!o.imageDataUrl) continue;
+      const ob = parseImageDataUrl(o.imageDataUrl);
+      parts.push({
+        inlineData: { mimeType: ob.mimeType, data: ob.base64 },
+      });
+    }
   }
 
   const aspectRatio = params.aspectRatio || '16:9';
@@ -393,7 +400,8 @@ export async function generateGeminiImageEdit(
       },
     ],
     generationConfig: {
-      temperature: 0.25,
+      // 均一化は最小変更＝低温度で（構図/内容を動かさない）。
+      temperature: params.harmonize ? 0.1 : 0.25,
       responseModalities: ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio,
