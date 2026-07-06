@@ -7,6 +7,8 @@ import {
   remapPlacementsToCrop,
   cropToImageNorm,
   shouldCropRegion,
+  isLargeRegion,
+  LARGE_REGION_COVERAGE,
   PAD_FRAC,
 } from './maskCropRemap.js';
 import type { NormalizedRect } from '../types.js';
@@ -20,6 +22,24 @@ const poly = (pts: Array<[number, number]>): NormalizedRect => {
   const minY = Math.min(...ys);
   return { x: minX, y: minY, width: Math.max(...xs) - minX, height: Math.max(...ys) - minY, points };
 };
+
+describe('isLargeRegion（大領域＝クロップ/合成せず全画面編集・260707）', () => {
+  it('しきい値以上は大領域（true）', () => {
+    // 幅0.35×高さ0.35=0.1225 >= 0.10
+    expect(isLargeRegion({ x: 0.3, y: 0.3, w: 0.35, h: 0.35 })).toBe(true);
+    // クライアント事例相当（3矩形の union bbox ≒ 0.347×0.343 ≒ 0.119）
+    expect(isLargeRegion(unionBBoxOfPlacements([rect(0.345, 0.585, 0.347, 0.343)]))).toBe(true);
+  });
+  it('通常の単品家具（約0.08〜0.09）は小領域（false）＝従来のクロップ＋合成に残す', () => {
+    expect(isLargeRegion({ x: 0.4, y: 0.55, w: 0.35, h: 0.25 })).toBe(false); // 0.0875 < 0.10
+    expect(isLargeRegion({ x: 0.4, y: 0.4, w: 0.15, h: 0.15 })).toBe(false); // 0.0225
+  });
+  it('しきい値は 0.10（境界）', () => {
+    expect(LARGE_REGION_COVERAGE).toBe(0.1);
+    expect(isLargeRegion({ x: 0, y: 0, w: 0.25, h: 0.4 })).toBe(true); // 0.10 ちょうど
+    expect(isLargeRegion({ x: 0, y: 0, w: 0.2, h: 0.4 })).toBe(false); // 0.08 < 0.10
+  });
+});
 
 describe('unionBBoxOfPlacements', () => {
   it('returns a single rect as-is', () => {

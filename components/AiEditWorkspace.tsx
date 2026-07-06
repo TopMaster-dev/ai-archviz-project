@@ -37,6 +37,7 @@ import {
   snapCropToAspect,
   remapPlacementsToCrop,
   shouldCropRegion,
+  isLargeRegion,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -467,9 +468,15 @@ export function AiEditWorkspace({
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
       const allPlacements = draftObjects.flatMap((o) => o.placements);
 
+      // 大領域（選択が画面の一定割合以上）は、クロップして貼り戻すと大きな継ぎ目（境界線）になる。この場合は
+      // クロップせず・合成もせず、全画面をそのまま編集した1枚を使う＝継ぎ目が生じない（クライアント要望260707）。
+      // 小領域は従来どおりクロップ＋合成＋色合わせで精度優先（実効解像度が上がり重なった家具も分離しやすい）。
+      const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
+      const largeRegion = !!unionBBox && isLargeRegion(unionBBox);
+
       let cropPx: CropPx | null = null;
-      if (allPlacements.length > 0) {
-        const bbox = padBBox(unionBBoxOfPlacements(allPlacements));
+      if (unionBBox && !largeRegion) {
+        const bbox = padBBox(unionBBox);
         const targetAspect = parseAspectRatioKey(
           pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
         );
@@ -504,9 +511,18 @@ export function AiEditWorkspace({
       void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
 
       let outUrl = data.url as string;
-      // 編集結果は必ずマスク（多角形/矩形）内だけを合成し、マスク外はベースのまま（＝指定外は改変しない）。
-      // アスペクトは cover 固定（contain のレターボックスは領域と位置がズレるため使わない）。
-      if (cropPx) {
+      // 編集結果の後処理。大領域＝全画面編集をそのまま使う（合成しない＝継ぎ目なし）。小領域＝マスク内だけ合成
+      // （マスク外はベースのまま＝指定外は改変しない）。アスペクトは cover 固定（contain は領域と位置がズレる）。
+      if (largeRegion) {
+        // 全画面を1枚として編集した結果をそのまま採用（貼り戻し・クリップをしない＝境界線が生じない）。
+        // マスク外の保持は生成プロンプト（領域外は保持）に委ねる（クライアント要望260707・全体編集success準拠）。
+        // 合成が無いので、アスペクトのズレを cover で強制クロップすると差し替え家具が欠ける恐れ→コーディネートと
+        // 同じく、Gemini 出力比とベース比の差が大きいときは contain（レターボックス）で内容を欠かさない。
+        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
+        const largeAspectMode: 'cover' | 'contain' =
+          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
+        outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, largeAspectMode);
+      } else if (cropPx) {
         // クロップ経路: 編集済みクロップを crop 寸法へ整え、ベースへ貼り戻し、元の全画面座標の多角形でクリップ。
         // crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、クロップ矩形の縁は必ず見えない。
         const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
@@ -527,7 +543,8 @@ export function AiEditWorkspace({
       // 全体1枚として再生成し均一化する＝決定論補正でも残る質感位相由来の薄い継ぎ目を消す。ベース1枚のみ・低温度・
       // 座標/オブジェクト無し（マスク外を「増殖」させない）だが、全体再生成のため『マスク外はバイト不変』の保証は
       // このパスを ON にした時だけ外れる（プリザーブ・プロンプトで最小変更に留める）。失敗時は合成結果をそのまま使う。
-      if (ENABLE_HARMONIZE_FLATTEN && harmonizeSeams && allPlacements.length > 0) {
+      // 大領域は既に全画面1枚＝継ぎ目が無いので均一化パスは不要（無駄な再生成を避ける）。小領域の合成にのみ効かせる。
+      if (ENABLE_HARMONIZE_FLATTEN && harmonizeSeams && allPlacements.length > 0 && !largeRegion) {
         try {
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
