@@ -35,7 +35,7 @@ describe('useAiEditSession render history', () => {
   });
 
   // 「前の下絵の名残が残る」対策（260702）: 確定済みバージョンのマスク（エリア編集の範囲）を選択で復元しない。
-  it('does NOT re-hydrate a committed version mask into draftObjects (no leftover overlay)', () => {
+  it('選択した版の領域（範囲＋画像＋指示文）を draftObjects へ復元する（260708 領域履歴の復元）', () => {
     const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
     act(() => result.current.addVersionFromRender('data:image/png;base64,AAA'));
     const rootId = result.current.versions[0].id;
@@ -69,16 +69,22 @@ describe('useAiEditSession render history', () => {
       }),
     );
     const childId = result.current.versions[result.current.versions.length - 1].id;
-    // 編集直後は下書きが空（resetDraft）。
+    // 編集直後は下書きが空（resetDraft・直後は「名残」を出さずクリーンに）。
     expect(result.current.draftObjects).toEqual([]);
     // マスクの provenance はバージョンに保持される（履歴・再生成のため）。
     const child = result.current.versions.find((v) => v.id === childId)!;
     expect(child.objects).toHaveLength(1);
     expect(child.objects[0].placements[0].points).toHaveLength(3);
-    // 他バージョンを経て結果バージョンを再選択しても、マスク下書きは復元されない（名残オーバーレイを出さない）。
+    // 履歴の版を選び直すと、その版の領域が draftObjects へ復元される（範囲だけでなく右パネルも一致・260708）。
     act(() => result.current.selectVersion(rootId));
+    expect(result.current.draftObjects).toEqual([]); // ルート（レンダー）は領域なし＝空
     act(() => result.current.selectVersion(childId));
-    expect(result.current.draftObjects).toEqual([]);
+    expect(result.current.draftObjects).toHaveLength(1);
+    expect(result.current.draftObjects[0].memo).toBe('植木鉢を入れて');
+    expect(result.current.draftObjects[0].placements[0].points).toHaveLength(3);
+    // ディープコピー: 復元した下書きを編集しても確定済みの版を汚さない。
+    expect(result.current.draftObjects[0]).not.toBe(child.objects[0]);
+    expect(result.current.draftObjects[0].placements[0]).not.toBe(child.objects[0].placements[0]);
   });
 
   it('caps history at MAX_AI_EDIT_VERSIONS, dropping the oldest (bounds memory/DB growth)', () => {

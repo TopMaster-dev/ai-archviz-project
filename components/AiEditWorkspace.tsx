@@ -319,19 +319,13 @@ export function AiEditWorkspace({
   const activeObjectIndex = draftObjects.findIndex((o) => o.id === activeObjectId);
 
   // 囲った範囲（マスク）オーバーレイの表示ソース（260708 クライアント要望）:
-  //  - コーディネート／エージェント相談タブでは常に非表示（エリア編集専用の目印のため）。以前は全タブで
-  //    表示されていた（＝混乱の元）ので、activeTool==='area' のときだけ描く。
-  //  - エリア編集タブでは、作図中は下書き(draftObjects)を優先表示。作図していない（＝履歴の版を見返している）
-  //    ときは、その版が編集に使った範囲(activeVersion.objects)を、トグル(showRangeOverlay)がONのときだけ表示する。
-  //    これで「前まで表示されていた履歴の範囲が消えた」報告に応えつつ、任意で非表示にもできる。
+  //  - コーディネート／エージェント相談タブでは常に非表示（エリア編集専用の目印のため・activeTool 分岐）。
+  //  - エリア編集タブでは draftObjects を描く。履歴の版を選ぶと hydrateDraftFromVersion がその版の領域を
+  //    draftObjects へ復元するので、右パネルの領域カード（範囲＋画像＋指示文）が必ず埋まる（「範囲だけ出て
+  //    パネルは空」を解消）。※右パネルのカードは draftObjects があれば常に表示。キャンバスの範囲オーバーレイだけは
+  //    showRangeOverlay トグルで任意に表示・非表示できる（＝トグルOFFでもパネルのカードは残る／作図確定時は自動でON）。
   const overlayObjects: AiEditObjectReference[] =
-    activeTool !== 'area'
-      ? []
-      : draftObjects.length > 0
-        ? draftObjects
-        : showRangeOverlay
-          ? activeVersion?.objects ?? []
-          : [];
+    activeTool === 'area' && showRangeOverlay ? draftObjects : [];
 
   const dragPreviewColors =
     activeObjectIndex >= 0
@@ -676,6 +670,7 @@ export function AiEditWorkspace({
         objects: draftObjects.map((o) => ({
           ...o,
           placements: o.placements.map((p) => ({ ...p })),
+          placementMemos: [...(o.placementMemos ?? [])],
         })),
       });
     } catch (err: unknown) {
@@ -835,6 +830,8 @@ export function AiEditWorkspace({
       height: Math.max(0, Math.max(...ys) - minY),
       points: pts,
     };
+    // 描いた範囲が消えないよう、範囲表示がOFFなら自動でONに戻す（260708・トグルOFF中の作図で確定後に見えなくなる不整合の解消）。
+    setShowRangeOverlay(true);
     onCommitPlacementRect(activeObjectId, rect);
     setPolygonPoints([]);
     setPolygonCursor(null);
@@ -908,6 +905,8 @@ export function AiEditWorkspace({
       width: Math.min(1 - Math.max(0, x0), w),
       height: Math.min(1 - Math.max(0, y0), h),
     };
+    // 描いた範囲が消えないよう、範囲表示がOFFなら自動でONに戻す（260708・矩形ドラッグ確定時も同様）。
+    setShowRangeOverlay(true);
     onCommitPlacementRect(activeObjectId, rect);
   };
 

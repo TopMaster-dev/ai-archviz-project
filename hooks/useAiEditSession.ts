@@ -103,11 +103,21 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   const hydrateDraftFromVersion = useCallback((v: AiEditVersion) => {
     setDraftStyleRefs(v.styleRefDataUrls ?? (v.styleRefDataUrl ? [v.styleRefDataUrl] : []));
     setDraftStyleMemo(v.styleMemo ?? '');
-    // マスク（エリア編集の範囲）下書きは常に空にする（260702 クライアント報告「前の下絵の名残が残る」対応）。
-    // 範囲はバージョンに provenance として保持されるが、確定済みバージョンの範囲を再表示すると、その多角形が
-    // 新しい結果画像の上にオーバーレイとして残り「前に描いた範囲の名残」に見える。マスク下書きは「次の編集を
-    // 作図するためのもの」なので、バージョン選択・再表示時は必ずクリアする（＝過去の描画を出さない）。
-    setDraftObjects([]);
+    // 領域履歴の復元（260708 クライアント要望「以前どおりに」）: 選択した版が編集に使った領域（範囲＋参照画像＋
+    // 指示文）を右パネルへ復元し、見返し・再編集できるようにする。260702 では「範囲の名残」対策で空にしていたが、
+    // 範囲オーバーレイは showRangeOverlay トグルで任意に隠せる（＝名残問題はトグルで解消）ため、履歴選択時は
+    // 版の領域を復元する。パネルとオーバーレイを同じ draftObjects で駆動し「範囲だけ出てパネルは空」を防ぐ。
+    // 版の内容を書き換えないようディープコピーする（下書き編集が確定済みの版を汚さない）。
+    setDraftObjects(
+      (v.objects ?? []).map((o) => ({
+        ...o,
+        placements: o.placements.map((p) => ({
+          ...p,
+          points: p.points ? p.points.map((pt) => ({ ...pt })) : p.points,
+        })),
+        placementMemos: [...(o.placementMemos ?? [])],
+      }))
+    );
     setActiveObjectId(null);
     setPlacementEditIndex(null);
   }, []);
@@ -282,6 +292,8 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         objects: params.objects.map((o) => ({
           ...o,
           placements: o.placements.map((p) => ({ ...p })),
+          // placementMemos も配列コピーして版へ保存（下書き編集が確定済みの版の memo 配列を汚さない・260708）。
+          placementMemos: [...(o.placementMemos ?? [])],
         })),
       };
       skipHydrateOnce.current = true;
