@@ -35,6 +35,15 @@ export const LARGE_REGION_COVERAGE = 0.1;
  */
 export const ENABLE_FULLFRAME_ONLY = true;
 
+/**
+ * 全画面生成モードで「囲った範囲の外」をベースのまま保持するか（はみ出し防止・260708 クライアント報告対応）。
+ * true（既定）: 全画面で1枚を生成したうえで、指定領域だけを羽根ぼかしでベースへ合成する。クロップしていないので
+ *       境界線（継ぎ目）は出にくく、かつ範囲外はベース画像のまま＝「囲った範囲からはみ出す」ドリフトを構造的に防ぐ。
+ * false: 生成した全画面をそのまま採用（範囲外の保持はプロンプト頼み＝ソフト）。継ぎ目が万一出る場合の退避用。
+ * ※ ENABLE_FULLFRAME_ONLY=false（従来クロップ経路）のときは無関係（従来どおり必ず合成する）。
+ */
+export const PRESERVE_OUTSIDE_MASK = true;
+
 /** union マスク外接矩形が「大領域」か（＝クロップ/合成せず全画面編集を使う）。純関数。 */
 export function isLargeRegion(bbox: BBox01, threshold = LARGE_REGION_COVERAGE): boolean {
   return bbox.w * bbox.h >= threshold;

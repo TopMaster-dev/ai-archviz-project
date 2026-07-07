@@ -146,6 +146,29 @@ describe('フォーカス化＋領域メモ（260707）', () => {
   });
 });
 
+describe('向き・角度の維持（260708 クライアント報告「3Dで置いた家具と向きがそろわない」対策）', () => {
+  it('エリア編集の憲法に「向き・角度の維持を最優先」の指示が入る', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+    });
+    expect(guide).toContain('向き・角度の維持を最優先');
+    expect(guide).toContain('勝手に回転・反転');
+  });
+
+  it('オブジェクト参照ありでも、向き・角度は元の家具（パース）に合わせる指示が入る', () => {
+    const o: AiEditObjectReference = {
+      id: 'o1',
+      imageDataUrl: 'data:image/png;base64,AAA',
+      placements: [{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }],
+      memo: '',
+      placementMemos: [],
+    };
+    const guide = buildAiEditReferenceGuide({ hasStyle: false, objects: [o] });
+    expect(guide).toContain('設置の向き・角度・カメラに対する見え方は参照画像ではなく');
+  });
+});
+
 describe('コーディネートのテキスト指示は画像添付が無くてもプロンプトに反映される（260702）', () => {
   it('hasStyle=false・objects=[] でも styleMemo が編集指示としてプロンプトに載る', () => {
     const guide = buildAiEditReferenceGuide({

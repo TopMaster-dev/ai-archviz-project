@@ -40,6 +40,7 @@ import {
   shouldCropRegion,
   isLargeRegion,
   ENABLE_FULLFRAME_ONLY,
+  PRESERVE_OUTSIDE_MASK,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -220,6 +221,22 @@ export function AiEditWorkspace({
   const [submitError, setSubmitError] = useState<string | null>(null);
   // 継ぎ目なじませ（全体を1枚に均一化）パスの opt-in（既定OFF・260706 クライアント提案）。
   const [harmonizeSeams, setHarmonizeSeams] = useState(false);
+  // 囲った範囲（マスク）オーバーレイの表示トグル（260708 クライアント要望「任意で表示・非表示」）。既定は表示。
+  // エリア編集タブでのみ効かせ、コーディネート/エージェント相談タブでは常に非表示にする（下の overlayObjects で分岐）。
+  const [showRangeOverlay, setShowRangeOverlay] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('archviz-ai-edit-show-range') !== '0';
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('archviz-ai-edit-show-range', showRangeOverlay ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [showRangeOverlay]);
   const [compareA, setCompareA] = useState<string | null>(null);
   const [compareB, setCompareB] = useState<string | null>(null);
   const [compareSlider, setCompareSlider] = useState(50);
@@ -280,6 +297,22 @@ export function AiEditWorkspace({
 
 
   const activeObjectIndex = draftObjects.findIndex((o) => o.id === activeObjectId);
+
+  // 囲った範囲（マスク）オーバーレイの表示ソース（260708 クライアント要望）:
+  //  - コーディネート／エージェント相談タブでは常に非表示（エリア編集専用の目印のため）。以前は全タブで
+  //    表示されていた（＝混乱の元）ので、activeTool==='area' のときだけ描く。
+  //  - エリア編集タブでは、作図中は下書き(draftObjects)を優先表示。作図していない（＝履歴の版を見返している）
+  //    ときは、その版が編集に使った範囲(activeVersion.objects)を、トグル(showRangeOverlay)がONのときだけ表示する。
+  //    これで「前まで表示されていた履歴の範囲が消えた」報告に応えつつ、任意で非表示にもできる。
+  const overlayObjects: AiEditObjectReference[] =
+    activeTool !== 'area'
+      ? []
+      : draftObjects.length > 0
+        ? draftObjects
+        : showRangeOverlay
+          ? activeVersion?.objects ?? []
+          : [];
+
   const dragPreviewColors =
     activeObjectIndex >= 0
       ? aiEditObjectUiColors(activeObjectIndex)
@@ -526,14 +559,24 @@ export function AiEditWorkspace({
       // 編集結果の後処理。大領域＝全画面編集をそのまま使う（合成しない＝継ぎ目なし）。小領域＝マスク内だけ合成
       // （マスク外はベースのまま＝指定外は改変しない）。アスペクトは cover 固定（contain は領域と位置がズレる）。
       if (largeRegion) {
-        // 全画面を1枚として編集した結果をそのまま採用（貼り戻し・クリップをしない＝境界線が生じない）。
-        // マスク外の保持は生成プロンプト（領域外は保持）に委ねる（クライアント要望260707・全体編集success準拠）。
-        // 合成が無いので、アスペクトのズレを cover で強制クロップすると差し替え家具が欠ける恐れ→コーディネートと
-        // 同じく、Gemini 出力比とベース比の差が大きいときは contain（レターボックス）で内容を欠かさない。
+        // 全画面を1枚として編集（クロップしない＝境界線が構造的に生じない）。アスペクトのズレを cover で強制クロップ
+        // すると差し替え家具が欠ける恐れ→ Gemini 出力比とベース比の差が大きいときは contain（レターボックス）で欠かさない。
         const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
         const largeAspectMode: 'cover' | 'contain' =
           coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-        outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, largeAspectMode);
+        const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, largeAspectMode);
+        // はみ出し防止（260708 クライアント報告「囲った範囲から多少はみ出る」）: 全画面生成の結果から、指定領域だけを
+        // 羽根ぼかしでベースへ合成する＝範囲外はベース画像のまま。クロップしていないので継ぎ目は出にくく、範囲外の
+        // ドリフト/はみ出しを構造的に防ぐ。PRESERVE_OUTSIDE_MASK=false で従来の「全画面そのまま採用」へ退避可能。
+        // 重要: 合成は cover のときだけ行う。contain（レターボックス）では fitted の内容が余白ぶん内側にずれるが
+        // マスク座標は全画面基準のため、そのまま合成すると領域がずれて逆に「はみ出し」を生む。極端なアスペクト差の
+        // ときは合成せず全画面生成をそのまま採用し、範囲外保持はプロンプトに委ねる（稀・破綻回避優先）。
+        if (PRESERVE_OUTSIDE_MASK && allPlacements.length > 0 && largeAspectMode === 'cover') {
+          const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
+          outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
+        } else {
+          outUrl = fitted;
+        }
       } else if (cropPx) {
         // クロップ経路: 編集済みクロップを crop 寸法へ整え、ベースへ貼り戻し、元の全画面座標の多角形でクリップ。
         // crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、クロップ矩形の縁は必ず見えない。
@@ -982,7 +1025,16 @@ export function AiEditWorkspace({
                     <div className="text-[9px] text-neutral-400 font-mono truncate">
                       {new Date(v.createdAt).toLocaleString('ja-JP')}
                     </div>
-                    <div className="text-[9px] text-neutral-500 truncate">自動モード</div>
+                    {/* 各履歴のプロンプト（指示文）を表示（260708 クライアント要望「範囲と画像、プロンプト」の履歴化）。
+                        エリア編集は各領域の指示(memo)を、コーディネートは styleMemo を表示。無ければ控えめな既定文。 */}
+                    <div className="text-[9px] text-neutral-500 truncate" title={
+                      (v.objects ?? []).map((o) => o?.memo?.trim?.()).filter(Boolean).join(' / ') ||
+                      (v.styleMemo?.trim?.() ?? '')
+                    }>
+                      {(v.objects ?? []).map((o) => o?.memo?.trim?.()).filter(Boolean).join(' / ') ||
+                        v.styleMemo?.trim?.() ||
+                        '指示なし'}
+                    </div>
                   </button>
                   {/* 各履歴サムネの下に good/bad 評価を表示。ホバーでボタン＋アイコンを強調（260623）。 */}
                   <div className="mt-1.5 flex items-center gap-1 border-t border-white/5 pt-1.5">
@@ -1126,7 +1178,7 @@ export function AiEditWorkspace({
                       else onMouseUpPlacement();
                     }}
                   />
-                  {draftObjects.map((o, objIdx) => {
+                  {overlayObjects.map((o, objIdx) => {
                     const pal = aiEditObjectUiColors(objIdx);
                     return o.placements.map((pl, pi) => {
                       // 多角形マスクは下の SVG レイヤで描画するため、矩形 div はスキップ。
@@ -1150,7 +1202,7 @@ export function AiEditWorkspace({
                       );
                     });
                   })}
-                  {dragStart && dragCurrent && (
+                  {activeTool === 'area' && dragStart && dragCurrent && (
                     <div
                       className="absolute pointer-events-none border-2 border-dashed"
                       style={{
@@ -1167,7 +1219,7 @@ export function AiEditWorkspace({
                   )}
                   {/* 多角形マスク（260623）: 確定済み多角形＋作図中の多角形を SVG で描画。 */}
                   <svg className="absolute inset-0 h-full w-full pointer-events-none" aria-hidden>
-                    {draftObjects.map((o, objIdx) => {
+                    {overlayObjects.map((o, objIdx) => {
                       const pal = aiEditObjectUiColors(objIdx);
                       return o.placements.map((pl, pi) => {
                         if (!pl.points || pl.points.length < 3) return null;
@@ -1191,7 +1243,8 @@ export function AiEditWorkspace({
                         );
                       });
                     })}
-                    {maskMode === 'polygon' &&
+                    {activeTool === 'area' &&
+                      maskMode === 'polygon' &&
                       polygonPoints.length > 0 &&
                       (() => {
                         const px = polygonPoints.map((p) => ({
@@ -1410,6 +1463,21 @@ export function AiEditWorkspace({
                     矩形
                   </button>
                 </div>
+                {/* 囲った範囲（マスク）の表示トグル（260708 クライアント要望「任意で表示・非表示」）。
+                    エリア編集タブでのみ表示。作図中の範囲・選択中の履歴（版）の範囲の表示可否を切り替える。 */}
+                <button
+                  type="button"
+                  onClick={() => setShowRangeOverlay((v) => !v)}
+                  title="囲った範囲（マスク）の表示／非表示を切り替える"
+                  aria-pressed={showRangeOverlay}
+                  className={`ml-auto rounded-lg border px-2.5 py-1 text-[10px] font-black tracking-wider transition-colors ${
+                    showRangeOverlay
+                      ? 'border-emerald-500/40 bg-emerald-500/15 text-emerald-300'
+                      : 'border-white/10 text-white/45 hover:text-white'
+                  }`}
+                >
+                  {showRangeOverlay ? '範囲: 表示' : '範囲: 非表示'}
+                </button>
               </div>
               {draftObjects.length === 0 && (
                 <p className="text-[11px] leading-relaxed text-neutral-500 py-2">
