@@ -118,18 +118,20 @@ export async function generatePlacementNarratives(
   const spec = params.objects
     .map((o, i) => {
       const pid = JSON.stringify(o.id);
-      return `- objectId: ${pid} / 参照番号: ${i + 1} / 配置: ${describeObjectPlacements(o)}`;
+      return `- objectId: ${pid} / 参照番号: ${i + 1} / ${describeObjectPlacements(o)}`;
     })
     .join('\n');
 
-  const userText = `あなたは建築インテリアの画像編集アシスタントです。次の「ベース画像」を見て、各 objectId の配置矩形が空間のどこに当たるか、日本語で短い位置説明を付けてください。
-説明はインテリア向けに自然な言い方で、1オブジェクトあたり40文字以内。配置座標の数値は繰り返さない。
+  // 事前解析の強化（260707 クライアント要望）: 位置だけでなく「対象物・向き・前後（重なり時どちらが手前か）」も
+  // 短くまとめて返させ、生成プロンプトへ参考として渡す（あくまで助言。座標が最優先）。断定しづらい項目は書かせない。
+  const userText = `あなたは建築インテリアの画像編集アシスタントです。次の「ベース画像」を見て、各 objectId のフォーカス領域に写っているものを分析し、日本語で短くまとめてください。
+各 objectId について、次を1行（90文字以内）に凝縮します: (1)その領域に写っている対象物（例: 3人掛けのファブリックソファ）(2)画面上のおおまかな位置と距離感（例: 中央やや左・中景）(3)向き（例: 正面がやや右向き）(4)周囲との前後関係（重なりがあれば、どれが手前か。例: 手前にラグ）。座標の数値は繰り返さない。判断が難しい項目は書かない（誤った断定はしない）。
 
-【配置仕様（正規化座標は優先。説明は参考用）】
+【フォーカス領域の仕様（正規化座標が最優先。この分析は参考用）】
 ${spec}
 
 次の JSON のみを返してください。前後に説明文やマークダウンを付けないこと。
-{"descriptions":[{"objectId":"<idと同じ文字列>","text":"<日本語1行>"}]}`;
+{"descriptions":[{"objectId":"<idと同じ文字列>","text":"<日本語1行・90文字以内>"}]}`;
 
   const base = parseImageDataUrl(params.baseImageDataUrl);
   const payload = {
@@ -180,7 +182,7 @@ function parsePlacementNarrativesJson(raw: string): Record<string, string> {
     if (!Array.isArray(arr)) return {};
     for (const row of arr) {
       if (row && typeof row.objectId === 'string' && typeof row.text === 'string') {
-        out[row.objectId] = row.text.trim();
+        out[row.objectId] = row.text.trim().slice(0, 200); // 暴走防止に上限
       }
     }
   } catch {

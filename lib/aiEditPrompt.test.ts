@@ -94,6 +94,58 @@ describe('formatPlacement: 多角形も矩形(bbox)で Gemini に伝える（260
   });
 });
 
+describe('フォーカス化＋領域メモ（260707）', () => {
+  it('「配置」ではなく「フォーカス領域」の言い回しになる', () => {
+    const s = describeObjectPlacements(obj([{ x: 0.2, y: 0.3, width: 0.1, height: 0.4 }]));
+    expect(s).toContain('フォーカス領域');
+    expect(s).not.toContain('配置:');
+  });
+
+  it('領域メモ（placementMemos）があればその領域の指示として併記される', () => {
+    const o: AiEditObjectReference = {
+      id: 'o1',
+      imageDataUrl: null,
+      placements: [{ x: 0.2, y: 0.3, width: 0.1, height: 0.4 }],
+      memo: '',
+      placementMemos: ['このソファを北欧風に'],
+    };
+    const s = describeObjectPlacements(o);
+    expect(s).toContain('この領域の指示: このソファを北欧風に');
+  });
+
+  it('placementMemos が placements より短い/未指定でも落ちない', () => {
+    const o: AiEditObjectReference = {
+      id: 'o1',
+      imageDataUrl: null,
+      placements: [
+        { x: 0.1, y: 0.1, width: 0.2, height: 0.2 },
+        { x: 0.5, y: 0.5, width: 0.2, height: 0.2 },
+      ],
+      memo: '',
+      placementMemos: ['領域1のみ'], // 2件目のメモ無し
+    };
+    const s = describeObjectPlacements(o);
+    expect(s).toContain('この領域の指示: 領域1のみ');
+    expect(s).toContain('フォーカス領域1');
+    expect(s).toContain('フォーカス領域2');
+  });
+
+  it('領域メモは制御文字（改行等）を除去し長さ上限で丸める（プロンプト注入対策）', () => {
+    const long = 'あ'.repeat(200);
+    const o: AiEditObjectReference = {
+      id: 'o1',
+      imageDataUrl: null,
+      placements: [{ x: 0.2, y: 0.3, width: 0.1, height: 0.4 }],
+      memo: '',
+      placementMemos: [`改行\nと\tタブ${long}`],
+    };
+    const s = describeObjectPlacements(o);
+    expect(s).not.toContain('\n改行'); // 改行が原文のまま残らない
+    // 120字上限（メモ部分）で丸められる＝原文200字がそのまま乗らない
+    expect(s).not.toContain('あ'.repeat(160));
+  });
+});
+
 describe('コーディネートのテキスト指示は画像添付が無くてもプロンプトに反映される（260702）', () => {
   it('hasStyle=false・objects=[] でも styleMemo が編集指示としてプロンプトに載る', () => {
     const guide = buildAiEditReferenceGuide({

@@ -48,15 +48,33 @@ function formatPlacement(r: NormalizedRect): string {
   return `左${(b.x * 100).toFixed(1)}%, 上${(b.y * 100).toFixed(1)}%, 幅${(b.w * 100).toFixed(1)}%, 高さ${(b.h * 100).toFixed(1)}%（画像全体に対する正規化座標）`;
 }
 
-/** オブジェクト1件の配置テキスト（画像編集・キャプション生成で共通） */
+/** ユーザー自由入力（領域メモ）をプロンプトへ載せる前のサニタイズ（制御文字除去・空白圧縮・長さ上限）。 */
+function sanitizePromptText(s: string, max = 120): string {
+  return Array.from(s)
+    .map((ch) => (ch.charCodeAt(0) < 32 || ch.charCodeAt(0) === 127 ? ' ' : ch))
+    .join('')
+    .replace(/ +/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+/**
+ * オブジェクト1件のフォーカス領域テキスト（画像編集・キャプション生成で共通）。
+ * 座標は「切り取り枠」ではなく「どこに注目して編集するか」の目印として提示する（260707 クライアント要望）。
+ * 各領域のメモ（placementMemos・任意）があれば、その領域固有の指示として併記する。
+ */
 export function describeObjectPlacements(o: AiEditObjectReference): string {
   if (o.placements.length === 0) {
     return '配置矩形未指定（画像内の適切な位置に自然に配置）';
   }
+  const memoFor = (i: number) => {
+    const m = o.placementMemos?.[i]?.trim();
+    return m ? `／この領域の指示: ${sanitizePromptText(m)}` : '';
+  };
   if (o.placements.length === 1) {
-    return `配置: ${formatPlacement(o.placements[0])}`;
+    return `フォーカス領域（この範囲に写る対象に注目して編集）: ${formatPlacement(o.placements[0])}${memoFor(0)}`;
   }
-  return o.placements.map((p, j) => `領域${j + 1}: ${formatPlacement(p)}`).join(' / ');
+  return o.placements.map((p, j) => `フォーカス領域${j + 1}: ${formatPlacement(p)}${memoFor(j)}`).join(' / ');
 }
 
 function buildAiEditConstitution(
@@ -69,7 +87,9 @@ function buildAiEditConstitution(
   // エリア編集の精度（260702 クライアント要望）: ①指定領域内に指示内容を必ず生成する（未編集で返さない）、
   // ②重なった家具は最も手前の対象だけを編集し、手前/周囲の別家具は奥行き・位置・形状を保持する。
   const overlapNote = hasAreaEdits
-    ? '\n- 指定領域（矩形）内には、指示された編集内容を必ず明確に反映した結果を生成する。領域内を未編集・空欄・無変化のまま返さない。指示に沿った家具/仕上げ/オブジェクトを、ベース画像の遠近（パース）・スケール・光の向きに整合させて領域内にしっかり描画する。' +
+    ? '\n- 指定座標は画像の「切り取り枠」ではなく、「どの対象物に注目して編集するか」を示すフォーカスの目印である。座標が指す対象を主眼に編集し、生成した対象が枠の縁で途切れないよう、対象全体を自然に（頭・脚・端まで）描く。' +
+      '\n- 指定領域（矩形）内には、指示された編集内容を必ず明確に反映した結果を生成する。領域内を未編集・空欄・無変化のまま返さない。指示に沿った家具/仕上げ/オブジェクトを、ベース画像の遠近（パース）・スケール・光の向きに整合させて領域内にしっかり描画する。' +
+      '\n- 対象の向き（正面／横向き等）と、周囲との前後関係（手前／奥）・パース・スケール・光と反射の向きを尊重して編集する。各領域に位置説明が添えられている場合は、そこで触れられた対象・向き・前後を参考にする（無ければ画像から判断する。いずれの場合も座標を最優先し、説明が座標と矛盾するときは座標に従う）。' +
       '\n- 指定領域に複数の家具が重なって写る場合は、その領域で最も手前に写っている対象オブジェクトのみを編集し、その手前や周囲にある別の家具（テーブル・椅子・観葉植物等）は前後関係（奥行き）・位置・形状を文脈として保持する（別物に置き換えたり溶かし込んだりしない）。'
     : '';
 
@@ -204,6 +224,8 @@ export function buildAiEditReferenceGuide(params: {
   const hasObjectRefs = params.objects.some((o) => !!o.imageDataUrl);
   const mode = resolvePromptMode(params.hasStyle, hasObjects);
   const narr = params.placementNarratives ?? {};
+  // ユーザー自由入力（スタイルメモ・全体補足）もプロンプト注入対策としてサニタイズ（制御文字除去・長さ上限）。
+  const sMemo = params.styleMemo ? sanitizePromptText(params.styleMemo, 800) : '';
   const lines: string[] = [
     buildAiEditConstitution(mode, { hasAreaEdits: hasObjects, hasObjectRefs }),
     '',
@@ -222,8 +244,8 @@ export function buildAiEditReferenceGuide(params: {
         `画像${idx}〜${idx + styleCount - 1}: スタイル・空気感の参照 ${styleCount}枚（いずれもムードのみ参考、仕上げコピー禁止。複数ある場合は共通する雰囲気・方向性を汲む）`
       );
     }
-    if (params.styleMemo?.trim()) {
-      lines.push(`  スタイル参照への補足: ${params.styleMemo.trim()}`);
+    if (sMemo) {
+      lines.push(`  スタイル参照への補足: ${sMemo}`);
     }
     idx += styleCount;
   }
@@ -234,7 +256,7 @@ export function buildAiEditReferenceGuide(params: {
       idx++;
     }
     const placeDesc = describeObjectPlacements(o);
-    const memo = o.memo?.trim() ? `全体補足: ${o.memo.trim()}` : '';
+    const memo = o.memo?.trim() ? `全体補足: ${sanitizePromptText(o.memo, 300)}` : '';
     const shortN = narr[o.id]?.trim();
     const narLine = shortN
       ? ` AIによる位置説明（参考・座標と矛盾する場合は座標を優先）: ${shortN}`
@@ -249,9 +271,9 @@ export function buildAiEditReferenceGuide(params: {
   // スタイル参照画像が無い「テキストのみのコーディネート指示」も必ずプロンプトへ反映する。
   // hasStyle=false のとき従来は styleMemo が落ちて指示が無視されていた（260702 クライアント指摘: プロンプトが読まれない）。
   // エリア編集は styleMemo を送らないため（機能独立）、ここに来るのは全体コーディネートのテキスト指示のみ。
-  if (!params.hasStyle && !hasObjects && params.styleMemo?.trim()) {
+  if (!params.hasStyle && !hasObjects && sMemo) {
     lines.push('');
-    lines.push(`【ユーザーの編集指示（空間全体・最優先で反映する）】\n${params.styleMemo.trim()}`);
+    lines.push(`【ユーザーの編集指示（空間全体・最優先で反映する）】\n${sMemo}`);
   }
 
   lines.push('');

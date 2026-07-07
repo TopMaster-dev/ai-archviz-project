@@ -7,12 +7,11 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateAgentReply, generateGeminiImage, generateGeminiImageEdit, generatePlacementNarratives, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
-import { normalizeObjectReference } from './lib/aiEditNormalize.js';
+import { runAiEdit } from './lib/aiEditCore.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
-import type { AiEditObjectReference } from './types.js';
 
 export default defineConfig(({ mode }) => {
   const currentDir = path.resolve();
@@ -202,75 +201,23 @@ export default defineConfig(({ mode }) => {
                         const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         // 従来(AIzaSy...)と新フォーマット(AQ....)の両対応（260612）
                         const apiKey = extractGeminiApiKey(rawApiKey);
-
                         if (!apiKey) {
                             res.statusCode = 400;
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキーが見つかりません。' }));
                         }
-
-                        const parsed = JSON.parse(body);
-                        const {
-                            baseImage,
-                            styleImage,
-                            styleMemo,
-                            objects,
-                            aspectRatio,
-                            imageSize,
-                            coordinate,
-                            learnedHints,
-                        } = parsed;
-                        if (!baseImage) {
-                            res.statusCode = 400;
-                            res.setHeader('Content-Type', 'application/json');
-                            return res.end(JSON.stringify({ success: false, error: 'baseImage が必要です。' }));
-                        }
-
-                        const objList: AiEditObjectReference[] = [];
-                        if (Array.isArray(objects)) {
-                            for (const item of objects) {
-                                const n = normalizeObjectReference(item);
-                                if (n) objList.push(n);
-                            }
-                        }
-                        const memo =
-                            typeof styleMemo === 'string' && styleMemo.trim() ? styleMemo.trim() : undefined;
-                        const ar =
-                            typeof aspectRatio === 'string' && aspectRatio.trim()
-                                ? aspectRatio.trim()
-                                : undefined;
-                        const isz =
-                            typeof imageSize === 'string' && imageSize.trim()
-                                ? imageSize.trim()
-                                : undefined;
-                        let placementNarratives: Record<string, string> | undefined;
-                        if (objList.length > 0) {
-                            placementNarratives = await generatePlacementNarratives(apiKey, {
-                                baseImageDataUrl: baseImage,
-                                objects: objList,
-                            });
-                            if (placementNarratives && Object.keys(placementNarratives).length === 0) {
-                                placementNarratives = undefined;
-                            }
-                        }
-
-                        const { url: dataUrl, usage } = await generateGeminiImageEdit(apiKey, {
-                            baseImageDataUrl: baseImage,
-                            styleImageDataUrl: styleImage ?? null,
-                            styleMemo: memo,
-                            objects: objList,
-                            aspectRatio: ar,
-                            imageSize: isz,
-                            placementNarratives,
-                            coordinate: coordinate === true,
-                            learnedHints: Array.isArray(learnedHints)
-                                ? learnedHints.filter((h: unknown): h is string => typeof h === 'string' && h.trim().length > 0).slice(0, 5)
-                                : undefined,
-                        });
-
-                        res.statusCode = 200;
+                        // 本番 api/ai-edit.ts と同一の共有ハンドラ（lib/aiEditCore.ts）を呼ぶ＝開発と本番で挙動が完全一致（260707）。
+                        // 空/不正な body は本番同様 {} 扱い（→400「baseImage が必要」）に。JSON.parse を巻き込んで500にしない。
+                        const result = await runAiEdit(apiKey, body ? JSON.parse(body) : {});
+                        res.statusCode = result.success ? 200 : result.status;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, url: dataUrl, usage, model: GEMINI_IMAGE_MODEL }));
+                        return res.end(
+                            JSON.stringify(
+                                result.success
+                                    ? { success: true, url: result.url, usage: result.usage, model: result.model }
+                                    : { success: false, error: result.error }
+                            )
+                        );
                     } catch (e: any) {
                         console.error('ai-edit local error:', e);
                         res.statusCode = 500;

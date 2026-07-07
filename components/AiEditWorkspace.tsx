@@ -39,6 +39,7 @@ import {
   remapPlacementsToCrop,
   shouldCropRegion,
   isLargeRegion,
+  ENABLE_FULLFRAME_ONLY,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -480,8 +481,10 @@ export function AiEditWorkspace({
       // 大領域（選択が画面の一定割合以上）は、クロップして貼り戻すと大きな継ぎ目（境界線）になる。この場合は
       // クロップせず・合成もせず、全画面をそのまま編集した1枚を使う＝継ぎ目が生じない（クライアント要望260707）。
       // 小領域は従来どおりクロップ＋合成＋色合わせで精度優先（実効解像度が上がり重なった家具も分離しやすい）。
+      // ENABLE_FULLFRAME_ONLY（既定 true・260707 試験導入）: 選択サイズに関わらず全画面1回生成に統一（クロップ/貼り戻し/
+      // 合成/なじませを通さない＝境界線が構造的に出ない）。false へ倒すと従来動作（10%未満だけクロップ＋合成）へロールバック。
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
-      const largeRegion = !!unionBBox && isLargeRegion(unionBBox);
+      const largeRegion = !!unionBBox && (ENABLE_FULLFRAME_ONLY || isLargeRegion(unionBBox));
 
       let cropPx: CropPx | null = null;
       if (unionBBox && !largeRegion) {
@@ -1594,7 +1597,8 @@ export function AiEditWorkspace({
                 <p className="text-xs text-amber-300 font-bold">未入力{emptyCardCount}件</p>
               )}
               {/* 継ぎ目なじませ（全体を1枚に均一化）: 決定論の色合わせで残る薄い継ぎ目を、追加生成1回で消す opt-in（260706）。 */}
-              {activeTool === 'area' && ENABLE_HARMONIZE_FLATTEN && (
+              {/* 全画面統一モード（ENABLE_FULLFRAME_ONLY）では合成が無く継ぎ目も出ないためチェックボックス非表示（ロールバック時のみ表示）。 */}
+              {activeTool === 'area' && ENABLE_HARMONIZE_FLATTEN && !ENABLE_FULLFRAME_ONLY && (
                 <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
                   <input
                     type="checkbox"
