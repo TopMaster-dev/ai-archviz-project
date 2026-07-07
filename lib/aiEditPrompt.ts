@@ -79,15 +79,22 @@ export function describeObjectPlacements(o: AiEditObjectReference): string {
 
 function buildAiEditConstitution(
   mode: AiEditMode,
-  opts?: { hasAreaEdits?: boolean; hasObjectRefs?: boolean }
+  opts?: { hasAreaEdits?: boolean; hasObjectRefs?: boolean; strictConfine?: boolean }
 ): string {
   const hasAreaEdits = !!opts?.hasAreaEdits;
   const hasObjectRefs = !!opts?.hasObjectRefs;
+  // 範囲外の扱いをモードで出し分ける（260708 再修正）。strictConfine=ON（「範囲外を変えない」トグル）は厳密に
+  // 閉じ込め、OFF（既定・自然）は自然な統合を最優先し、対象を縁で切り取らせない（＝合成後の“貼り付け”を防ぐ）。
+  const strictConfine = !!opts?.strictConfine;
+  const confineLine = strictConfine
+    ? '\n- 編集は囲った範囲の内側に厳密に限定する。範囲の外にある壁・床・天井・窓・他の家具や小物は、色・形・配置・明るさを一切変えずベース画像のまま完全に保持する（範囲外は変更しない）。'
+    : '\n- 自然な仕上がりを最優先する。対象とその陰影・接地・映り込みが自然になるように描き、無理に範囲の内側へ押し込めて縁で切り取らない。編集の主眼は囲った範囲の対象に置き、範囲から遠い無関係な壁・床・他の家具や空間全体の配置・色調はできるだけ元のまま保つ（自然になじませるのに必要な範囲を超えて作り替えない）。';
 
   // エリア編集の精度（260702 クライアント要望）: ①指定領域内に指示内容を必ず生成する（未編集で返さない）、
   // ②重なった家具は最も手前の対象だけを編集し、手前/周囲の別家具は奥行き・位置・形状を保持する。
   const overlapNote = hasAreaEdits
-    ? '\n- 指定座標は画像の「切り取り枠」ではなく、「どの対象物に注目して編集するか」を示すフォーカスの目印である。座標が指す対象を主眼に編集し、生成した対象が枠の縁で途切れないよう、対象全体を自然に（頭・脚・端まで）描く。' +
+    ? '\n- 指定座標は画像の「切り取り枠」ではなく、「どの対象物に注目して編集するか」を示すフォーカスの目印である。座標が指す対象を主眼に編集し、生成した対象が枠の縁で途切れないよう、対象全体を自然に（頭・脚・端まで）描く。対象の自然な陰影・接地・映り込みは範囲の外に及んでもよい（不自然に切り取らない）。' +
+      confineLine +
       '\n- 指定領域（矩形）内には、指示された編集内容を必ず明確に反映した結果を生成する。領域内を未編集・空欄・無変化のまま返さない。指示に沿った家具/仕上げ/オブジェクトを、ベース画像の遠近（パース）・スケール・光の向きに整合させて領域内にしっかり描画する。' +
       '\n- 【向き・角度の維持を最優先】編集領域にすでに家具が写っている場合、その家具の向き・角度・姿勢（正面／斜め／横向き、カメラに対する見え方、脚や座面の接地位置）を必ず維持する。差し替えやグレードアップでも、デザイン・素材・仕上げは指示（または参照画像）に従いつつ、向き・角度・設置位置はベース画像の元の家具に厳密に合わせ、勝手に回転・反転・向き変更をしない（例: 3Dで斜め向きに置かれた椅子を正面向きに描き直さない）。' +
       '\n- 対象の向き（正面／横向き等）と、周囲との前後関係（手前／奥）・パース・スケール・光と反射の向きを尊重して編集する。各領域に位置説明が添えられている場合は、そこで触れられた対象・向き・前後を参考にする（無ければ画像から判断する。いずれの場合も座標を最優先し、説明が座標と矛盾するときは座標に従う）。' +
@@ -219,6 +226,8 @@ export function buildAiEditReferenceGuide(params: {
   coordinate?: boolean;
   /** in-context反映（row 211/219）: 過去に高評価した傾向（styleMemo）。プロンプト末尾に参考添付。 */
   learnedHints?: string[];
+  /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
+  strictConfine?: boolean;
 }): string {
   if (params.coordinate) return appendLearnedHints(buildCoordinatePrompt(), params.learnedHints);
   const hasObjects = params.objects.length > 0;
@@ -228,7 +237,7 @@ export function buildAiEditReferenceGuide(params: {
   // ユーザー自由入力（スタイルメモ・全体補足）もプロンプト注入対策としてサニタイズ（制御文字除去・長さ上限）。
   const sMemo = params.styleMemo ? sanitizePromptText(params.styleMemo, 800) : '';
   const lines: string[] = [
-    buildAiEditConstitution(mode, { hasAreaEdits: hasObjects, hasObjectRefs }),
+    buildAiEditConstitution(mode, { hasAreaEdits: hasObjects, hasObjectRefs, strictConfine: params.strictConfine }),
     '',
   ];
 

@@ -221,13 +221,14 @@ export function AiEditWorkspace({
   const [submitError, setSubmitError] = useState<string | null>(null);
   // 継ぎ目なじませ（全体を1枚に均一化）パスの opt-in（既定OFF・260706 クライアント提案）。
   const [harmonizeSeams, setHarmonizeSeams] = useState(false);
-  // 囲った範囲（マスク）オーバーレイの表示トグル（260708 クライアント要望「任意で表示・非表示」）。既定は表示。
-  // エリア編集タブでのみ効かせ、コーディネート/エージェント相談タブでは常に非表示にする（下の overlayObjects で分岐）。
+  // 囲った範囲（マスク）オーバーレイの表示トグル（260708 クライアント要望「任意で表示・非表示」）。
+  // 既定はOFF＝仕上がり画像に緑の枠を出さずクリーンに見せる（枠が結果に重なって“雑な貼り付け”に見える不満への対応）。
+  // 範囲を見返したいときだけ「範囲: 表示」でON。エリア編集タブでのみ効かせる（下の overlayObjects で分岐）。
   const [showRangeOverlay, setShowRangeOverlay] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('archviz-ai-edit-show-range') !== '0';
+      return localStorage.getItem('archviz-ai-edit-show-range') === '1';
     } catch {
-      return true;
+      return false;
     }
   });
   useEffect(() => {
@@ -237,6 +238,24 @@ export function AiEditWorkspace({
       /* ignore */
     }
   }, [showRangeOverlay]);
+  // 範囲外を固定（はみ出し防止・くっきり閉じ込め）トグル（260708 クライアント報告②の再修正）。
+  // 既定OFF＝全画面を自然に生成（陰影・パースがなじむ。囲いから少しはみ出ることはある）。
+  // ON＝生成後に囲った範囲だけを羽根ぼかしでベースへ合成＝範囲外は元画像のまま（はみ出さないが、差し替えが
+  //    範囲より大きいと縁で切れて“貼り付け”っぽく見えることがある）。クライアントがトレードオフを選べるようにする。
+  const [confineToMask, setConfineToMask] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('archviz-ai-edit-confine') === '1';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('archviz-ai-edit-confine', confineToMask ? '1' : '0');
+    } catch {
+      /* ignore */
+    }
+  }, [confineToMask]);
   const [compareA, setCompareA] = useState<string | null>(null);
   const [compareB, setCompareB] = useState<string | null>(null);
   const [compareSlider, setCompareSlider] = useState(50);
@@ -519,8 +538,10 @@ export function AiEditWorkspace({
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
       const largeRegion = !!unionBBox && (ENABLE_FULLFRAME_ONLY || isLargeRegion(unionBBox));
 
+      // confineToMask は「範囲外を変えない/自然」の唯一のスイッチ。OFF（既定・自然）のときはクロップも合成も一切
+      // 行わず全画面を自然に採用する（どの設定でも一貫）。ON のときだけクロップ（ロールバック時）や合成を通す。
       let cropPx: CropPx | null = null;
-      if (unionBBox && !largeRegion) {
+      if (unionBBox && !largeRegion && confineToMask) {
         const bbox = padBBox(unionBBox);
         const targetAspect = parseAspectRatioKey(
           pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
@@ -543,6 +564,9 @@ export function AiEditWorkspace({
         aspectRatio: postAspect,
         imageSize,
         learnedHints,
+        // 範囲外の扱いをプロンプトへも伝える（260708）: ON=厳密に閉じ込め、OFF（既定）=自然な統合を優先。
+        // 生成後の合成（confineToMask）と、プロンプトの言い回しを一致させ、自然モードで“貼り付け”を誘発しない。
+        strictConfine: confineToMask,
       };
 
       const res = await fetch('/api/ai-edit', {
@@ -565,13 +589,13 @@ export function AiEditWorkspace({
         const largeAspectMode: 'cover' | 'contain' =
           coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
         const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, largeAspectMode);
-        // はみ出し防止（260708 クライアント報告「囲った範囲から多少はみ出る」）: 全画面生成の結果から、指定領域だけを
-        // 羽根ぼかしでベースへ合成する＝範囲外はベース画像のまま。クロップしていないので継ぎ目は出にくく、範囲外の
-        // ドリフト/はみ出しを構造的に防ぐ。PRESERVE_OUTSIDE_MASK=false で従来の「全画面そのまま採用」へ退避可能。
-        // 重要: 合成は cover のときだけ行う。contain（レターボックス）では fitted の内容が余白ぶん内側にずれるが
-        // マスク座標は全画面基準のため、そのまま合成すると領域がずれて逆に「はみ出し」を生む。極端なアスペクト差の
-        // ときは合成せず全画面生成をそのまま採用し、範囲外保持はプロンプトに委ねる（稀・破綻回避優先）。
-        if (PRESERVE_OUTSIDE_MASK && allPlacements.length > 0 && largeAspectMode === 'cover') {
+        // 既定は「自然に全画面生成した1枚をそのまま採用」＝陰影・パースがなじむ（クライアント報告260708②:
+        // 範囲だけを合成すると差し替え家具が範囲の縁で切れて“貼り付け”に見え、かえって不自然＝合成は既定で使わない）。
+        // 「範囲外を固定（confineToMask）」がONのときだけ、生成結果の指定領域だけを羽根ぼかしでベースへ合成＝範囲外は
+        // 元画像のまま（はみ出し防止・ただし縁で切れる可能性あり）。クライアントがトレードオフを選べるようにする。
+        // 合成は cover のときだけ。contain（レターボックス）では fitted 内容が余白ぶん内側にズレ、全画面基準のマスク
+        // 座標とずれて逆に破綻するため合成しない（稀・破綻回避優先）。
+        if (PRESERVE_OUTSIDE_MASK && confineToMask && allPlacements.length > 0 && largeAspectMode === 'cover') {
           const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
           outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
         } else {
@@ -587,7 +611,7 @@ export function AiEditWorkspace({
         outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
       } else {
         const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, 'cover');
-        if (allPlacements.length > 0) {
+        if (confineToMask && allPlacements.length > 0) {
           const matched = await harmonizeEditToBase(baseScaled, normalized, allPlacements, baseW, baseH);
           outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
         } else {
@@ -658,7 +682,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, confineToMask]);
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -1678,6 +1702,23 @@ export function AiEditWorkspace({
                   <span className="text-[11px] leading-snug text-neutral-300">
                     <span className="font-bold text-neutral-100">継ぎ目をなじませる（全体を1枚に均一化）</span>
                     <span className="block text-neutral-500">境界線が残るときにON。仕上げに全体を1回生成し直します（少し時間がかかります）。</span>
+                  </span>
+                </label>
+              )}
+              {/* 範囲外を固定（はみ出し防止）トグル（260708 再修正）。既定OFF＝自然に生成（少しはみ出ることはあるが縁が
+                  自然）。ON＝範囲外を元画像で固定（はみ出さないが差し替えが大きいと縁で切れて“貼り付け”に見えることあり）。 */}
+              {activeTool === 'area' && (
+                <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 accent-emerald-500"
+                    checked={confineToMask}
+                    onChange={(e) => setConfineToMask(e.target.checked)}
+                    disabled={isSubmitting}
+                  />
+                  <span className="text-[11px] leading-snug text-neutral-300">
+                    <span className="font-bold text-neutral-100">囲った範囲の外を変えない（はみ出し防止）</span>
+                    <span className="block text-neutral-500">OFFのまま（推奨）だと陰影やパースが自然になじみます。範囲外が変わるのが気になるときだけONにしてください（差し替えが範囲より大きいと縁で切れて見えることがあります）。</span>
                   </span>
                 </label>
               )}

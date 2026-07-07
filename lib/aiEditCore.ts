@@ -20,6 +20,8 @@ export interface AiEditRequestBody {
   coordinate?: boolean;
   harmonize?: boolean;
   learnedHints?: unknown;
+  /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
+  strictConfine?: boolean;
 }
 
 export type AiEditResult =
@@ -126,6 +128,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       coordinate,
       harmonize,
       learnedHints,
+      strictConfine: body.strictConfine === true,
     });
     return { success: true, url, usage, model: GEMINI_IMAGE_MODEL };
   } catch (e) {

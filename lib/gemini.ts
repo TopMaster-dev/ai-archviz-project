@@ -353,6 +353,8 @@ export async function generateGeminiImageEdit(
     learnedHints?: string[];
     /** 継ぎ目なじませ（全体を1枚に均一化）パス（260706）。true のとき創作系を使わずベース1枚のみを均一化する。 */
     harmonize?: boolean;
+    /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
+    strictConfine?: boolean;
   }
 ): Promise<{ url: string; usage: TokenUsage | null }> {
   // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
@@ -373,6 +375,7 @@ export async function generateGeminiImageEdit(
         placementNarratives: params.placementNarratives,
         coordinate: params.coordinate,
         learnedHints: params.learnedHints,
+        strictConfine: params.strictConfine,
       });
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [

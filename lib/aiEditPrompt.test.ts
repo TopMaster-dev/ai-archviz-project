@@ -146,6 +146,28 @@ describe('フォーカス化＋領域メモ（260707）', () => {
   });
 });
 
+describe('範囲外の扱いをモードで出し分ける（260708 再修正・自然/厳密）', () => {
+  it('既定（strictConfine未指定）＝自然モード: 自然な統合を優先し、厳密限定の文言を出さない', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+    });
+    expect(guide).toContain('自然な仕上がりを最優先');
+    expect(guide).not.toContain('厳密に限定');
+  });
+
+  it('strictConfine=true＝厳密モード: 範囲外を変えない旨を明示する', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+      strictConfine: true,
+    });
+    expect(guide).toContain('厳密に限定');
+    expect(guide).toContain('範囲外は変更しない');
+    expect(guide).not.toContain('自然な仕上がりを最優先');
+  });
+});
+
 describe('向き・角度の維持（260708 クライアント報告「3Dで置いた家具と向きがそろわない」対策）', () => {
   it('エリア編集の憲法に「向き・角度の維持を最優先」の指示が入る', () => {
     const guide = buildAiEditReferenceGuide({
