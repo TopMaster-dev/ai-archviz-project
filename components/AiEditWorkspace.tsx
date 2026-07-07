@@ -44,6 +44,7 @@ import {
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
 import { ENABLE_HARMONIZE_FLATTEN } from '../lib/aiEditPrompt.js';
+import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
@@ -126,8 +127,12 @@ type Props = {
   onSelectVersion: (id: string) => void;
   /** 生成結果（版）を削除する（260625・削除を暗黙的フィードバックへ）。 */
   onDeleteVersion: (id: string) => void;
-  draftStyleRefDataUrl: string | null;
-  onStyleRefChange: (dataUrl: string | null) => void;
+  /** 生成結果への good/bad 評価を版に保存（プロジェクト永続化＝開き直しても表示を保つ・260707）。 */
+  onSetVersionFeedback?: (id: string, verdict: 'good' | 'bad') => void;
+  /** コーディネートのスタイル参照画像（複数対応・260707）。 */
+  draftStyleRefs: string[];
+  onAddStyleRefs: (dataUrls: string[]) => void;
+  onRemoveStyleRefAt: (index: number) => void;
   draftStyleMemo: string;
   onStyleMemoChange: (s: string) => void;
   draftObjects: AiEditObjectReference[];
@@ -146,7 +151,7 @@ type Props = {
     parentId: string;
     baseImageDataUrl: string;
     outputImageDataUrl: string;
-    styleRefDataUrl: string | null;
+    styleRefDataUrls: string[];
     styleMemo: string;
     objects: AiEditObjectReference[];
   }) => void;
@@ -178,8 +183,10 @@ export function AiEditWorkspace({
   activeVersion,
   onSelectVersion,
   onDeleteVersion,
-  draftStyleRefDataUrl,
-  onStyleRefChange,
+  onSetVersionFeedback,
+  draftStyleRefs,
+  onAddStyleRefs,
+  onRemoveStyleRefAt,
   draftStyleMemo,
   onStyleMemoChange,
   draftObjects,
@@ -244,19 +251,17 @@ export function AiEditWorkspace({
 
   const baseDisplayUrl = activeVersion?.outputImageDataUrl ?? null;
 
-  // AI生成の良し悪し評価（good/bad）。記録は ai_feedback_events へベストエフォート（管理表 row 209/215）。
-  const [feedbackByVersion, setFeedbackByVersion] = useState<Record<string, 'good' | 'bad'>>({});
-  const feedbackRef = useRef<Record<string, 'good' | 'bad'>>({});
+  // AI生成の良し悪し評価（good/bad）。表示状態は「版」に保存してプロジェクト永続化＝開き直しても残す（260707
+  // クライアント要望）。学習用の記録は従来どおり ai_feedback_events へベストエフォート（管理表 row 209/215）。
   // 破壊的操作（生成結果の削除）の確認は、ネイティブ window.confirm ではなくアプリ共通のダーク UI モーダルで出す（260625）。
   const confirm = useConfirm();
   const submitFeedback = useCallback(
     async (versionId: string, verdict: 'good' | 'bad') => {
-      if (!versionId || feedbackRef.current[versionId] === verdict) return;
-      feedbackRef.current = { ...feedbackRef.current, [versionId]: verdict };
-      setFeedbackByVersion({ ...feedbackRef.current });
-      // in-context反映（row 211/219）用に、その版のスタイル傾向（styleMemo）を併せて記録する。
       const v = versions.find((x) => x.id === versionId);
-      const styleMemo = v?.styleMemo?.trim() || undefined;
+      if (!versionId || !v || v.feedback === verdict) return;
+      onSetVersionFeedback?.(versionId, verdict); // 版に保存＝プロジェクトへ永続化（開き直しても表示が残る）
+      // in-context反映（row 211/219）用に、その版のスタイル傾向（styleMemo）を併せて記録する。
+      const styleMemo = v.styleMemo?.trim() || undefined;
       try {
         await recordAiFeedback({
           verdict,
@@ -269,7 +274,7 @@ export function AiEditWorkspace({
         console.warn('[ai feedback] 評価の記録に失敗しました', e);
       }
     },
-    [versions],
+    [versions, onSetVersionFeedback],
   );
 
 
@@ -311,11 +316,10 @@ export function AiEditWorkspace({
 
   useEffect(() => {
     if (!isOpen) return;
-    const hasSituationDraft =
-      !!normalizeImageDataUrl(draftStyleRefDataUrl) || draftStyleMemo.trim().length > 0;
+    const hasSituationDraft = draftStyleRefs.length > 0 || draftStyleMemo.trim().length > 0;
     // Keep the card visible once shown; only trash action hides it.
     setIsSituationCardVisible((prev) => prev || hasSituationDraft);
-  }, [isOpen, draftStyleRefDataUrl, draftStyleMemo]);
+  }, [isOpen, draftStyleRefs, draftStyleMemo]);
 
   const readFileAsDataUrl = (file: File): Promise<string> =>
     new Promise((resolve, reject) => {
@@ -326,12 +330,13 @@ export function AiEditWorkspace({
     });
 
   const onPickStyleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
+    const files = Array.from(e.target.files ?? []);
     e.target.value = '';
-    if (!f || !f.type.startsWith('image/')) return;
+    const images = files.filter((f) => f.type.startsWith('image/'));
+    if (images.length === 0) return;
     try {
-      const url = await readFileAsDataUrl(f);
-      onStyleRefChange(url);
+      const urls = await Promise.all(images.map((f) => readFileAsDataUrl(f)));
+      onAddStyleRefs(urls); // 複数対応（260707）。上限は session 側で MAX_STYLE_REFS に丸める。
     } catch {
       /* ignore */
     }
@@ -413,11 +418,14 @@ export function AiEditWorkspace({
     </div>
   );
 
-  const styleImageDataUrl = normalizeImageDataUrl(draftStyleRefDataUrl);
+  const styleImageDataUrls = draftStyleRefs
+    .map((u) => normalizeImageDataUrl(u))
+    .filter((u): u is string => !!u);
+  const hasStyleImages = styleImageDataUrls.length > 0;
   const emptySituationCard =
     activeTool === 'coordinate' &&
     isSituationCardVisible &&
-    !styleImageDataUrl &&
+    !hasStyleImages &&
     draftStyleMemo.trim().length === 0;
   const areaEmptyCount = draftObjects.filter((o) => {
     const image = normalizeImageDataUrl(o.imageDataUrl);
@@ -592,7 +600,7 @@ export function AiEditWorkspace({
         baseImageDataUrl: activeVersion.outputImageDataUrl,
         outputImageDataUrl: outUrl,
         // エリア編集はコーディネートのスタイルを保持しない（独立機能）。
-        styleRefDataUrl: null,
+        styleRefDataUrls: [],
         styleMemo: '',
         objects: draftObjects.map((o) => ({
           ...o,
@@ -650,12 +658,25 @@ export function AiEditWorkspace({
       // 読み込まない（objects:[] 固定・マスクもしない）。プロンプト/参照画像があれば全体スタイル編集として反映し、
       // 無ければ完全お任せ（coordinate:true）。生成サイズは 1K（2Kは新画像モデルでぼやけ・260619報告対応）。
       const styleMemo = draftStyleMemo.trim();
-      const styleScaled = styleImageDataUrl ? await downscaleDataUrlIfNeeded(await ensureDataUrl(styleImageDataUrl)) : null;
-      const hasPrompt = styleMemo.length > 0 || !!styleScaled;
+      // スタイル参照は複数対応（260707）。各画像を控えめ（長辺1280）に縮小して配列で送る（複数でも Vercel の
+      // body 上限を超えないように。スタイル参照は「雰囲気の手がかり」なので高解像は不要）。
+      const styleScaledList = await Promise.all(
+        styleImageDataUrls.map(async (u) => downscaleDataUrlIfNeeded(await ensureDataUrl(u), 1280)),
+      );
+      // 添付画像が多い/大きいと Vercel の body 上限(~4.5MB)を超えて不明瞭なエラーになるため、送信前に合計サイズを
+      // 概算チェックし、超過時は分かりやすいメッセージで止める（260707 検証 should-fix）。
+      const approxBytes = (u: string) => Math.floor((u.length * 3) / 4);
+      const totalBytes = approxBytes(baseScaled) + styleScaledList.reduce((s, u) => s + approxBytes(u), 0);
+      if (totalBytes > 4_000_000) {
+        setSubmitError('添付画像の合計サイズが大きすぎます。枚数を減らすか、小さめの画像でお試しください。');
+        setIsSubmitting(false);
+        return;
+      }
+      const hasPrompt = styleMemo.length > 0 || styleScaledList.length > 0;
       const body: Record<string, unknown> = hasPrompt
         ? {
             baseImage: baseScaled,
-            styleImage: styleScaled,
+            styleImages: styleScaledList,
             objects: [],
             aspectRatio,
             imageSize: PREVIEW_GEMINI_IMAGE_SIZE,
@@ -696,7 +717,7 @@ export function AiEditWorkspace({
         parentId: activeVersion.id,
         baseImageDataUrl: activeVersion.outputImageDataUrl,
         outputImageDataUrl: outUrl,
-        styleRefDataUrl: styleImageDataUrl,
+        styleRefDataUrls: styleImageDataUrls,
         styleMemo,
         objects: [],
       });
@@ -705,7 +726,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession, draftStyleMemo, styleImageDataUrl]);
+  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession, draftStyleMemo, styleImageDataUrls]);
 
   // コーディネートタブの実行（260624/260702）: 常に runCoordinate（全体編集）で実行する。エリア編集(runEdit)とは
   // 完全に独立させ、エリア編集の範囲を読み込まない。プロンプト/添付があれば全体スタイル編集、無ければ完全お任せ。
@@ -969,7 +990,7 @@ export function AiEditWorkspace({
                       aria-label="良い評価"
                       onClick={() => void submitFeedback(v.id, 'good')}
                       className={`rounded-full p-1 transition ${
-                        feedbackByVersion[v.id] === 'good'
+                        v.feedback === 'good'
                           ? 'bg-emerald-500 text-black'
                           : 'text-neutral-400 hover:scale-110 hover:bg-emerald-500/20 hover:text-emerald-300'
                       }`}
@@ -982,7 +1003,7 @@ export function AiEditWorkspace({
                       aria-label="悪い評価"
                       onClick={() => void submitFeedback(v.id, 'bad')}
                       className={`rounded-full p-1 transition ${
-                        feedbackByVersion[v.id] === 'bad'
+                        v.feedback === 'bad'
                           ? 'bg-rose-500 text-white'
                           : 'text-neutral-400 hover:scale-110 hover:bg-rose-500/20 hover:text-rose-300'
                       }`}
@@ -1010,11 +1031,7 @@ export function AiEditWorkspace({
                           imageRef: v.id,
                           styleMemo: v.styleMemo,
                         }).catch((e) => console.warn('[ai feedback] 削除シグナルの記録に失敗', e));
-                        // UI 評価状態の掃除（削除済み版の孤立エントリを残さない）。
-                        feedbackRef.current = Object.fromEntries(
-                          Object.entries(feedbackRef.current).filter(([id]) => id !== v.id),
-                        );
-                        setFeedbackByVersion({ ...feedbackRef.current });
+                        // 評価は版に保存しているため、版の削除で自動的に消える（別途の掃除は不要・260707）。
                         onDeleteVersion(v.id);
                       }}
                       className="ml-auto rounded-full p-1 text-neutral-400 transition hover:scale-110 hover:bg-red-500/20 hover:text-red-300"
@@ -1306,6 +1323,7 @@ export function AiEditWorkspace({
                   ref={styleInputRef}
                   type="file"
                   accept="image/*"
+                  multiple
                   className="hidden"
                   onChange={onPickStyleFile}
                 />
@@ -1329,7 +1347,7 @@ export function AiEditWorkspace({
                     rows={6}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white leading-relaxed resize-none outline-none focus:border-emerald-500"
                   />
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
                     <button
                       type="button"
                       onClick={() => styleInputRef.current?.click()}
@@ -1338,21 +1356,29 @@ export function AiEditWorkspace({
                       <Paperclip className="h-4 w-4" />
                       ファイルを添付
                     </button>
-                    {styleImageDataUrl && (
-                      <div className="flex min-w-0 items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => onStyleRefChange(null)}
-                          className="shrink-0 rounded p-1 text-red-400 hover:bg-red-500/10"
-                          aria-label="添付を削除"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                        <img src={styleImageDataUrl} alt="添付" className="h-7 w-7 shrink-0 rounded object-cover" />
-                        <span className="truncate text-[10px] text-neutral-400">添付画像</span>
-                      </div>
+                    {draftStyleRefs.length > 0 && (
+                      <span className="text-[10px] text-neutral-400">添付 {draftStyleRefs.length} / {MAX_STYLE_REFS} 枚</span>
                     )}
                   </div>
+                  {/* 添付画像のサムネイル一覧（複数対応・各画像を個別に削除できる・260707）。
+                      削除 index を合わせるため、フィルタ後(styleImageDataUrls)ではなく draftStyleRefs をそのまま描画する。 */}
+                  {draftStyleRefs.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5">
+                      {draftStyleRefs.map((url, i) => (
+                        <div key={`${i}-${url.slice(0, 24)}`} className="relative shrink-0">
+                          <img src={url} alt={`添付${i + 1}`} className="h-12 w-12 rounded border border-white/10 object-cover" />
+                          <button
+                            type="button"
+                            onClick={() => onRemoveStyleRefAt(i)}
+                            className="absolute -right-1.5 -top-1.5 rounded-full bg-black/80 p-0.5 text-red-300 hover:bg-red-500/30"
+                            aria-label={`添付${i + 1}を削除`}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

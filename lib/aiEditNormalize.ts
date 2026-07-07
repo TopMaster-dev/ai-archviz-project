@@ -76,11 +76,16 @@ export function normalizeAiEditVersion(raw: unknown): AiEditVersion | null {
     return null;
   }
   const parentId = v.parentId === null || typeof v.parentId === 'string' ? v.parentId : null;
-  const styleRefDataUrl =
-    v.styleRefDataUrl === null || typeof v.styleRefDataUrl === 'string'
-      ? v.styleRefDataUrl
-      : null;
+  // スタイル参照画像は複数対応（260707）。旧データ（単数 styleRefDataUrl）も配列へ引き上げて後方互換。
+  const styleRefDataUrls = Array.isArray(v.styleRefDataUrls)
+    ? v.styleRefDataUrls.map(normalizeImageDataUrl).filter((u): u is string => !!u)
+    : [];
+  const styleRefSingle =
+    v.styleRefDataUrl === null || typeof v.styleRefDataUrl === 'string' ? v.styleRefDataUrl : null;
+  if (styleRefDataUrls.length === 0 && styleRefSingle) styleRefDataUrls.push(styleRefSingle);
+  const styleRefDataUrl = styleRefDataUrls[0] ?? null;
   const styleMemo = typeof v.styleMemo === 'string' ? v.styleMemo : '';
+  const feedback = v.feedback === 'good' || v.feedback === 'bad' ? v.feedback : undefined;
   const objectsRaw = Array.isArray(v.objects) ? v.objects : [];
   const objects: AiEditObjectReference[] = [];
   for (const item of objectsRaw) {
@@ -94,8 +99,10 @@ export function normalizeAiEditVersion(raw: unknown): AiEditVersion | null {
     baseImageDataUrl: v.baseImageDataUrl,
     outputImageDataUrl: v.outputImageDataUrl,
     styleRefDataUrl,
+    styleRefDataUrls,
     styleMemo,
     objects,
+    ...(feedback ? { feedback } : {}),
   };
 }
 

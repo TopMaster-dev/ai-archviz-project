@@ -188,6 +188,8 @@ function appendLearnedHints(prompt: string, learnedHints?: string[]): string {
 
 export function buildAiEditReferenceGuide(params: {
   hasStyle: boolean;
+  /** スタイル参照画像の枚数（複数対応・260707）。未指定なら hasStyle から 0/1 を推定。 */
+  styleImageCount?: number;
   styleMemo?: string;
   objects: AiEditObjectReference[];
   /** objectId → AI が生成した位置説明（参考）。座標が優先。 */
@@ -211,12 +213,19 @@ export function buildAiEditReferenceGuide(params: {
   lines.push('画像1: ベース（編集対象）');
 
   let idx = 2;
-  if (params.hasStyle) {
-    lines.push(`画像${idx}: スタイル・空気感の参照（ムードのみ参考、仕上げコピー禁止）`);
+  const styleCount = params.styleImageCount ?? (params.hasStyle ? 1 : 0);
+  if (styleCount > 0) {
+    if (styleCount === 1) {
+      lines.push(`画像${idx}: スタイル・空気感の参照（ムードのみ参考、仕上げコピー禁止）`);
+    } else {
+      lines.push(
+        `画像${idx}〜${idx + styleCount - 1}: スタイル・空気感の参照 ${styleCount}枚（いずれもムードのみ参考、仕上げコピー禁止。複数ある場合は共通する雰囲気・方向性を汲む）`
+      );
+    }
     if (params.styleMemo?.trim()) {
       lines.push(`  スタイル参照への補足: ${params.styleMemo.trim()}`);
     }
-    idx++;
+    idx += styleCount;
   }
 
   params.objects.forEach((o, i) => {

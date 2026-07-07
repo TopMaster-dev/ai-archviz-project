@@ -168,9 +168,13 @@ export interface AiEditVersion {
   /** 生成結果 */
   outputImageDataUrl: string;
   styleRefDataUrl: string | null;
+  /** コーディネートのスタイル参照画像（複数対応・260707 クライアント要望）。styleRefDataUrl は後方互換の先頭1枚。 */
+  styleRefDataUrls?: string[];
   /** スタイル参照画像用の短い補足（任意） */
   styleMemo: string;
   objects: AiEditObjectReference[];
+  /** この生成結果への良し悪し評価（good/bad）。プロジェクトに保存し、開き直しても表示を保つ（260707 クライアント要望）。 */
+  feedback?: 'good' | 'bad';
 }
 
 /** AI画像編集由来の追加見積アイテム（3D未配置の仮項目） */

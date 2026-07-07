@@ -4916,8 +4916,10 @@ const App: React.FC = () => {
                         activeVersion={aiEditSession.activeVersion}
                         onSelectVersion={aiEditSession.selectVersion}
                         onDeleteVersion={aiEditSession.deleteVersion}
-                        draftStyleRefDataUrl={aiEditSession.draftStyleRefDataUrl}
-                        onStyleRefChange={aiEditSession.setStyleRef}
+                        onSetVersionFeedback={aiEditSession.setVersionFeedback}
+                        draftStyleRefs={aiEditSession.draftStyleRefs}
+                        onAddStyleRefs={aiEditSession.addStyleRefs}
+                        onRemoveStyleRefAt={aiEditSession.removeStyleRefAt}
                         draftStyleMemo={aiEditSession.draftStyleMemo}
                         onStyleMemoChange={aiEditSession.setDraftStyleMemo}
                         draftObjects={aiEditSession.draftObjects}
@@ -4946,10 +4948,13 @@ const App: React.FC = () => {
                             // 生成画像をクラウド保存しURL化（履歴の永続化・260619）。base は親の出力URLを再利用、
                             // 失敗時は base64 のまま（従来動作にフォールバック）。
                             const pid = projectSession?.projectId ?? null;
-                            const [output, base, style] = await Promise.all([
+                            const [output, base, styleRefDataUrls] = await Promise.all([
                                 toStoredImage(p.outputImageDataUrl, pid),
                                 toStoredImage(p.baseImageDataUrl, pid),
-                                p.styleRefDataUrl ? toStoredImage(p.styleRefDataUrl, pid) : Promise.resolve(null),
+                                // スタイル参照は複数対応（260707）。各画像をクラウド保存しURL化（失敗分は除外）。
+                                Promise.all((p.styleRefDataUrls ?? []).map((u) => toStoredImage(u, pid))).then(
+                                    (urls) => urls.filter((u): u is string => !!u),
+                                ),
                             ]);
                             const objects = await Promise.all(
                                 p.objects.map(async (o) => ({
@@ -4961,7 +4966,7 @@ const App: React.FC = () => {
                                 parentId: p.parentId,
                                 baseImageDataUrl: base,
                                 outputImageDataUrl: output,
-                                styleRefDataUrl: style,
+                                styleRefDataUrls,
                                 styleMemo: p.styleMemo,
                                 objects,
                             });

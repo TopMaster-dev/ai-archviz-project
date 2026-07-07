@@ -336,6 +336,8 @@ export async function generateGeminiImageEdit(
   params: {
     baseImageDataUrl: string;
     styleImageDataUrl: string | null;
+    /** コーディネートのスタイル参照画像（複数対応・260707）。指定時はこちらを優先し全て入力に添付する。 */
+    styleImageDataUrls?: string[];
     styleMemo?: string;
     objects: AiEditObjectReference[];
     /** Gemini imageConfig.aspectRatio（例: 16:9） */
@@ -351,10 +353,19 @@ export async function generateGeminiImageEdit(
     harmonize?: boolean;
   }
 ): Promise<{ url: string; usage: TokenUsage | null }> {
+  // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
+  const styleUrls = params.harmonize
+    ? []
+    : params.styleImageDataUrls && params.styleImageDataUrls.length > 0
+      ? params.styleImageDataUrls
+      : params.styleImageDataUrl
+        ? [params.styleImageDataUrl]
+        : [];
   const instruction = params.harmonize
     ? buildHarmonizePrompt()
     : buildAiEditReferenceGuide({
-        hasStyle: !!params.styleImageDataUrl,
+        hasStyle: styleUrls.length > 0,
+        styleImageCount: styleUrls.length,
         styleMemo: params.styleMemo?.trim() || undefined,
         objects: params.objects,
         placementNarratives: params.placementNarratives,
@@ -372,8 +383,9 @@ export async function generateGeminiImageEdit(
   });
 
   // 均一化パスはベース1枚のみを入力（スタイル/オブジェクト参照は使わない＝全体ドリフト防止）。
-  if (!params.harmonize && params.styleImageDataUrl) {
-    const st = parseImageDataUrl(params.styleImageDataUrl);
+  // スタイル参照は複数対応（260707）: 画像2..(1+N) の順で全て添付（プロンプトの入力順と一致）。
+  for (const url of styleUrls) {
+    const st = parseImageDataUrl(url);
     parts.push({
       inlineData: { mimeType: st.mimeType, data: st.base64 },
     });

@@ -17,6 +17,9 @@ const STORAGE_KEY = 'archviz-ai-edit-session-v2';
 // （クライアント要望「履歴を残したい」）。暴走防止の安全上限としてのみ機能する（実用上ほぼ無制限）。
 export const MAX_AI_EDIT_VERSIONS = 200;
 
+// コーディネートのスタイル参照画像の添付上限（260707・Vercel body 上限とUIの都合で控えめに）。
+export const MAX_STYLE_REFS = 6;
+
 /**
  * 削除対象の版とその全子孫（再生成で連なった版）の id 集合を返す（260625）。
  * 親が削除されたら子・孫…も連鎖して含める（固定点反復）。子孫を取りこぼして親リンク切れの版を残さない。
@@ -79,7 +82,8 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   const lastHydratedActiveId = useRef<string | null>(null);
   const skipHydrateOnce = useRef(false);
 
-  const [draftStyleRefDataUrl, setDraftStyleRefDataUrl] = useState<string | null>(null);
+  // コーディネートのスタイル参照は複数対応（260707 クライアント要望）。
+  const [draftStyleRefs, setDraftStyleRefs] = useState<string[]>([]);
   const [draftStyleMemo, setDraftStyleMemo] = useState('');
   const [draftObjects, setDraftObjects] = useState<AiEditObjectReference[]>([]);
   const [activeObjectId, setActiveObjectId] = useState<string | null>(null);
@@ -89,7 +93,7 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   placementEditIndexRef.current = placementEditIndex;
 
   const resetDraft = useCallback(() => {
-    setDraftStyleRefDataUrl(null);
+    setDraftStyleRefs([]);
     setDraftStyleMemo('');
     setDraftObjects([]);
     setActiveObjectId(null);
@@ -97,7 +101,7 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
   }, []);
 
   const hydrateDraftFromVersion = useCallback((v: AiEditVersion) => {
-    setDraftStyleRefDataUrl(v.styleRefDataUrl);
+    setDraftStyleRefs(v.styleRefDataUrls ?? (v.styleRefDataUrl ? [v.styleRefDataUrl] : []));
     setDraftStyleMemo(v.styleMemo ?? '');
     // マスク（エリア編集の範囲）下書きは常に空にする（260702 クライアント報告「前の下絵の名残が残る」対応）。
     // 範囲はバージョンに provenance として保持されるが、確定済みバージョンの範囲を再表示すると、その多角形が
@@ -122,6 +126,7 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         baseImageDataUrl: outputDataUrl,
         outputImageDataUrl: outputDataUrl,
         styleRefDataUrl: null,
+        styleRefDataUrls: [],
         styleMemo: '',
         objects: [],
       };
@@ -170,8 +175,19 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
     setDraftObjects((prev) => prev.map((o) => (o.id === id ? { ...o, memo } : o)));
   }, []);
 
-  const setStyleRef = useCallback((dataUrl: string | null) => {
-    setDraftStyleRefDataUrl(dataUrl);
+  // スタイル参照（複数）: 追加（上限 MAX_STYLE_REFS）・indexで削除（260707）。
+  const addStyleRefs = useCallback((dataUrls: string[]) => {
+    const clean = dataUrls.filter((u) => typeof u === 'string' && u.trim().length > 0);
+    if (clean.length === 0) return;
+    setDraftStyleRefs((prev) => [...prev, ...clean].slice(0, MAX_STYLE_REFS));
+  }, []);
+  const removeStyleRefAt = useCallback((index: number) => {
+    setDraftStyleRefs((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  // 生成結果への評価（good/bad）を版に保存（プロジェクトに永続化＝開き直しても表示を保つ・260707）。
+  const setVersionFeedback = useCallback((id: string, verdict: 'good' | 'bad') => {
+    setVersions((prev) => prev.map((v) => (v.id === id ? { ...v, feedback: verdict } : v)));
   }, []);
 
   /** 次の矩形描画を「追加」モードに */
@@ -249,7 +265,7 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
       parentId: string;
       baseImageDataUrl: string;
       outputImageDataUrl: string;
-      styleRefDataUrl: string | null;
+      styleRefDataUrls: string[];
       styleMemo: string;
       objects: AiEditObjectReference[];
     }) => {
@@ -260,7 +276,8 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         createdAt: Date.now(),
         baseImageDataUrl: params.baseImageDataUrl,
         outputImageDataUrl: params.outputImageDataUrl,
-        styleRefDataUrl: params.styleRefDataUrl,
+        styleRefDataUrl: params.styleRefDataUrls[0] ?? null, // 後方互換の先頭1枚
+        styleRefDataUrls: params.styleRefDataUrls,
         styleMemo: params.styleMemo,
         objects: params.objects.map((o) => ({
           ...o,
@@ -325,13 +342,16 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         .map((v) => (v.parentId === idToDelete ? { ...v, parentId: target.parentId } : v));
       const keep = new Set<string>();
       for (const v of survivors) {
-        for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl]) {
+        for (const u of [v.outputImageDataUrl, v.baseImageDataUrl, v.styleRefDataUrl, ...(v.styleRefDataUrls ?? [])]) {
           if (u) keep.add(u);
         }
       }
-      const orphaned = [target.outputImageDataUrl, target.baseImageDataUrl, target.styleRefDataUrl].filter(
-        (u): u is string => !!u && !keep.has(u),
-      );
+      const orphaned = [
+        target.outputImageDataUrl,
+        target.baseImageDataUrl,
+        target.styleRefDataUrl,
+        ...(target.styleRefDataUrls ?? []),
+      ].filter((u): u is string => !!u && !keep.has(u));
       if (orphaned.length > 0) void deleteAiRenderImages(orphaned); // 非同期・ベストエフォート
       return survivors;
     });
@@ -387,8 +407,10 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
     versions,
     activeVersionId,
     activeVersion,
-    draftStyleRefDataUrl,
-    setStyleRef,
+    draftStyleRefs,
+    addStyleRefs,
+    removeStyleRefAt,
+    setVersionFeedback,
     draftStyleMemo,
     setDraftStyleMemo,
     draftObjects,

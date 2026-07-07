@@ -41,6 +41,7 @@ export default async function handler(req: any, res: any) {
     const body = req.body as {
       baseImage?: string;
       styleImage?: string | null;
+      styleImages?: unknown[];
       styleMemo?: string;
       objects?: unknown[];
       aspectRatio?: string;
@@ -75,8 +76,18 @@ export default async function handler(req: any, res: any) {
       typeof body.styleMemo === 'string' && body.styleMemo.trim()
         ? body.styleMemo.trim()
         : undefined;
-    const styleImageDataUrl = normalizeImageDataUrl(body.styleImage);
-    const hasSituationInput = !!styleImageDataUrl || !!styleMemo;
+    // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
+    const styleImageDataUrls: string[] = [];
+    if (Array.isArray(body.styleImages)) {
+      for (const s of body.styleImages) {
+        const n = normalizeImageDataUrl(s);
+        if (n) styleImageDataUrls.push(n);
+      }
+    }
+    const styleSingle = normalizeImageDataUrl(body.styleImage);
+    if (styleImageDataUrls.length === 0 && styleSingle) styleImageDataUrls.push(styleSingle);
+    const styleImageDataUrl = styleImageDataUrls[0] ?? null;
+    const hasSituationInput = styleImageDataUrls.length > 0 || !!styleMemo;
     const hasAreaEditInput = objects.some(
       (o) =>
         !!normalizeImageDataUrl(o.imageDataUrl) ||
@@ -118,6 +129,7 @@ export default async function handler(req: any, res: any) {
     const { url: dataUrl, usage } = await generateGeminiImageEdit(apiKey, {
       baseImageDataUrl: body.baseImage,
       styleImageDataUrl,
+      styleImageDataUrls,
       styleMemo,
       objects,
       aspectRatio,
