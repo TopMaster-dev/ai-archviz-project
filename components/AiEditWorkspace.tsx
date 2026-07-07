@@ -222,13 +222,14 @@ export function AiEditWorkspace({
   // 継ぎ目なじませ（全体を1枚に均一化）パスの opt-in（既定OFF・260706 クライアント提案）。
   const [harmonizeSeams, setHarmonizeSeams] = useState(false);
   // 囲った範囲（マスク）オーバーレイの表示トグル（260708 クライアント要望「任意で表示・非表示」）。
-  // 既定はOFF＝仕上がり画像に緑の枠を出さずクリーンに見せる（枠が結果に重なって“雑な貼り付け”に見える不満への対応）。
-  // 範囲を見返したいときだけ「範囲: 表示」でON。エリア編集タブでのみ効かせる（下の overlayObjects で分岐）。
+  // 既定はON＝エリア編集タブでは囲った範囲を表示する（クライアント確認「エリアのみ表示が正」）。
+  // コーディネート/エージェント相談タブでは常に非表示（下の overlayObjects で activeTool 分岐）。
+  // 「範囲: 非表示」ボタンでいつでも隠せる（任意で表示・非表示）。設定は localStorage に保持。
   const [showRangeOverlay, setShowRangeOverlay] = useState<boolean>(() => {
     try {
-      return localStorage.getItem('archviz-ai-edit-show-range') === '1';
+      return localStorage.getItem('archviz-ai-edit-show-range') !== '0';
     } catch {
-      return false;
+      return true;
     }
   });
   useEffect(() => {
