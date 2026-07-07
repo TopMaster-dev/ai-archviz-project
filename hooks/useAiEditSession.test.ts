@@ -24,6 +24,23 @@ describe('useAiEditSession render history', () => {
     expect(result.current.activeVersionId).toBe(result.current.versions[2].id);
   });
 
+  it('updatePlacementMemo は placements 長までパディングして該当indexに保存する（260708 領域別メモ）', () => {
+    const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
+    act(() => result.current.addVersionFromRender('data:image/png;base64,AAA'));
+    act(() => result.current.addObjectDraft());
+    const objId = result.current.draftObjects[0].id;
+    // 2つの範囲を追加（placementMemos は '' で揃う）。
+    act(() => result.current.commitPlacementRect(objId, { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }));
+    act(() => result.current.setAppendPlacementMode());
+    act(() => result.current.commitPlacementRect(objId, { x: 0.5, y: 0.5, width: 0.2, height: 0.2 }));
+    expect(result.current.draftObjects[0].placements).toHaveLength(2);
+    expect(result.current.draftObjects[0].placementMemos).toHaveLength(2);
+    // 2番目の範囲だけにメモを入れる。
+    act(() => result.current.updatePlacementMemo(objId, 1, 'この範囲は北欧風に'));
+    expect(result.current.draftObjects[0].placementMemos[0]).toBe('');
+    expect(result.current.draftObjects[0].placementMemos[1]).toBe('この範囲は北欧風に');
+  });
+
   it('selectVersion lets the user go back to an earlier render', () => {
     const { result } = renderHook(() => useAiEditSession({ persistLocal: false }));
     act(() => result.current.addVersionFromRender('data:image/png;base64,AAA'));

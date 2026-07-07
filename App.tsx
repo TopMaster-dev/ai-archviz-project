@@ -4933,6 +4933,7 @@ const App: React.FC = () => {
                         onSetReplacePlacementMode={aiEditSession.setReplacePlacementMode}
                         onCommitPlacementRect={aiEditSession.commitPlacementRect}
                         onRemovePlacementAt={aiEditSession.removePlacementAt}
+                        onUpdatePlacementMemo={aiEditSession.updatePlacementMemo}
                         estimatePanel={activeKind === 'photo' ? null : renderEstimatePanel(true)}
                         agentCatalog={agentCatalog}
                         onAddEstimateItem={handleAddAgentRecommendation}
