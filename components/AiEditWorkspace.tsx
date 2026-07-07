@@ -1677,7 +1677,7 @@ export function AiEditWorkspace({
               <p className="text-sm text-zinc-400">しばらくお待ちください。</p>
             </div>
           </div>
-          {/* 生成待ち時間に「お役立ち情報」を表示（260703・旧広告枠を置換）。 */}
+          {/* 生成待ち時間の右カラム: 上半分=広告／下半分=お役立ち情報（260707 クライアント要望の2分割）。 */}
           <RenderInfoColumn className="absolute right-6 top-1/2 -translate-y-1/2" />
         </div>
       )}
