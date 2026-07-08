@@ -44,6 +44,14 @@ export const ENABLE_FULLFRAME_ONLY = true;
  */
 export const PRESERVE_OUTSIDE_MASK = true;
 
+/**
+ * 「囲った範囲の外を変えない（はみ出し防止／自然）」トグルをユーザーUIに表示するか（260708 round2）。
+ * クライアント判断: 現状「自然な仕上がり（既定OFF）」で問題なさそうなので、ユーザー向けの切替UIは隠して
+ * 内部フラグ化する（＝常に自然）。ここを true に戻せば即座にUIチェックが再表示され、A/B切替を復活できる。
+ * ※内部ロジック（confineToMask による合成/クロップの分岐）は残置。UIが非表示のとき既定OFF＝自然で固定される。
+ */
+export const SHOW_CONFINE_TOGGLE = false;
+
 /** union マスク外接矩形が「大領域」か（＝クロップ/合成せず全画面編集を使う）。純関数。 */
 export function isLargeRegion(bbox: BBox01, threshold = LARGE_REGION_COVERAGE): boolean {
   return bbox.w * bbox.h >= threshold;

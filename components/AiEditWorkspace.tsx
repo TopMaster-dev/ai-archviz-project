@@ -41,6 +41,7 @@ import {
   isLargeRegion,
   ENABLE_FULLFRAME_ONLY,
   PRESERVE_OUTSIDE_MASK,
+  SHOW_CONFINE_TOGGLE,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -148,8 +149,6 @@ type Props = {
   onSetReplacePlacementMode: (objectId: string, index: number) => void;
   onCommitPlacementRect: (objectId: string, rect: NormalizedRect) => void;
   onRemovePlacementAt: (objectId: string, index: number) => void;
-  /** 各範囲（領域）だけに効く任意メモ（260708・領域別メモ入力UI）。プロンプトの「この領域の指示」に反映される。 */
-  onUpdatePlacementMemo: (objectId: string, index: number, memo: string) => void;
   estimatePanel?: React.ReactNode;
   onEditSuccess: (params: {
     parentId: string;
@@ -221,7 +220,6 @@ export function AiEditWorkspace({
   onSetReplacePlacementMode,
   onCommitPlacementRect,
   onRemovePlacementAt,
-  onUpdatePlacementMemo,
   estimatePanel,
   onEditSuccess,
   photoOnly = false,
@@ -264,6 +262,8 @@ export function AiEditWorkspace({
   // ON＝生成後に囲った範囲だけを羽根ぼかしでベースへ合成＝範囲外は元画像のまま（はみ出さないが、差し替えが
   //    範囲より大きいと縁で切れて“貼り付け”っぽく見えることがある）。クライアントがトレードオフを選べるようにする。
   const [confineToMask, setConfineToMask] = useState<boolean>(() => {
+    // UI非表示（SHOW_CONFINE_TOGGLE=false）のときは、過去に保存された値に関わらず常に自然（OFF）に固定する。
+    if (!SHOW_CONFINE_TOGGLE) return false;
     try {
       return localStorage.getItem('archviz-ai-edit-confine') === '1';
     } catch {
@@ -277,10 +277,11 @@ export function AiEditWorkspace({
       /* ignore */
     }
   }, [confineToMask]);
-  // 「元の画像から編集（画質を保つ）」トグル（260708）。編集を繰り返すと直近の出力を土台にするため画質が劣化する。
-  // ON にすると版チェーンの根（最初のレンダー・高画質）を土台に編集する（それまでの編集は引き継がない）。
-  // 破壊的（それまでの編集を土台にしない）なので永続しない＝リロードで既定OFFへ戻す（毎回の明示的な選択にする）。
-  const [editFromOriginal, setEditFromOriginal] = useState(false);
+  // 「画質を保つ」トグル（260708・クライアント提案のハイブリッド方式）。編集を繰り返すと直近の出力を土台にするため
+  // 画質が徐々に劣化する。ON にすると、土台（base）は従来どおり直近の画像のまま＝連続編集のワークフローを維持しつつ、
+  // 最初のレンダリング画像を「画質・素材・質感の見本」として毎回一緒に渡す。形・位置・これまでの変更は直近画像に従い、
+  // 見本は画質の参照だけに使う（＝編集を巻き戻さない）。既定OFF・非永続（毎回の明示選択）。
+  const [keepQuality, setKeepQuality] = useState(false);
   // AI編集キャンバスの閲覧ズーム（260708 クライアント要望）: マウスホイールで拡大縮小し細部を確認できる
   // （DL→Photoshop/プロパティで確認する手間の削減）。表示専用＝拡大中は作図を無効化しドラッグはパン（移動）、
   // 等倍(1)で作図に戻る。imgLayout は wrapper 実寸から算出＝変形に依存しないので、画像＋オーバーレイをまとめて
@@ -323,12 +324,7 @@ export function AiEditWorkspace({
   // 高解像度DL月次制限の判定用（260624）。AuthProvider 配下なので useAuth は安全（ゲストは userId=null=制限なし）。
   const { userId: authUserId } = useAuth();
 
-  // 「元の画像から編集」ON のときは、編集対象＝版チェーンの根（最初のレンダー）の画像を表示する。描いた範囲と
-  // 実際に編集される画像を一致させ、過去の編集で家具が動いていても正しい対象を狙えるようにする（260708 検証WFのUX指摘対応）。
-  const displaySourceVersion = editFromOriginal
-    ? findRootVersion(versions, activeVersion) ?? activeVersion
-    : activeVersion;
-  const baseDisplayUrl = displaySourceVersion?.outputImageDataUrl ?? null;
+  const baseDisplayUrl = activeVersion?.outputImageDataUrl ?? null;
 
   // AI生成の良し悪し評価（good/bad）。表示状態は「版」に保存してプロジェクト永続化＝開き直しても残す（260707
   // クライアント要望）。学習用の記録は従来どおり ai_feedback_events へベストエフォート（管理表 row 209/215）。
@@ -578,12 +574,15 @@ export function AiEditWorkspace({
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      // 画質を保つ（260708）: editFromOriginal=ON なら、劣化しやすい直近の出力ではなく、版チェーンの根＝最初の
-      // レンダリング（高画質）を土台に編集する（それまでの編集は引き継がず、根から新しい枝を作る）。
-      const sourceVersion = editFromOriginal
-        ? findRootVersion(versions, activeVersion) ?? activeVersion
-        : activeVersion;
-      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(sourceVersion.outputImageDataUrl));
+      // 土台（base）は従来どおり直近の画像＝連続編集のワークフローを維持する。
+      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
+      // 画質を保つ（260708 ハイブリッド）: keepQuality=ON かつ根（最初のレンダー）が別にあれば、その高画質画像を
+      // 「画質・素材・質感の見本」として一緒に渡す（形・位置・変更は直近画像に従い、見本は画質参照のみ）。
+      const rootVersion = keepQuality ? findRootVersion(versions, activeVersion) : null;
+      const qualityRefUrl =
+        rootVersion && rootVersion.id !== activeVersion.id
+          ? await downscaleDataUrlIfNeeded(await ensureDataUrl(rootVersion.outputImageDataUrl))
+          : null;
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       // 生成サイズは動作実績のある AIレンダリングと同じプレビュー用(1K)に揃える。2K のままだと新しい画像
@@ -647,6 +646,8 @@ export function AiEditWorkspace({
         // 範囲外の扱いをプロンプトへも伝える（260708）: ON=厳密に閉じ込め、OFF（既定）=自然な統合を優先。
         // 生成後の合成（confineToMask）と、プロンプトの言い回しを一致させ、自然モードで“貼り付け”を誘発しない。
         strictConfine: confineToMask,
+        // 画質を保つ（260708 ハイブリッド）: 最初のレンダー画像を「画質・素材・質感の見本」として渡す（あれば）。
+        ...(qualityRefUrl ? { qualityRefImage: qualityRefUrl } : {}),
       };
 
       const res = await fetch('/api/ai-edit', {
@@ -727,7 +728,7 @@ export function AiEditWorkspace({
       // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
       outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
 
-      const prevOut = sourceVersion.outputImageDataUrl;
+      const prevOut = activeVersion.outputImageDataUrl;
       setCompareA(prevOut);
       setCompareB(outUrl);
       setCompareSlider(50);
@@ -735,8 +736,7 @@ export function AiEditWorkspace({
       // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3の例）: いま編集している版に既存の子があれば
       // ＝「一つ前に戻って再生成した」とみなし、直前の生成結果（最新の既存子）を暗黙の bad として記録する。
       // prompt_context で明示評価と区別する。ベストエフォート（失敗してもUIは妨げない）。
-      // ※「元の画像から編集」は根から新しい枝を作る＝再生成ではないので、暗黙 bad は記録しない。
-      const priorChildren = editFromOriginal ? [] : versions.filter((v) => v.parentId === sourceVersion.id);
+      const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
       if (priorChildren.length > 0) {
         const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
         void recordImplicitFeedback('regenerate', {
@@ -747,8 +747,8 @@ export function AiEditWorkspace({
       }
 
       onEditSuccess({
-        parentId: sourceVersion.id,
-        baseImageDataUrl: sourceVersion.outputImageDataUrl,
+        parentId: activeVersion.id,
+        baseImageDataUrl: activeVersion.outputImageDataUrl,
         outputImageDataUrl: outUrl,
         // エリア編集はコーディネートのスタイルを保持しない（独立機能）。
         styleRefDataUrls: [],
@@ -764,7 +764,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, confineToMask, editFromOriginal]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, confineToMask, keepQuality]);
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -1307,12 +1307,6 @@ export function AiEditWorkspace({
             >
               {baseDisplayUrl ? (
                 <>
-                  {/* 「元の画像から編集」ON のときは、表示中の画像が最新ではなく最初のレンダー（元画像）であることを明示。 */}
-                  {activeTool === 'area' && editFromOriginal && (
-                    <div className="absolute left-2 top-2 z-10 rounded-md border border-amber-400/40 bg-black/70 px-2 py-1 text-[10px] font-bold text-amber-300 backdrop-blur-sm pointer-events-none">
-                      元の画像を表示中（画質優先・これまでの編集は引き継ぎません）
-                    </div>
-                  )}
                   {/* 画像＋オーバーレイをまとめて拡大／パン（表示専用ズーム・260708）。imgLayout は wrapper 実寸基準なので変形非依存。 */}
                   <div
                     className="absolute inset-0"
@@ -1788,15 +1782,6 @@ export function AiEditWorkspace({
                                     <X className="w-3.5 h-3.5" />
                                   </button>
                                 </div>
-                                {/* 領域別メモ（260708・任意）: この範囲だけに効く追加指示。空でも可（カード全体の指示は上の欄）。 */}
-                                <input
-                                  type="text"
-                                  value={o.placementMemos?.[pi] ?? ''}
-                                  onClick={(e) => e.stopPropagation()}
-                                  onChange={(e) => onUpdatePlacementMemo(o.id, pi, e.target.value)}
-                                  placeholder="この範囲だけの指示（任意）"
-                                  className="w-full bg-black/40 border border-white/10 rounded px-1.5 py-1 text-[10px]"
-                                />
                               </li>
                             );
                           })}
@@ -1871,8 +1856,9 @@ export function AiEditWorkspace({
                 </label>
               )}
               {/* 範囲外を固定（はみ出し防止）トグル（260708 再修正）。既定OFF＝自然に生成（少しはみ出ることはあるが縁が
-                  自然）。ON＝範囲外を元画像で固定（はみ出さないが差し替えが大きいと縁で切れて“貼り付け”に見えることあり）。 */}
-              {activeTool === 'area' && (
+                  自然）。ON＝範囲外を元画像で固定（はみ出さないが差し替えが大きいと縁で切れて“貼り付け”に見えることあり）。
+                  260708 round2: クライアント判断で UI は非表示（内部フラグ SHOW_CONFINE_TOGGLE）。既定OFF＝自然で固定。 */}
+              {activeTool === 'area' && SHOW_CONFINE_TOGGLE && (
                 <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1887,20 +1873,20 @@ export function AiEditWorkspace({
                   </span>
                 </label>
               )}
-              {/* 元の画像から編集（画質を保つ）: 編集を繰り返すと直近の出力を土台にするため画質が落ちる。ONで
-                  最初のレンダー（高画質）を土台に編集する（それまでの編集は引き継がない）＝劣化を避けたいとき用（260708）。 */}
+              {/* 画質を保つ（ハイブリッド・260708）: 土台は直近の画像のまま連続編集を維持しつつ、最初のレンダー画像を
+                  「画質・素材の見本」として毎回渡す。形・位置・これまでの変更は直近画像に従い、見本は画質参照のみ。 */}
               {activeTool === 'area' && (
                 <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
                   <input
                     type="checkbox"
                     className="mt-0.5 accent-emerald-500"
-                    checked={editFromOriginal}
-                    onChange={(e) => setEditFromOriginal(e.target.checked)}
+                    checked={keepQuality}
+                    onChange={(e) => setKeepQuality(e.target.checked)}
                     disabled={isSubmitting}
                   />
                   <span className="text-[11px] leading-snug text-neutral-300">
-                    <span className="font-bold text-neutral-100">元の画像から編集（画質を保つ）</span>
-                    <span className="block text-neutral-500">一番最初のレンダリング画像を土台に編集します。編集を繰り返して画質が落ちてきたときにON。※それまでの編集は引き継がず、元画像に今の範囲を適用します。</span>
+                    <span className="font-bold text-neutral-100">画質を保つ（元画像を見本にする）</span>
+                    <span className="block text-neutral-500">編集はこれまでどおり直近の画像から続けつつ、最初のレンダリング画像を「画質・素材の見本」として一緒に渡します。編集を繰り返して画質が落ちてきたときにON（これまでの編集内容は引き継がれます）。</span>
                   </span>
                 </label>
               )}

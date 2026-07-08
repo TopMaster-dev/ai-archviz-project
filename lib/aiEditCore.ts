@@ -22,6 +22,8 @@ export interface AiEditRequestBody {
   learnedHints?: unknown;
   /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
   strictConfine?: boolean;
+  /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
+  qualityRefImage?: string;
 }
 
 export type AiEditResult =
@@ -73,6 +75,8 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
   const styleSingle = normalizeImageDataUrl(body.styleImage);
   if (styleImageDataUrls.length === 0 && styleSingle) styleImageDataUrls.push(styleSingle);
   const styleImageDataUrl = styleImageDataUrls[0] ?? null;
+  // 画質を保つハイブリッド（260708）: 見本画像（最初のレンダー）。指定時のみ渡す。
+  const qualityRefImageDataUrl = normalizeImageDataUrl(body.qualityRefImage);
 
   const hasSituationInput = styleImageDataUrls.length > 0 || !!styleMemo;
   const hasAreaEditInput = objects.some(
@@ -129,6 +133,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       harmonize,
       learnedHints,
       strictConfine: body.strictConfine === true,
+      qualityRefImageDataUrl,
     });
     return { success: true, url, usage, model: GEMINI_IMAGE_MODEL };
   } catch (e) {

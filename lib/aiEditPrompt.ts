@@ -79,10 +79,11 @@ export function describeObjectPlacements(o: AiEditObjectReference): string {
 
 function buildAiEditConstitution(
   mode: AiEditMode,
-  opts?: { hasAreaEdits?: boolean; hasObjectRefs?: boolean; strictConfine?: boolean }
+  opts?: { hasAreaEdits?: boolean; hasObjectRefs?: boolean; strictConfine?: boolean; hasQualityRef?: boolean }
 ): string {
   const hasAreaEdits = !!opts?.hasAreaEdits;
   const hasObjectRefs = !!opts?.hasObjectRefs;
+  const hasQualityRef = !!opts?.hasQualityRef;
   // 範囲外の扱いをモードで出し分ける（260708 再修正）。strictConfine=ON（「範囲外を変えない」トグル）は厳密に
   // 閉じ込め、OFF（既定・自然）は自然な統合を最優先し、対象を縁で切り取らせない（＝合成後の“貼り付け”を防ぐ）。
   const strictConfine = !!opts?.strictConfine;
@@ -98,7 +99,8 @@ function buildAiEditConstitution(
       '\n- 指定領域（矩形）内には、指示された編集内容を必ず明確に反映した結果を生成する。領域内を未編集・空欄・無変化のまま返さない。指示に沿った家具/仕上げ/オブジェクトを、ベース画像の遠近（パース）・スケール・光の向きに整合させて領域内にしっかり描画する。' +
       '\n- 【向き・角度の維持を最優先】編集領域にすでに家具が写っている場合、その家具の向き・角度・姿勢（正面／斜め／横向き、カメラに対する見え方、脚や座面の接地位置）を必ず維持する。差し替えやグレードアップでも、デザイン・素材・仕上げは指示（または参照画像）に従いつつ、向き・角度・設置位置はベース画像の元の家具に厳密に合わせ、勝手に回転・反転・向き変更をしない（例: 3Dで斜め向きに置かれた椅子を正面向きに描き直さない）。' +
       '\n- 対象の向き（正面／横向き等）と、周囲との前後関係（手前／奥）・パース・スケール・光と反射の向きを尊重して編集する。各領域に位置説明が添えられている場合は、そこで触れられた対象・向き・前後を参考にする（無ければ画像から判断する。いずれの場合も座標を最優先し、説明が座標と矛盾するときは座標に従う）。' +
-      '\n- 指定領域に複数の家具が重なって写る場合は、その領域で最も手前に写っている対象オブジェクトのみを編集し、その手前や周囲にある別の家具（テーブル・椅子・観葉植物等）は前後関係（奥行き）・位置・形状を文脈として保持する（別物に置き換えたり溶かし込んだりしない）。'
+      '\n- 指定領域に複数の家具が重なって写る場合は、その領域で最も手前に写っている対象オブジェクトのみを編集し、その手前や周囲にある別の家具（テーブル・椅子・観葉植物等）は前後関係（奥行き）・位置・形状を文脈として保持する（別物に置き換えたり溶かし込んだりしない）。' +
+      '\n- 【重なり・遮蔽の維持（最重要）】編集対象が別の家具の後ろに一部隠れている（重なっている）場合でも、その対象を元の位置から絶対に動かさない。隠れて見えない部分を勝手に補完して、手前や空いた床へ移動・再配置しない。前後の遮蔽関係（どちらが手前でどちらが奥か・隠れている範囲）はそのまま保ち、見えている部分だけをその場で編集する。手前の家具も、奥の対象を見せるために動かしたり縮めたりしない。事前解析で前後（手前/奥）が示されている場合は、その遮蔽を厳守する。'
     : '';
 
   const reflectNote = hasObjectRefs
@@ -134,7 +136,11 @@ function buildAiEditConstitution(
 ${MODE_INSTRUCTIONS[mode]}${overlapNote}
 
 【参照画像の扱い】
-- ベース画像: ${baseImageLine}
+- ベース画像: ${baseImageLine}${
+    hasQualityRef
+      ? '\n- 画質・素材の見本（最初のレンダリング画像）がある場合: それは【画質・解像度・素材/質感の鮮明さの正解】としてのみ参照する。家具の形・位置・レイアウト・既に施された編集内容には一切使わない（見本の状態＝編集前へ巻き戻さない）。空間の構図・家具の種類や配置・これまでの変更はすべてベース画像（＝直近の画像）に従い、テクスチャや細部の解像感だけを見本と同等の鮮明さで仕上げる。'
+      : ''
+  }
 - スタイル参照がある場合: 照明の色温度・コントラスト・写真の「空気感」のみ参考にし、壁床天井のマテリアルはベース画像に厳密に一致させる
 - オブジェクト参照がある場合: ${objectRefLine}${reflectNote}
 出力: 編集後の最終画像1枚のみを高品質で生成する。
@@ -228,6 +234,8 @@ export function buildAiEditReferenceGuide(params: {
   learnedHints?: string[];
   /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
   strictConfine?: boolean;
+  /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を画質・素材の見本として渡すか。 */
+  hasQualityRef?: boolean;
 }): string {
   if (params.coordinate) return appendLearnedHints(buildCoordinatePrompt(), params.learnedHints);
   const hasObjects = params.objects.length > 0;
@@ -237,14 +245,25 @@ export function buildAiEditReferenceGuide(params: {
   // ユーザー自由入力（スタイルメモ・全体補足）もプロンプト注入対策としてサニタイズ（制御文字除去・長さ上限）。
   const sMemo = params.styleMemo ? sanitizePromptText(params.styleMemo, 800) : '';
   const lines: string[] = [
-    buildAiEditConstitution(mode, { hasAreaEdits: hasObjects, hasObjectRefs, strictConfine: params.strictConfine }),
+    buildAiEditConstitution(mode, {
+      hasAreaEdits: hasObjects,
+      hasObjectRefs,
+      strictConfine: params.strictConfine,
+      hasQualityRef: params.hasQualityRef,
+    }),
     '',
   ];
 
   lines.push('【入力画像の順序】');
-  lines.push('画像1: ベース（編集対象）');
+  lines.push('画像1: ベース（編集対象・直近の画像）');
 
   let idx = 2;
+  if (params.hasQualityRef) {
+    lines.push(
+      `画像${idx}: 画質・素材の見本（最初のレンダリング画像。解像度・質感・素材感の“正解”としてのみ参照。家具の形・位置・これまでの変更には使わない）`
+    );
+    idx += 1;
+  }
   const styleCount = params.styleImageCount ?? (params.hasStyle ? 1 : 0);
   if (styleCount > 0) {
     if (styleCount === 1) {

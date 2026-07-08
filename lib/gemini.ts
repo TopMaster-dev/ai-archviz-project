@@ -355,6 +355,8 @@ export async function generateGeminiImageEdit(
     harmonize?: boolean;
     /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
     strictConfine?: boolean;
+    /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
+    qualityRefImageDataUrl?: string | null;
   }
 ): Promise<{ url: string; usage: TokenUsage | null }> {
   // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
@@ -365,6 +367,8 @@ export async function generateGeminiImageEdit(
       : params.styleImageDataUrl
         ? [params.styleImageDataUrl]
         : [];
+  // 画質を保つ見本（最初のレンダー）は均一化パスでは使わない。
+  const qualityRefUrl = params.harmonize ? null : params.qualityRefImageDataUrl || null;
   const instruction = params.harmonize
     ? buildHarmonizePrompt()
     : buildAiEditReferenceGuide({
@@ -376,6 +380,7 @@ export async function generateGeminiImageEdit(
         coordinate: params.coordinate,
         learnedHints: params.learnedHints,
         strictConfine: params.strictConfine,
+        hasQualityRef: !!qualityRefUrl,
       });
 
   const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
@@ -386,6 +391,14 @@ export async function generateGeminiImageEdit(
   parts.push({
     inlineData: { mimeType: base.mimeType, data: base.base64 },
   });
+
+  // 画質を保つ見本（最初のレンダー）は base の直後に添付＝プロンプトの入力順（画像2）と一致させる（260708）。
+  if (qualityRefUrl) {
+    const qr = parseImageDataUrl(qualityRefUrl);
+    parts.push({
+      inlineData: { mimeType: qr.mimeType, data: qr.base64 },
+    });
+  }
 
   // 均一化パスはベース1枚のみを入力（スタイル/オブジェクト参照は使わない＝全体ドリフト防止）。
   // スタイル参照は複数対応（260707）: 画像2..(1+N) の順で全て添付（プロンプトの入力順と一致）。
