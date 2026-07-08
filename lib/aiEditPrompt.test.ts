@@ -200,6 +200,20 @@ describe('重なり・遮蔽の維持（260708 クライアント報告「奥の
     expect(guide).toContain('重なり・遮蔽の維持');
     expect(guide).toContain('元の位置から絶対に動かさない');
   });
+
+  it('「いちばん手前だけ編集」の決めつけを外し、奥の対象も差し替える／対象以外は動かさない旨が入る（260708 round2）', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+    });
+    // 対象は必ずしも最前面ではない（奥の対象を差し替える）。
+    expect(guide).toContain('必ずしも最も手前の家具とは限らない');
+    expect(guide).toContain('奥の対象自体を差し替え');
+    // 対象以外は動かさない・変形しない。
+    expect(guide).toContain('対象以外は動かさない');
+    // 旧「最も手前に写っている対象オブジェクトのみを編集」という決めつけ文言は残っていない。
+    expect(guide).not.toContain('最も手前に写っている対象オブジェクトのみを編集');
+  });
 });
 
 describe('画質を保つハイブリッド（260708）: 見本画像の役割をプロンプトに明示', () => {
