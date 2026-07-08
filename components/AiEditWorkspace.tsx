@@ -593,12 +593,14 @@ export function AiEditWorkspace({
       let narratives: Record<string, string> = {};
       let occluded: Record<string, boolean> = {};
       try {
-        const ares = await fetch('/api/ai-analyze', {
+        // 事前解析は /api/ai-edit に analyze:true で相乗り（Hobbyプランのサーバレス関数数上限=12 対策・専用
+        // エンドポイントを増やさない・260709）。遮蔽判定はベース画像＋範囲（座標）だけで足りるので、参照画像
+        // (imageDataUrl)は外して送る（Vercel body 上限に対する payload 削減）。
+        const ares = await fetch('/api/ai-edit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-          // 遮蔽判定はベース画像＋範囲（座標）だけで足りる。参照画像(imageDataUrl)は不要なので外して送る
-          // （Vercel body 上限に対する payload 削減・260709）。
           body: JSON.stringify({
+            analyze: true,
             baseImage: baseScaled,
             objects: objectsScaled.map((o) => ({ ...o, imageDataUrl: null })),
           }),

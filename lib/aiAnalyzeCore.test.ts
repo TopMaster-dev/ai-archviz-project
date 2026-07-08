@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { runAiAnalyze } from './aiAnalyzeCore.js';
 
 /**
- * runAiAnalyze（/api/ai-analyze の中核・遮蔽判定つき事前解析）の入力バリデーション契約。
+ * runAiAnalyze（/api/ai-edit の analyze:true 分岐の中核・遮蔽判定つき事前解析）の入力バリデーション契約。
  * ネットワーク前に早期リターンするケースのみ検証（Gemini を叩かない）。dev/prod で同一挙動を保証（260709）。
  */
 describe('runAiAnalyze 入力バリデーション（ネットワーク前・dev/prod共通契約）', () => {

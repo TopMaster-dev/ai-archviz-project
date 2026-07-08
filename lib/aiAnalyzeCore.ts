@@ -3,8 +3,9 @@ import type { AiEditObjectReference } from '../types.js';
 import { normalizeObjectReference } from './aiEditNormalize.js';
 
 /**
- * /api/ai-analyze の中核ロジック（本番 api/ai-analyze.ts と 開発 vite.config.ts が共有・260709）。
- * エリア編集の「生成前の事前解析」を、生成本体（/api/ai-edit）より前にクライアントから単独で呼べるようにする。
+ * エリア編集の「生成前の事前解析」の中核ロジック（260709）。専用エンドポイントは作らず、/api/ai-edit に
+ * analyze:true で相乗りして呼ぶ（本番 api/ai-edit.ts と 開発 vite.config.ts が共有＝Hobbyプランの関数数上限12対策）。
+ * 生成本体より前にクライアントから単独で呼び、遮蔽判定→クロップ出し分けに使う。
  * 目的: 各領域の「対象が別の家具の後ろに隠れているか（occluded）」を先に判定し、隠れているときだけ切り取り方式
  * （案1）に切り替える、というクライアント要望の出し分けを可能にするため。narratives は生成本体へ渡して再解析を省く。
  */

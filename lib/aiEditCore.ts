@@ -24,7 +24,7 @@ export interface AiEditRequestBody {
   strictConfine?: boolean;
   /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
   qualityRefImage?: string;
-  /** クライアントが /api/ai-analyze で先に得た事前解析（objectId→説明）。あれば再解析せず使う（260709・二重解析回避）。 */
+  /** クライアントが先に /api/ai-edit(analyze:true) で得た事前解析（objectId→説明）。あれば再解析せず使う（260709・二重解析回避）。 */
   placementNarratives?: unknown;
 }
 
@@ -111,8 +111,8 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
   // 事前解析（generatePlacementNarratives）: 範囲ごとに対象・位置・向き・前後・維持対象を読み取り、生成の参考に
   // 添える（あくまで助言。座標が最優先）。失敗時は解析なしで生成を続行する（ベストエフォート）。
   let placementNarratives: Record<string, string> | undefined;
-  // クライアントが先に /api/ai-analyze で解析（遮蔽判定→クロップ判断のため）した結果が body に載っていれば、
-  // それを使い再解析しない（二重解析を避ける・260709）。無ければここで解析する（従来動作）。
+  // クライアントが先に /api/ai-edit(analyze:true) で解析（遮蔽判定→クロップ判断のため）した結果が body に載って
+  // いれば、それを使い再解析しない（二重解析を避ける・260709）。無ければここで解析する（従来動作）。
   const preNarr = body.placementNarratives;
   if (preNarr && typeof preNarr === 'object' && !Array.isArray(preNarr)) {
     const cleaned: Record<string, string> = {};
@@ -126,7 +126,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       baseImageDataUrl: body.baseImage,
       objects,
     });
-    // occluded（遮蔽判定）はここでは使わない。クロップの出し分けはクライアント側が /api/ai-analyze で先に判断する
+    // occluded（遮蔽判定）はここでは使わない。クロップの出し分けはクライアント側が /api/ai-edit(analyze:true) で先に判断する
     // （生成本体は narratives のみ使用）。この分岐は事前解析を渡されなかったときのフォールバック（260709）。
     if (Object.keys(analysis.narratives).length > 0) placementNarratives = analysis.narratives;
   }

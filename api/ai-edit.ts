@@ -1,4 +1,5 @@
 import { runAiEdit } from '../lib/aiEditCore.js';
+import { runAiAnalyze } from '../lib/aiAnalyzeCore.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 
 // 本番サーバーレス関数。中核ロジックは lib/aiEditCore.ts（開発 vite.config.ts と共有＝挙動差ゼロ・260707）。
@@ -25,7 +26,18 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });
     }
 
-    const result = await runAiEdit(apiKey, req.body ?? {});
+    const body = req.body ?? {};
+    // 事前解析（対象説明＋遮蔽判定 occluded）は同じ /api/ai-edit に mode で相乗りさせる（Hobbyプランのサーバレス
+    // 関数数上限=12 を超えないため・260709）。中核は lib/aiAnalyzeCore.ts（dev/prod 共有）。
+    if (body.analyze === true) {
+      const a = await runAiAnalyze(apiKey, body);
+      if (!a.success) {
+        return res.status(a.status).json({ success: false, error: a.error });
+      }
+      return res.status(200).json({ success: true, narratives: a.narratives, occluded: a.occluded });
+    }
+
+    const result = await runAiEdit(apiKey, body);
     if (!result.success) {
       return res.status(result.status).json({ success: false, error: result.error });
     }

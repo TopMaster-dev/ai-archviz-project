@@ -209,7 +209,21 @@ export default defineConfig(({ mode }) => {
                         }
                         // 本番 api/ai-edit.ts と同一の共有ハンドラ（lib/aiEditCore.ts）を呼ぶ＝開発と本番で挙動が完全一致（260707）。
                         // 空/不正な body は本番同様 {} 扱い（→400「baseImage が必要」）に。JSON.parse を巻き込んで500にしない。
-                        const result = await runAiEdit(apiKey, body ? JSON.parse(body) : {});
+                        const parsed = body ? JSON.parse(body) : {};
+                        // 事前解析（遮蔽判定つき）は同じ /api/ai-edit に analyze:true で相乗り（本番と同一・関数数上限対策260709）。
+                        if (parsed && parsed.analyze === true) {
+                            const a = await runAiAnalyze(apiKey, parsed);
+                            res.statusCode = a.success ? 200 : a.status;
+                            res.setHeader('Content-Type', 'application/json');
+                            return res.end(
+                                JSON.stringify(
+                                    a.success
+                                        ? { success: true, narratives: a.narratives, occluded: a.occluded }
+                                        : { success: false, error: a.error }
+                                )
+                            );
+                        }
+                        const result = await runAiEdit(apiKey, parsed);
                         res.statusCode = result.success ? 200 : result.status;
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(
@@ -221,40 +235,6 @@ export default defineConfig(({ mode }) => {
                         );
                     } catch (e: any) {
                         console.error('ai-edit local error:', e);
-                        res.statusCode = 500;
-                        res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: false, error: e.message }));
-                    }
-                });
-                return;
-            }
-
-            // --- Local AI Analyze Endpoint (事前解析: 対象説明＋遮蔽判定 occluded・260709) ---
-            // 本番 api/ai-analyze.ts と同一の共有ハンドラ（lib/aiAnalyzeCore.ts）を呼ぶ＝開発と本番で挙動が完全一致。
-            if (req.url === '/api/ai-analyze' && req.method === 'POST') {
-                let body = '';
-                req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', async () => {
-                    try {
-                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
-                        const apiKey = extractGeminiApiKey(rawApiKey);
-                        if (!apiKey) {
-                            res.statusCode = 400;
-                            res.setHeader('Content-Type', 'application/json');
-                            return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキーが見つかりません。' }));
-                        }
-                        const result = await runAiAnalyze(apiKey, body ? JSON.parse(body) : {});
-                        res.statusCode = result.success ? 200 : result.status;
-                        res.setHeader('Content-Type', 'application/json');
-                        return res.end(
-                            JSON.stringify(
-                                result.success
-                                    ? { success: true, narratives: result.narratives, occluded: result.occluded }
-                                    : { success: false, error: result.error }
-                            )
-                        );
-                    } catch (e: any) {
-                        console.error('ai-analyze local error:', e);
                         res.statusCode = 500;
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(JSON.stringify({ success: false, error: e.message }));
