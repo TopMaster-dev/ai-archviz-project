@@ -225,6 +225,16 @@ describe('重なり・遮蔽の維持（260708 クライアント報告「奥の
     // 範囲外のより目立つ同種の家具を代わりに編集してはならない旨。
     expect(guide).toContain('範囲外のより目立つ同種の家具を代わりに編集してはならない');
   });
+
+  it('囲っていない場所に家具を追加・複製しない旨が入る（260709 勝手な追加生成の抑止）', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+    });
+    expect(guide).toContain('指定領域以外に足さない');
+    expect(guide).toContain('囲みのない領域は、元画像のまま何も足さず');
+    expect(guide).toContain('椅子を余分に作らない');
+  });
 });
 
 describe('画質を保つハイブリッド（260708）: 見本画像の役割をプロンプトに明示', () => {
