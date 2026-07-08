@@ -214,6 +214,17 @@ describe('重なり・遮蔽の維持（260708 クライアント報告「奥の
     // 旧「最も手前に写っている対象オブジェクトのみを編集」という決めつけ文言は残っていない。
     expect(guide).not.toContain('最も手前に写っている対象オブジェクトのみを編集');
   });
+
+  it('範囲外の“似た家具・オブジェクト”を編集しない旨が、種類を問わず入る（260709 対象の取り違え防止）', () => {
+    const guide = buildAiEditReferenceGuide({
+      hasStyle: false,
+      objects: [obj([{ x: 0.2, y: 0.2, width: 0.3, height: 0.3 }])],
+    });
+    expect(guide).toContain('対象の取り違え防止');
+    expect(guide).toContain('種類は問わない');
+    // 範囲外のより目立つ同種の家具を代わりに編集してはならない旨。
+    expect(guide).toContain('範囲外のより目立つ同種の家具を代わりに編集してはならない');
+  });
 });
 
 describe('画質を保つハイブリッド（260708）: 見本画像の役割をプロンプトに明示', () => {
