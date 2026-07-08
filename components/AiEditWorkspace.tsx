@@ -281,6 +281,18 @@ export function AiEditWorkspace({
   // ON にすると版チェーンの根（最初のレンダー・高画質）を土台に編集する（それまでの編集は引き継がない）。
   // 破壊的（それまでの編集を土台にしない）なので永続しない＝リロードで既定OFFへ戻す（毎回の明示的な選択にする）。
   const [editFromOriginal, setEditFromOriginal] = useState(false);
+  // AI編集キャンバスの閲覧ズーム（260708 クライアント要望）: マウスホイールで拡大縮小し細部を確認できる
+  // （DL→Photoshop/プロパティで確認する手間の削減）。表示専用＝拡大中は作図を無効化しドラッグはパン（移動）、
+  // 等倍(1)で作図に戻る。imgLayout は wrapper 実寸から算出＝変形に依存しないので、画像＋オーバーレイをまとめて
+  // CSS transform でスケール／パンしてもマスクの位置はずれない。
+  const MAX_ZOOM = 6;
+  const ZOOM_MIN_SNAP = 1.001; // 浮動小数の丸め対策: これ以下は等倍(1)へスナップしパンをリセットする。
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
+  zoomRef.current = zoom;
+  const panRef = useRef({ x: 0, y: 0 });
+  panRef.current = pan;
   const [compareA, setCompareA] = useState<string | null>(null);
   const [compareB, setCompareB] = useState<string | null>(null);
   const [compareSlider, setCompareSlider] = useState(50);
@@ -383,6 +395,45 @@ export function AiEditWorkspace({
     ro.observe(wrap);
     return () => ro.disconnect();
   }, [measureLayout, baseDisplayUrl, isOpen]);
+
+  // 画像やタブが変わったらズームを等倍へ戻す（別の画像へ拡大状態を持ち越さない）。
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [baseDisplayUrl, activeTool]);
+
+  // マウスホイールでズーム（カーソル位置中心）。ページスクロールを止めるため非パッシブで直付け（260708）。
+  useEffect(() => {
+    const wrap = wrapRef.current;
+    if (!wrap || !isOpen) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!baseDisplayUrl) return;
+      e.preventDefault();
+      const rect = wrap.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const oldZoom = zoomRef.current;
+      const factor = e.deltaY < 0 ? 1.15 : 1 / 1.15;
+      const newZoom = Math.min(MAX_ZOOM, Math.max(1, oldZoom * factor));
+      if (newZoom === oldZoom) return;
+      if (newZoom <= ZOOM_MIN_SNAP) {
+        setZoom(1);
+        setPan({ x: 0, y: 0 });
+        return;
+      }
+      const oldPan = panRef.current;
+      const ratio = newZoom / oldZoom;
+      let px = cx - ratio * (cx - oldPan.x);
+      let py = cy - ratio * (cy - oldPan.y);
+      // 画像がビューポートを覆い続けるようパンをクランプ（余白を出さない）。
+      px = Math.min(0, Math.max(rect.width * (1 - newZoom), px));
+      py = Math.min(0, Math.max(rect.height * (1 - newZoom), py));
+      setZoom(newZoom);
+      setPan({ x: px, y: py });
+    };
+    wrap.addEventListener('wheel', onWheel, { passive: false });
+    return () => wrap.removeEventListener('wheel', onWheel);
+  }, [baseDisplayUrl, isOpen]);
 
   useEffect(() => {
     if (isOpen && baseDisplayUrl) {
@@ -884,7 +935,38 @@ export function AiEditWorkspace({
     setPolygonCursor(null);
   }, [activeObjectId, maskMode, activeVersion?.id]);
 
+  const resetZoom = useCallback(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, []);
+
+  // 拡大中のパン（移動）。等倍のときは何もしない＝作図（onMouseDownPlacement）に委ねる（260708）。
+  const onCanvasPanStart = (e: React.MouseEvent) => {
+    if (zoomRef.current <= 1) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startPan = panRef.current;
+    const onMove = (me: MouseEvent) => {
+      const rect = wrapRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const z = zoomRef.current;
+      let px = startPan.x + (me.clientX - startX);
+      let py = startPan.y + (me.clientY - startY);
+      px = Math.min(0, Math.max(rect.width * (1 - z), px));
+      py = Math.min(0, Math.max(rect.height * (1 - z), py));
+      setPan({ x: px, y: py });
+    };
+    const onUp = () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
   const onMouseDownPlacement = (e: React.MouseEvent) => {
+    if (zoomRef.current > 1) return; // 拡大中は作図しない（表示専用ズーム・260708）
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
     const img = imgRef.current;
     const nw = img.naturalWidth;
@@ -908,6 +990,7 @@ export function AiEditWorkspace({
   };
 
   const onMouseMovePlacement = (e: React.MouseEvent) => {
+    if (zoomRef.current > 1) return; // 拡大中は作図しない（表示専用ズーム・260708）
     if (!imgRef.current) return;
     const img = imgRef.current;
     const p = clientToNormalized(e.clientX, e.clientY, img, img.naturalWidth, img.naturalHeight);
@@ -921,6 +1004,7 @@ export function AiEditWorkspace({
   };
 
   const onMouseUpPlacement = () => {
+    if (zoomRef.current > 1) return; // 拡大中は作図しない（表示専用ズーム・260708）
     if (maskMode === 'polygon') return; // 多角形はクリックで頂点追加するためドラッグ確定しない。
     if (!dragStart || !dragCurrent || !activeObjectId) {
       setDragStart(null);
@@ -1216,7 +1300,10 @@ export function AiEditWorkspace({
             </div>
             <div
               ref={wrapRef}
-              className="flex-1 relative rounded-xl border border-white/10 bg-black overflow-hidden min-h-[200px]"
+              onMouseDown={onCanvasPanStart}
+              className={`flex-1 relative rounded-xl border border-white/10 bg-black overflow-hidden min-h-[200px] ${
+                zoom > 1 ? 'cursor-grab active:cursor-grabbing' : ''
+              }`}
             >
               {baseDisplayUrl ? (
                 <>
@@ -1226,13 +1313,21 @@ export function AiEditWorkspace({
                       元の画像を表示中（画質優先・これまでの編集は引き継ぎません）
                     </div>
                   )}
+                  {/* 画像＋オーバーレイをまとめて拡大／パン（表示専用ズーム・260708）。imgLayout は wrapper 実寸基準なので変形非依存。 */}
+                  <div
+                    className="absolute inset-0"
+                    style={{
+                      transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                      transformOrigin: '0 0',
+                    }}
+                  >
                   <img
                     ref={imgRef}
                     src={baseDisplayUrl}
                     alt="ベース"
                     draggable={false}
                     className={`absolute inset-0 w-full h-full object-contain select-none ${
-                      activeObjectId ? 'cursor-crosshair' : ''
+                      activeObjectId && zoom === 1 ? 'cursor-crosshair' : ''
                     }`}
                     onLoad={measureLayout}
                     onMouseDown={onMouseDownPlacement}
@@ -1350,6 +1445,26 @@ export function AiEditWorkspace({
                         );
                       })()}
                   </svg>
+                  </div>
+                  {/* ズーム操作（260708）: ホイールで拡大縮小、拡大中はドラッグで移動、リセットで等倍に戻す。表示専用（拡大中は作図不可）。 */}
+                  {zoom > 1 ? (
+                    <div className="absolute bottom-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-white/15 bg-black/70 px-2 py-1 text-[10px] font-bold text-neutral-200 backdrop-blur-sm">
+                      <span>{Math.round(zoom * 100)}%</span>
+                      <span className="text-neutral-500">ドラッグで移動</span>
+                      <button
+                        type="button"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={resetZoom}
+                        className="rounded px-1.5 py-0.5 text-emerald-300 hover:bg-white/10"
+                      >
+                        リセット
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="absolute bottom-2 right-2 z-10 rounded-md border border-white/10 bg-black/50 px-2 py-1 text-[10px] font-medium text-neutral-400 backdrop-blur-sm pointer-events-none">
+                      マウスホイールで拡大・縮小
+                    </div>
+                  )}
                 </>
               ) : (
                 <div className="absolute inset-0 flex items-center justify-center text-neutral-500 text-sm">
