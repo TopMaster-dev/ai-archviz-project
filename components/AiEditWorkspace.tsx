@@ -668,10 +668,24 @@ export function AiEditWorkspace({
       //   で目立たなくする（クライアント選択: ①中心＝他を絶対に変えない）。
       // ・通常（自然）: 全画面生成をそのまま採用（合成しない＝陰影・パースがなじむ）。
       if (cropPx) {
+        // 合成マスクは「囲った多角形」ではなく「クロップ矩形（対象＋余白）」を使う（260709 クライアント報告
+        // 「差し替えた椅子が全部表示されない＝見切れる」対策）。多角形で切り抜くと、差し替え家具が元の小さな囲み
+        // （＝隠れた対象の“見えている一部”に密着）で切れてしまう。クロップは対象＋余白を含み、モデルはクロップ内で
+        // 手前のソファによる遮蔽も正しく描くので、クロップ矩形ごと貼り戻せば新しい家具が（正しく遮蔽されたうえで）
+        // 全体表示される。矩形の縁は羽根ぼかし＋色合わせ（①）でなじませ、矩形の外は完全にベースのまま。
+        // 代償: クロップ矩形内の周辺（手前ソファの縁・壁・床の一部）も再生成されるが、クロップは対象に密着した
+        // 小さめ範囲なので変化は局所的。
+        const cropRect: NormalizedRect = {
+          x: cropPx.sx / baseW,
+          y: cropPx.sy / baseH,
+          width: cropPx.sw / baseW,
+          height: cropPx.sh / baseH,
+        };
+        const cropFeather = Math.round(Math.max(baseW, baseH) * 0.008); // 矩形の縁をやや広めにぼかしてなじませる
         const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
         const full = await pasteCropIntoBase(baseScaled, fittedCrop, cropPx, baseW, baseH);
-        const matched = await harmonizeEditToBase(baseScaled, full, allPlacements, baseW, baseH);
-        outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
+        const matched = await harmonizeEditToBase(baseScaled, full, [cropRect], baseW, baseH);
+        outUrl = await compositeMaskedEdit(baseScaled, matched, [cropRect], baseW, baseH, cropFeather);
       } else {
         // 全画面生成をそのまま採用。アスペクト差が大きいときだけ contain（差し替え家具が欠けないように）。
         const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
