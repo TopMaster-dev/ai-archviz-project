@@ -39,9 +39,6 @@ import {
   remapPlacementsToCrop,
   shouldCropRegion,
   isLargeRegion,
-  ENABLE_FULLFRAME_ONLY,
-  PRESERVE_OUTSIDE_MASK,
-  SHOW_CONFINE_TOGGLE,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -257,26 +254,6 @@ export function AiEditWorkspace({
       /* ignore */
     }
   }, [showRangeOverlay]);
-  // 範囲外を固定（はみ出し防止・くっきり閉じ込め）トグル（260708 クライアント報告②の再修正）。
-  // 既定OFF＝全画面を自然に生成（陰影・パースがなじむ。囲いから少しはみ出ることはある）。
-  // ON＝生成後に囲った範囲だけを羽根ぼかしでベースへ合成＝範囲外は元画像のまま（はみ出さないが、差し替えが
-  //    範囲より大きいと縁で切れて“貼り付け”っぽく見えることがある）。クライアントがトレードオフを選べるようにする。
-  const [confineToMask, setConfineToMask] = useState<boolean>(() => {
-    // UI非表示（SHOW_CONFINE_TOGGLE=false）のときは、過去に保存された値に関わらず常に自然（OFF）に固定する。
-    if (!SHOW_CONFINE_TOGGLE) return false;
-    try {
-      return localStorage.getItem('archviz-ai-edit-confine') === '1';
-    } catch {
-      return false;
-    }
-  });
-  useEffect(() => {
-    try {
-      localStorage.setItem('archviz-ai-edit-confine', confineToMask ? '1' : '0');
-    } catch {
-      /* ignore */
-    }
-  }, [confineToMask]);
   // 「画質を保つ」トグル（260708・クライアント提案のハイブリッド方式）。編集を繰り返すと直近の出力を土台にするため
   // 画質が徐々に劣化する。ON にすると、土台（base）は従来どおり直近の画像のまま＝連続編集のワークフローを維持しつつ、
   // 最初のレンダリング画像を「画質・素材・質感の見本」として毎回一緒に渡す。形・位置・これまでの変更は直近画像に従い、
@@ -608,19 +585,40 @@ export function AiEditWorkspace({
       // （重なった家具の分離＝精度向上）、編集後は必ずベースへ貼り戻して多角形/矩形でクリップする。これにより
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
       const allPlacements = draftObjects.flatMap((o) => o.placements);
-
-      // 大領域（選択が画面の一定割合以上）は、クロップして貼り戻すと大きな継ぎ目（境界線）になる。この場合は
-      // クロップせず・合成もせず、全画面をそのまま編集した1枚を使う＝継ぎ目が生じない（クライアント要望260707）。
-      // 小領域は従来どおりクロップ＋合成＋色合わせで精度優先（実効解像度が上がり重なった家具も分離しやすい）。
-      // ENABLE_FULLFRAME_ONLY（既定 true・260707 試験導入）: 選択サイズに関わらず全画面1回生成に統一（クロップ/貼り戻し/
-      // 合成/なじませを通さない＝境界線が構造的に出ない）。false へ倒すと従来動作（10%未満だけクロップ＋合成）へロールバック。
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
-      const largeRegion = !!unionBBox && (ENABLE_FULLFRAME_ONLY || isLargeRegion(unionBBox));
 
-      // confineToMask は「範囲外を変えない/自然」の唯一のスイッチ。OFF（既定・自然）のときはクロップも合成も一切
-      // 行わず全画面を自然に採用する（どの設定でも一貫）。ON のときだけクロップ（ロールバック時）や合成を通す。
+      // 生成前の事前解析（対象の説明＋遮蔽判定 occluded・260709 クライアント要望）。目的: 「対象が別の家具の後ろに
+      // 隠れている（occluded）とき」だけ切り取り方式（案1）に切り替え、狙った対象を確実に編集する。通常は自然な全画面（案2）。
+      // narratives は生成本体へ渡して再解析を省く（二重解析回避）。解析失敗は非クロップ（自然）で続行。
+      let narratives: Record<string, string> = {};
+      let occluded: Record<string, boolean> = {};
+      try {
+        const ares = await fetch('/api/ai-analyze', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+          // 遮蔽判定はベース画像＋範囲（座標）だけで足りる。参照画像(imageDataUrl)は不要なので外して送る
+          // （Vercel body 上限に対する payload 削減・260709）。
+          body: JSON.stringify({
+            baseImage: baseScaled,
+            objects: objectsScaled.map((o) => ({ ...o, imageDataUrl: null })),
+          }),
+        });
+        const adata = await ares.json();
+        if (adata?.success) {
+          narratives = adata.narratives ?? {};
+          occluded = adata.occluded ?? {};
+        }
+      } catch {
+        /* 解析失敗は非クロップ（自然）で続行 */
+      }
+
+      // 案1（切り取り）を使うのは「対象が隠れている（occluded）とき」だけ。加えてクロップが利く小さめの領域に限定
+      // （大領域はクロップ利得が無く継ぎ目も大きい→自然のまま）。それ以外は全画面の自然生成（案2）。
+      const anyOccluded = draftObjects.some((o) => occluded[o.id] === true);
+      const useCrop = anyOccluded && !!unionBBox && !isLargeRegion(unionBBox);
+
       let cropPx: CropPx | null = null;
-      if (unionBBox && !largeRegion && confineToMask) {
+      if (useCrop && unionBBox) {
         const bbox = padBBox(unionBBox);
         const targetAspect = parseAspectRatioKey(
           pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
@@ -643,9 +641,10 @@ export function AiEditWorkspace({
         aspectRatio: postAspect,
         imageSize,
         learnedHints,
-        // 範囲外の扱いをプロンプトへも伝える（260708）: ON=厳密に閉じ込め、OFF（既定）=自然な統合を優先。
-        // 生成後の合成（confineToMask）と、プロンプトの言い回しを一致させ、自然モードで“貼り付け”を誘発しない。
-        strictConfine: confineToMask,
+        // 切り取り（案1）のときは範囲に厳密＝strict、通常（自然）は soft でプロンプトの言い回しを一致させる。
+        strictConfine: !!cropPx,
+        // 事前解析は解析済みを渡して再解析を省く（二重解析回避）。クロップ時は座標系が変わるが説明は対象識別用（参考）なので流用可。
+        ...(Object.keys(narratives).length > 0 ? { placementNarratives: narratives } : {}),
         // 画質を保つ（260708 ハイブリッド）: 最初のレンダー画像を「画質・素材・質感の見本」として渡す（あれば）。
         ...(qualityRefUrl ? { qualityRefImage: qualityRefUrl } : {}),
       };
@@ -661,50 +660,28 @@ export function AiEditWorkspace({
       void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
 
       let outUrl = data.url as string;
-      // 編集結果の後処理。大領域＝全画面編集をそのまま使う（合成しない＝継ぎ目なし）。小領域＝マスク内だけ合成
-      // （マスク外はベースのまま＝指定外は改変しない）。アスペクトは cover 固定（contain は領域と位置がズレる）。
-      if (largeRegion) {
-        // 全画面を1枚として編集（クロップしない＝境界線が構造的に生じない）。アスペクトのズレを cover で強制クロップ
-        // すると差し替え家具が欠ける恐れ→ Gemini 出力比とベース比の差が大きいときは contain（レターボックス）で欠かさない。
-        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
-        const largeAspectMode: 'cover' | 'contain' =
-          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-        const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, largeAspectMode);
-        // 既定は「自然に全画面生成した1枚をそのまま採用」＝陰影・パースがなじむ（クライアント報告260708②:
-        // 範囲だけを合成すると差し替え家具が範囲の縁で切れて“貼り付け”に見え、かえって不自然＝合成は既定で使わない）。
-        // 「範囲外を固定（confineToMask）」がONのときだけ、生成結果の指定領域だけを羽根ぼかしでベースへ合成＝範囲外は
-        // 元画像のまま（はみ出し防止・ただし縁で切れる可能性あり）。クライアントがトレードオフを選べるようにする。
-        // 合成は cover のときだけ。contain（レターボックス）では fitted 内容が余白ぶん内側にズレ、全画面基準のマスク
-        // 座標とずれて逆に破綻するため合成しない（稀・破綻回避優先）。
-        if (PRESERVE_OUTSIDE_MASK && confineToMask && allPlacements.length > 0 && largeAspectMode === 'cover') {
-          const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
-          outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
-        } else {
-          outUrl = fitted;
-        }
-      } else if (cropPx) {
-        // クロップ経路: 編集済みクロップを crop 寸法へ整え、ベースへ貼り戻し、元の全画面座標の多角形でクリップ。
-        // crop外＝ベース（貼り戻し）＋多角形外＝ベース（合成）の二重保証で、クロップ矩形の縁は必ず見えない。
+      // 編集結果の後処理。
+      // ・案1（cropPx あり＝対象が隠れているとき）: 切り取り編集をベースへ貼り戻し→境界を決定論でなじませ（①）→
+      //   多角形でクリップ合成。範囲外＝ベース画像のまま（バイト保持）＝他は一切変えない。境界は羽根ぼかし＋色合わせ
+      //   で目立たなくする（クライアント選択: ①中心＝他を絶対に変えない）。
+      // ・通常（自然）: 全画面生成をそのまま採用（合成しない＝陰影・パースがなじむ）。
+      if (cropPx) {
         const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
         const full = await pasteCropIntoBase(baseScaled, fittedCrop, cropPx, baseW, baseH);
-        // 合成前に境界の露出・色をベースへ実測合わせ（継ぎ目＝境界線を消す・決定論・260706）。失敗時は full のまま。
         const matched = await harmonizeEditToBase(baseScaled, full, allPlacements, baseW, baseH);
         outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
       } else {
-        const normalized = await fitDataUrlToSize(outUrl, baseW, baseH, 'cover');
-        if (confineToMask && allPlacements.length > 0) {
-          const matched = await harmonizeEditToBase(baseScaled, normalized, allPlacements, baseW, baseH);
-          outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH);
-        } else {
-          outUrl = normalized;
-        }
+        // 全画面生成をそのまま採用。アスペクト差が大きいときだけ contain（差し替え家具が欠けないように）。
+        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
+        const mode: 'cover' | 'contain' =
+          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
+        outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, mode);
       }
-      // 任意（opt-in・既定OFF）: 継ぎ目なじませ（全体を1枚に均一化）パス（260706 クライアント提案）。合成済み画像を
-      // 全体1枚として再生成し均一化する＝決定論補正でも残る質感位相由来の薄い継ぎ目を消す。ベース1枚のみ・低温度・
-      // 座標/オブジェクト無し（マスク外を「増殖」させない）だが、全体再生成のため『マスク外はバイト不変』の保証は
-      // このパスを ON にした時だけ外れる（プリザーブ・プロンプトで最小変更に留める）。失敗時は合成結果をそのまま使う。
-      // 大領域は既に全画面1枚＝継ぎ目が無いので均一化パスは不要（無駄な再生成を避ける）。小領域の合成にのみ効かせる。
-      if (ENABLE_HARMONIZE_FLATTEN && harmonizeSeams && allPlacements.length > 0 && !largeRegion) {
+      // ②（任意・opt-in・既定OFF）: 「継ぎ目をなじませる（全体を1枚に均一化）」AI再生成パス（260706 クライアント提案）。
+      // ①（決定論の境界なじませ）でも薄い継ぎ目が残るとき用。切り取り経路（cropPx）のときだけ効かせる（自然経路は
+      // 継ぎ目が無く不要）。全体再生成のため『他を一切変えない』保証はこのパスを ON にした時だけ外れる（クライアント了承済み）。
+      // 失敗時は合成結果をそのまま使う。
+      if (ENABLE_HARMONIZE_FLATTEN && harmonizeSeams && cropPx) {
         try {
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
@@ -764,7 +741,7 @@ export function AiEditWorkspace({
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, confineToMask, keepQuality]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality]);
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -1838,9 +1815,10 @@ export function AiEditWorkspace({
               {activeTool === 'area' && emptyCardCount > 0 && (
                 <p className="text-xs text-amber-300 font-bold">未入力{emptyCardCount}件</p>
               )}
-              {/* 継ぎ目なじませ（全体を1枚に均一化）: 決定論の色合わせで残る薄い継ぎ目を、追加生成1回で消す opt-in（260706）。 */}
-              {/* 全画面統一モード（ENABLE_FULLFRAME_ONLY）では合成が無く継ぎ目も出ないためチェックボックス非表示（ロールバック時のみ表示）。 */}
-              {activeTool === 'area' && ENABLE_HARMONIZE_FLATTEN && !ENABLE_FULLFRAME_ONLY && (
+              {/* ②「継ぎ目をなじませる（全体を1枚に均一化）」opt-in（260706→260709）。①（決定論の境界なじませ）でも薄い
+                  継ぎ目が残るとき用。ONにすると仕上げに全体を1回AIで生成し直す＝より徹底的に継ぎ目を消せるが、全体再生成の
+                  ため他がわずかに変わる可能性がある（クライアント選択: ①中心・②は任意）。効くのは切り取り（隠れた対象）時のみ。 */}
+              {activeTool === 'area' && ENABLE_HARMONIZE_FLATTEN && (
                 <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1850,26 +1828,8 @@ export function AiEditWorkspace({
                     disabled={isSubmitting}
                   />
                   <span className="text-[11px] leading-snug text-neutral-300">
-                    <span className="font-bold text-neutral-100">継ぎ目をなじませる（全体を1枚に均一化）</span>
-                    <span className="block text-neutral-500">境界線が残るときにON。仕上げに全体を1回生成し直します（少し時間がかかります）。</span>
-                  </span>
-                </label>
-              )}
-              {/* 範囲外を固定（はみ出し防止）トグル（260708 再修正）。既定OFF＝自然に生成（少しはみ出ることはあるが縁が
-                  自然）。ON＝範囲外を元画像で固定（はみ出さないが差し替えが大きいと縁で切れて“貼り付け”に見えることあり）。
-                  260708 round2: クライアント判断で UI は非表示（内部フラグ SHOW_CONFINE_TOGGLE）。既定OFF＝自然で固定。 */}
-              {activeTool === 'area' && SHOW_CONFINE_TOGGLE && (
-                <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 accent-emerald-500"
-                    checked={confineToMask}
-                    onChange={(e) => setConfineToMask(e.target.checked)}
-                    disabled={isSubmitting}
-                  />
-                  <span className="text-[11px] leading-snug text-neutral-300">
-                    <span className="font-bold text-neutral-100">囲った範囲の外を変えない（はみ出し防止）</span>
-                    <span className="block text-neutral-500">OFFのまま（推奨）だと陰影やパースが自然になじみます。範囲外が変わるのが気になるときだけONにしてください（差し替えが範囲より大きいと縁で切れて見えることがあります）。</span>
+                    <span className="font-bold text-neutral-100">継ぎ目をなじませる（仕上げに全体を1回作り直す）</span>
+                    <span className="block text-neutral-500">境界線がまだ気になるときだけON。より徹底的に消せますが、全体を作り直すため他が少し変わることがあります（少し時間がかかります）。</span>
                   </span>
                 </label>
               )}

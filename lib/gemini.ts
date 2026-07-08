@@ -112,8 +112,8 @@ export interface AgentAttachment {
 export async function generatePlacementNarratives(
   apiKey: string,
   params: { baseImageDataUrl: string; objects: AiEditObjectReference[] }
-): Promise<Record<string, string>> {
-  if (!params.objects.length) return {};
+): Promise<{ narratives: Record<string, string>; occluded: Record<string, boolean> }> {
+  if (!params.objects.length) return { narratives: {}, occluded: {} };
 
   const spec = params.objects
     .map((o, i) => {
@@ -127,12 +127,13 @@ export async function generatePlacementNarratives(
   const userText = `あなたは建築インテリアの画像編集アシスタントです。次の「ベース画像」を見て、各 objectId のフォーカス領域に写っているものを分析し、日本語で短くまとめてください。
 各 objectId について、次を1行（120文字以内）に凝縮します: (1)フォーカス領域が指す“差し替える対象”（家具に限らず照明・小物等も含む。例: 奥の白いラウンジチェア）(2)画面上のおおまかな位置と距離感（例: 中央やや右・中景）(3)向き（例: 正面がやや左向き）(4)前後関係と、触らず保持すべき手前の家具（重なりがあれば、対象が手前か奥か・手前に何が重なっているか。例: 手前にソファが重なる＝ソファは保持）(5)同じ種類の家具・オブジェクトが範囲の外の別の場所にもある場合は、それらは編集対象ではない旨（例: 左に別の椅子があるが対象ではない）。
 重要: 対象は必ずしも最前面とは限らない。手前の家具の後ろに一部隠れている“奥の対象”でも、その対象自体を差し替える前提で分析し、対象を空いた場所へ動かす想定はしない。範囲外にある“似た種類の家具・オブジェクト”は対象ではないので、それらを差し替える前提にしない。位置・向きは原則そのまま維持する前提。座標の数値は繰り返さない。判断が難しい項目は書かない（誤った断定はしない）。
+さらに各 objectId について occluded を判定する: その“差し替える対象”が、別の家具・オブジェクトの後ろに一部隠れている（手前の物に重なって遮蔽されている）なら occluded=true、手前に何も重なっておらず全体がはっきり見えているなら occluded=false。判断が難しい場合は false にする。
 
 【フォーカス領域の仕様（正規化座標が最優先。この分析は参考用）】
 ${spec}
 
 次の JSON のみを返してください。前後に説明文やマークダウンを付けないこと。
-{"descriptions":[{"objectId":"<idと同じ文字列>","text":"<日本語1行・120文字以内>"}]}`;
+{"descriptions":[{"objectId":"<idと同じ文字列>","text":"<日本語1行・120文字以内>","occluded":true または false}]}`;
 
   const base = parseImageDataUrl(params.baseImageDataUrl);
   const payload = {
@@ -162,34 +163,41 @@ ${spec}
       },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) return {};
+    if (!response.ok) return { narratives: {}, occluded: {} };
     const result = await response.json();
     const raw = result.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text)?.text;
-    if (!raw || typeof raw !== 'string') return {};
+    if (!raw || typeof raw !== 'string') return { narratives: {}, occluded: {} };
     return parsePlacementNarrativesJson(raw);
   } catch {
-    return {};
+    return { narratives: {}, occluded: {} };
   }
 }
 
-function parsePlacementNarrativesJson(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
+function parsePlacementNarrativesJson(raw: string): { narratives: Record<string, string>; occluded: Record<string, boolean> } {
+  const narratives: Record<string, string> = {};
+  const occluded: Record<string, boolean> = {};
   let s = raw.trim();
   const fence = s.match(/^```(?:json)?\s*([\s\S]*?)```$/m);
   if (fence) s = fence[1].trim();
   try {
-    const parsed = JSON.parse(s) as { descriptions?: Array<{ objectId?: string; text?: string }> };
+    const parsed = JSON.parse(s) as {
+      descriptions?: Array<{ objectId?: string; text?: string; occluded?: unknown }>;
+    };
     const arr = parsed.descriptions;
-    if (!Array.isArray(arr)) return {};
+    if (!Array.isArray(arr)) return { narratives, occluded };
     for (const row of arr) {
-      if (row && typeof row.objectId === 'string' && typeof row.text === 'string') {
-        out[row.objectId] = row.text.trim().slice(0, 200); // 暴走防止に上限
+      if (row && typeof row.objectId === 'string') {
+        if (typeof row.text === 'string') {
+          narratives[row.objectId] = row.text.trim().slice(0, 200); // 暴走防止に上限
+        }
+        // occluded は true 明示（真偽値/文字列"true"）のときだけ true。曖昧・欠落は false（案1を無闇に発動させない）。
+        occluded[row.objectId] = row.occluded === true || row.occluded === 'true';
       }
     }
   } catch {
-    return {};
+    return { narratives, occluded };
   }
-  return out;
+  return { narratives, occluded };
 }
 
 export interface AgentChatMessage {
