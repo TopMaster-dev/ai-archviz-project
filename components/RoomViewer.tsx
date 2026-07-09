@@ -1,5 +1,6 @@
 import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, PropsWithChildren } from 'react';
 import { Canvas, useThree, useFrame } from '@react-three/fiber';
+import { useRoom3DPause } from '../lib/store/room3DPauseStore.js';
 import type { ThreeEvent } from '@react-three/fiber';
 import { useTexture, OrbitControls, PerspectiveCamera, useGLTF, Center, Environment, Html } from '@react-three/drei';
 import * as THREE from 'three';
@@ -3352,6 +3353,9 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
   walkDigitalInputRef,
   cameraWalkStateRef,
 }) => {
+  // カラーピッカー/スポイトを開いている間は 3D の連続レンダーを止める（スポイトがスクリーン＝3Dキャンバスを
+  // 読み取る最中に再描画すると競合してハングするため・260709）。paused のときだけ frameloop を止める。
+  const room3DPaused = useRoom3DPause((s) => s.pauseCount > 0);
   // ドラッグ中かどうかを判定するステートを追加
   const [isDragging, setIsDragging] = useState(false);
   const [hoveredName, setHoveredName] = useState<string | null>(null);
@@ -3511,12 +3515,15 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
 
   return (
     <div className="w-full h-full bg-[#0a0a0a] relative">
-      <Canvas 
+      <Canvas
         shadows
-        dpr={[1, 2]} 
-        gl={{ 
-          antialias: true, 
-          preserveDrawingBuffer: true, 
+        dpr={[1, 2]}
+        // カラーピッカー/スポイトを開いている間は 'never'（連続レンダー停止＝キャンバス静止）にして、スポイトの
+        // スクリーン読み取りと再描画の競合によるハングを防ぐ。閉じれば 'always' に戻り通常どおり動く（260709）。
+        frameloop={room3DPaused ? 'never' : 'always'}
+        gl={{
+          antialias: true,
+          preserveDrawingBuffer: true,
           alpha: false,
           toneMapping: THREE.ACESFilmicToneMapping,
           toneMappingExposure: 0.85
