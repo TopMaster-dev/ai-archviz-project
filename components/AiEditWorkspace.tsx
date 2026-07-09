@@ -687,11 +687,26 @@ export function AiEditWorkspace({
         const matched = await harmonizeEditToBase(baseScaled, full, [cropRect], baseW, baseH);
         outUrl = await compositeMaskedEdit(baseScaled, matched, [cropRect], baseW, baseH, cropFeather);
       } else {
-        // 全画面生成をそのまま採用。アスペクト差が大きいときだけ contain（差し替え家具が欠けないように）。
+        // 全画面生成をベース寸法へ整える。アスペクト差が大きいときだけ contain（差し替え家具が欠けないように）。
         const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
         const mode: 'cover' | 'contain' =
           coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-        outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, mode);
+        const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, mode);
+        // 自然（全画面）経路の“湧き出し”対策（260709 クライアント報告: 指示のない場所に椅子が勝手に追加される）:
+        // 全画面再生成はマスクを通らないため、指示外の追加を構造的に止められない（プロンプト強化でも残った）。
+        // そこで、囲った領域（＋膨張＋羽根ぼかし）だけを採用し、範囲外はベース画像のまま固定する＝囲みのない隙間へ
+        // 勝手に足された家具は消える。膨張(dilate)は「差し替え家具が囲みの縁で切れる」のを防ぐ生成ズレ吸収用。ただし
+        // 大きくすると近接した領域どうしをつなぎ“領域の間の隙間”まで採用範囲に入れてしまう＝隙間に湧いた家具を消せなく
+        // なる（検証WFの指摘260709）。そこで膨張はごく小さく（2*dilate が領域間の隙間より小さくなるよう）控えめにする。
+        // contain（レターボックス）時は座標がズレるため合成せず全画面をそのまま採用する（極端なアスペクトのみ・稀）。
+        if (allPlacements.length > 0 && mode === 'cover') {
+          const dilate = Math.round(Math.max(baseW, baseH) * 0.01); // ≈10px@1024（隙間を橋渡ししない小ささ＋生成ズレ吸収）
+          const feather = Math.round(Math.max(baseW, baseH) * 0.008);
+          const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
+          outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH, feather, dilate);
+        } else {
+          outUrl = fitted;
+        }
       }
       // ②（任意・opt-in・既定OFF）: 「継ぎ目をなじませる（全体を1枚に均一化）」AI再生成パス（260706 クライアント提案）。
       // ①（決定論の境界なじませ）でも薄い継ぎ目が残るとき用。切り取り経路（cropPx）のときだけ効かせる（自然経路は

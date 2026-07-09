@@ -31,12 +31,16 @@ export async function compositeMaskedEdit(
   placements: NormalizedRect[],
   width: number,
   height: number,
-  featherPx?: number
+  featherPx?: number,
+  dilatePx?: number
 ): Promise<string> {
   if (!placements || placements.length === 0 || width <= 0 || height <= 0) return editDataUrl;
   // フェザーは控えめに（内側のみに適用するため小さめで十分・境界の名残を減らす・260702）。
   const feather =
     featherPx ?? Math.min(10, Math.max(2, Math.round(Math.max(width, height) * 0.004)));
+  // マスクを外側へ広げる量（260709）: 差し替え家具が囲みより少し大きくても縁で切れないよう余裕を持たせる。
+  // 0（既定）なら従来どおり囲み線ぴったり。全画面経路で「指示外の追加を消す」用途では正の値を渡す。
+  const dilate = Math.max(0, Math.round(dilatePx ?? 0));
   try {
     const [baseImg, editImg] = await Promise.all([loadImage(baseDataUrl), loadImage(editDataUrl)]);
 
@@ -48,6 +52,13 @@ export async function compositeMaskedEdit(
     if (!mctx) return editDataUrl;
     mctx.clearRect(0, 0, width, height);
     mctx.fillStyle = 'rgba(255,255,255,1)';
+    if (dilate > 0) {
+      // 多角形はストローク（線幅 dilate*2）で外側へ dilate ぶん太らせる。矩形は各辺を dilate だけ拡張する。
+      mctx.strokeStyle = 'rgba(255,255,255,1)';
+      mctx.lineJoin = 'round';
+      mctx.lineCap = 'round';
+      mctx.lineWidth = dilate * 2;
+    }
     for (const p of placements) {
       if (p.points && p.points.length >= 3) {
         mctx.beginPath();
@@ -58,6 +69,14 @@ export async function compositeMaskedEdit(
         mctx.closePath();
         // nonzero（既定）で塗る: 手描き多角形が自己交差しても穴が空かず、領域を塗り潰す（260702）。
         mctx.fill('nonzero');
+        if (dilate > 0) mctx.stroke(); // 外側へ dilate ぶん膨張
+      } else if (dilate > 0) {
+        mctx.fillRect(
+          p.x * width - dilate,
+          p.y * height - dilate,
+          p.width * width + dilate * 2,
+          p.height * height + dilate * 2
+        );
       } else {
         mctx.fillRect(p.x * width, p.y * height, p.width * width, p.height * height);
       }
