@@ -1,14 +1,16 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef } from 'react';
 
 /**
  * スロットル付きカラー入力（260709）。
  * ネイティブ `<input type="color">` のスポイト（eyedropper）は、画面上をなぞる間 onChange を毎フレーム連続発火する。
  * これを直接 setMaterialSettings 等につなぐと、3Dビューの再レンダーが毎フレーム走り、（重い処理があると）メイン
- * スレッドが固まって画面が操作不能になる（クライアント報告：巾木/ドアのカラーをスポイトで変更すると固まる）。
+ * スレッドが固まる。→ 外部反映（重い状態更新）を throttleMs 間隔に間引く。
  *
- * 対策: 入力の見た目（value）はローカルstateで即時更新して連続プレビューを保ちつつ、外部への反映（onChange＝
- * 重い状態更新）はスロットルして最大でも throttleMs 間隔に間引く。最後の値は末尾コミットで確実に反映する。
- * これでスポイトを使っても 3D 更新は間引かれ、固まらない。
+ * さらに重要（260709 追修正）: 入力を「非制御（uncontrolled）」にする。
+ * 制御コンポーネント（value={...}）にして React 側から毎回 value を書き換えると、ネイティブのカラーピッカー/スポイトが
+ * 開いている最中に DOM 値を触ることになり、ピッカーが壊れて「スポイト使用後にクリック/ドラッグが拒否音とともに
+ * 効かなくなる（操作不能）」不具合が起きる。対策として、操作中（＝入力にフォーカスがある間）は React から value を
+ * 一切触らず、ブラウザにピッカーを任せる。外部で value が変わった場合のみ、フォーカスが外れているときに DOM 値を同期する。
  */
 export function ThrottledColorInput({
   value,
@@ -27,16 +29,20 @@ export function ThrottledColorInput({
   'aria-label'?: string;
   throttleMs?: number;
 }) {
-  const [local, setLocal] = useState(value);
+  const inputRef = useRef<HTMLInputElement>(null);
   const lastCommitRef = useRef(0);
   const pendingRef = useRef<string | null>(null);
   const timerRef = useRef<number | null>(null);
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
 
-  // 外部で value が変わったら（プロジェクト読込・別操作・コミット反映）ローカル表示へ同期する。
+  // 外部で value が変わったら DOM の値を同期する。ただし操作中（フォーカス中＝ピッカー/スポイトを開いている間）は
+  // React から input を触らない（ネイティブピッカーを乱してフリーズ/操作不能にしないため）。
   useEffect(() => {
-    setLocal(value);
+    const el = inputRef.current;
+    if (el && document.activeElement !== el && el.value !== value) {
+      el.value = value;
+    }
   }, [value]);
 
   const flush = useCallback(() => {
@@ -49,12 +55,11 @@ export function ThrottledColorInput({
 
   const handleChange = useCallback(
     (next: string) => {
-      setLocal(next); // 入力の見た目は即時（スポイトのプレビューを保つ）
+      // setState はしない＝入力（DOM）を React で再レンダーしない。スロットルして onChange だけ間引く。
       pendingRef.current = next;
       const now = Date.now();
       const elapsed = now - lastCommitRef.current;
       if (elapsed >= throttleMs) {
-        // 直近コミットから十分経過＝すぐ反映
         if (timerRef.current != null) {
           clearTimeout(timerRef.current);
           timerRef.current = null;
@@ -87,7 +92,8 @@ export function ThrottledColorInput({
   return (
     <input
       type="color"
-      value={local}
+      ref={inputRef}
+      defaultValue={value}
       onChange={(e) => e.target && handleChange(e.target.value)}
       className={className}
       disabled={disabled}

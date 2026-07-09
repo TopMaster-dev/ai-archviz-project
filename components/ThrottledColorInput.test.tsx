@@ -46,16 +46,34 @@ describe('ThrottledColorInput（スロットル・末尾コミット）', () => 
     expect(onChange).toHaveBeenLastCalledWith('#333333');
   });
 
-  it('入力の見た目(value)は連続変更で即時に追従する（プレビューを保つ）', () => {
+  it('操作中（フォーカス中）は、親の value 再レンダーで input の DOM 値を上書きしない（ネイティブピッカーを乱さない・拒否音/操作不能の防止）', () => {
     const onChange = vi.fn();
-    const { container } = render(
+    const { container, rerender } = render(
       <ThrottledColorInput value="#000000" onChange={onChange} throttleMs={80} />
     );
     const input = container.querySelector('input[type=color]') as HTMLInputElement;
+    // ユーザーがピッカー/スポイトで色を選んでいる状態を再現（フォーカス＋DOM値変更）。
     act(() => {
-      fireEvent.change(input, { target: { value: '#abcdef' } });
+      input.focus();
+      fireEvent.change(input, { target: { value: '#123456' } });
     });
-    // ローカル state 即時反映＝入力の表示値は最新
+    expect(input.value).toBe('#123456');
+    // フォーカス中に親が別 value で再レンダーしても、DOM 値は上書きされない（＝ネイティブピッカーを乱さない）。
+    act(() => {
+      rerender(<ThrottledColorInput value="#ffffff" onChange={onChange} throttleMs={80} />);
+    });
+    expect(input.value).toBe('#123456');
+  });
+
+  it('非フォーカス時は、外部の value 変更を input へ同期する（プロジェクト読込・別操作の反映）', () => {
+    const { container, rerender } = render(
+      <ThrottledColorInput value="#000000" onChange={() => {}} throttleMs={80} />
+    );
+    const input = container.querySelector('input[type=color]') as HTMLInputElement;
+    // フォーカスしていない状態（activeElement は body）で親が value を変更。
+    act(() => {
+      rerender(<ThrottledColorInput value="#abcdef" onChange={() => {}} throttleMs={80} />);
+    });
     expect(input.value).toBe('#abcdef');
   });
 });
