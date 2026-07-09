@@ -32,6 +32,7 @@ import * as THREE from 'three';
 import { useAiRenderer } from './hooks/useAiRenderer.js';
 import { useAiEditSession } from './hooks/useAiEditSession.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
+import { ThrottledColorInput } from './components/ThrottledColorInput.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
 import { EditorHelpButton } from './components/EditorHelpButton.js';
 import { OnboardingGuide } from './components/OnboardingGuide.js';
@@ -4106,7 +4107,7 @@ const App: React.FC = () => {
                                                                             <span className="text-[8px] text-neutral-500">円/m</span>
                                                                         </div>
                                                                         <div className="relative group/color border border-white/10 rounded-lg overflow-hidden w-6 h-6 shrink-0 cursor-pointer">
-                                                                            <input type="color" value={bbColor} onChange={(e) => e.target && setMaterialSettings(prev => ({ ...prev, [prodId]: { ...prev[prodId], baseboardColor: e.target.value } }))} className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer" />
+                                                                            <ThrottledColorInput value={bbColor} onChange={(v) => setMaterialSettings(prev => ({ ...prev, [prodId]: { ...prev[prodId], baseboardColor: v } }))} className="absolute -top-2 -left-2 w-10 h-10 cursor-pointer" />
                                                                         </div>
                                                                     </div>
                                                                 )}
@@ -4319,24 +4320,22 @@ const App: React.FC = () => {
                                             <>
                                               <div className="flex items-center justify-between">
                                                 <span className="text-[10px] text-neutral-300 font-bold">ドア色</span>
-                                                <input
-                                                  type="color"
+                                                <ThrottledColorInput
                                                   value={doorColor}
-                                                  onChange={(e) => setMaterialSettings((prev) => ({
+                                                  onChange={(v) => setMaterialSettings((prev) => ({
                                                     ...prev,
-                                                    [OPENINGS_MATERIAL_KEY]: { ...prev[OPENINGS_MATERIAL_KEY], doorColor: e.target.value },
+                                                    [OPENINGS_MATERIAL_KEY]: { ...prev[OPENINGS_MATERIAL_KEY], doorColor: v },
                                                   }))}
                                                   className="w-8 h-8 cursor-pointer rounded border border-white/10 bg-transparent"
                                                 />
                                               </div>
                                               <div className="flex items-center justify-between">
                                                 <span className="text-[10px] text-neutral-300 font-bold">ドア枠色</span>
-                                                <input
-                                                  type="color"
+                                                <ThrottledColorInput
                                                   value={doorFrameColor}
-                                                  onChange={(e) => setMaterialSettings((prev) => ({
+                                                  onChange={(v) => setMaterialSettings((prev) => ({
                                                     ...prev,
-                                                    [OPENINGS_MATERIAL_KEY]: { ...prev[OPENINGS_MATERIAL_KEY], doorFrameColor: e.target.value },
+                                                    [OPENINGS_MATERIAL_KEY]: { ...prev[OPENINGS_MATERIAL_KEY], doorFrameColor: v },
                                                   }))}
                                                   className="w-8 h-8 cursor-pointer rounded border border-white/10 bg-transparent"
                                                 />
@@ -4345,12 +4344,11 @@ const App: React.FC = () => {
                                           ) : (
                                             <div className="flex items-center justify-between">
                                               <span className="text-[10px] text-neutral-300 font-bold">窓枠色</span>
-                                              <input
-                                                type="color"
+                                              <ThrottledColorInput
                                                 value={windowFrameColor}
-                                                onChange={(e) => setMaterialSettings((prev) => ({
+                                                onChange={(v) => setMaterialSettings((prev) => ({
                                                   ...prev,
-                                                  [OPENINGS_MATERIAL_KEY]: { ...prev[OPENINGS_MATERIAL_KEY], windowFrameColor: e.target.value },
+                                                  [OPENINGS_MATERIAL_KEY]: { ...prev[OPENINGS_MATERIAL_KEY], windowFrameColor: v },
                                                 }))}
                                                 className="w-8 h-8 cursor-pointer rounded border border-white/10 bg-transparent"
                                               />
