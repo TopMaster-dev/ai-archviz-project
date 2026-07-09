@@ -6,6 +6,7 @@ import { UndoRedoBar } from '../UndoRedoBar.js';
 import { ShellNavProvider } from '../../lib/shell/shellNavContext.js';
 import { useProjectSessionContext } from '../../lib/project/projectSessionContext.js';
 import { LoadingOverlay } from '../LoadingOverlay.js';
+import { EyedropperOverlay } from '../EyedropperOverlay.js';
 import { useLoadingStore } from '../../lib/store/loadingStore.js';
 
 /**
@@ -79,6 +80,8 @@ export function AuthedShell({ children }: { children: ReactNode }) {
     <ShellNavProvider goHome={goHome} homeBusy={leavingHome}>
       {children}
       <LoadingOverlay />
+      {/* アプリ内スポイト（3D画面/画像から色取得）のオーバーレイ。エディタ全体で常設（260709）。 */}
+      <EyedropperOverlay />
       {/* 「ホームに戻る」は 2D/3D/AI 各ビューの ModeToggleBar 左端に統一（260623）。右上固定ボタンは廃止。 */}
       <ProjectSaveIndicator />
       <UndoRedoBar />

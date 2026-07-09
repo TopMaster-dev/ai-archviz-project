@@ -3,6 +3,7 @@ import { render, fireEvent, act, cleanup } from '@testing-library/react';
 import React from 'react';
 import { ThrottledColorInput } from './ThrottledColorInput.js';
 import { hexToHsv, hsvToHex } from '../utils/colorConvert.js';
+import { useEyedropper } from '../lib/store/eyedropperStore.js';
 
 /**
  * 自作カラーピッカー（260709）の契約テスト。
@@ -100,6 +101,24 @@ describe('ThrottledColorInput（自作ピッカー・ネイティブ入力なし
     const expected = hsvToHex(hexToHsv('#ece5d3').h, 1, 1);
     expect(hexInput.value).toBe(expected);
     expect(hexInput.value).not.toBe('#ece5d3');
+  });
+
+  it('スポイトボタン: ポップオーバーを閉じてアプリ内スポイトを開始し、取得色を反映する', () => {
+    useEyedropper.setState({ active: false, onPick: null });
+    const { trigger, onChange } = setup();
+    act(() => { fireEvent.click(trigger); });
+    const penBtn = document.querySelector('[aria-label="スポイトで色を取得"]') as HTMLButtonElement;
+    expect(penBtn).not.toBeNull();
+
+    act(() => { fireEvent.click(penBtn); });
+    // ポップオーバーは閉じ（3D画面をクリックできるように）、スポイトが開始される
+    expect(dialog()).toBeNull();
+    expect(useEyedropper.getState().active).toBe(true);
+
+    // 取得された色は onChange へ反映される
+    act(() => { useEyedropper.getState().pick('#abcdef'); });
+    expect(onChange).toHaveBeenLastCalledWith('#abcdef');
+    expect(useEyedropper.getState().active).toBe(false);
   });
 
   it('disabled のときは開かない', () => {

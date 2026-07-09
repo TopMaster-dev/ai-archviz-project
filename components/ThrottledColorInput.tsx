@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { Pipette } from 'lucide-react';
 import {
   clamp01,
   hexToHsv,
@@ -7,6 +8,7 @@ import {
   normalizeHex,
   type Hsv,
 } from '../utils/colorConvert.js';
+import { useEyedropper } from '../lib/store/eyedropperStore.js';
 
 /**
  * 3Dマテリアル用のカラー入力（260709 全面刷新）。
@@ -328,7 +330,7 @@ export function ThrottledColorInput({
               />
             </div>
 
-            {/* hex 入力 + 現在色プレビュー */}
+            {/* hex 入力 + 現在色プレビュー + スポイト */}
             <div className="mt-3 flex items-center gap-2">
               <div
                 aria-hidden="true"
@@ -344,6 +346,19 @@ export function ThrottledColorInput({
                 aria-label="カラーコード（hex）"
                 className="flex-1 min-w-0 rounded-md bg-neutral-800 border border-white/10 px-2 py-1 text-xs text-white font-mono uppercase focus:outline-none focus:border-emerald-400"
               />
+              <button
+                type="button"
+                onClick={() => {
+                  // ポップオーバーを閉じて 3D画面/画像 をクリックできるようにし、サンプリングを開始。
+                  setOpen(false);
+                  useEyedropper.getState().start((hex) => onChangeRef.current(hex));
+                }}
+                title="スポイト（3D画面や画像から色を取得）"
+                aria-label="スポイトで色を取得"
+                className="shrink-0 rounded-md border border-white/10 bg-neutral-800 p-1.5 text-neutral-300 hover:border-emerald-400 hover:text-white"
+              >
+                <Pipette size={16} />
+              </button>
             </div>
 
             {/* プリセット */}
