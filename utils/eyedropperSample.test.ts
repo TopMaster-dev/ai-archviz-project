@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
-import { mapPointToSourcePixel, findSamplableElement } from './eyedropperSample.js';
+import { describe, it, expect, afterEach } from 'vitest';
+import { mapPointToSourcePixel, findSamplableElement, findSamplableAtPoint } from './eyedropperSample.js';
 
 const rect = { left: 100, top: 50, width: 200, height: 100 };
 
@@ -58,5 +58,25 @@ describe('findSamplableElement', () => {
     expect(findSamplableElement(img)).toBe(img);
     expect(findSamplableElement(div)).toBeNull();
     expect(findSamplableElement(null)).toBeNull();
+  });
+});
+
+describe('findSamplableAtPoint', () => {
+  const orig = document.elementsFromPoint;
+  afterEach(() => { (document as unknown as { elementsFromPoint: unknown }).elementsFromPoint = orig; });
+
+  it('上に重なる非canvas要素（ツールチップ等）を飛ばして、下の canvas を拾う', () => {
+    const div = document.createElement('div');
+    const canvas = document.createElement('canvas');
+    (document as unknown as { elementsFromPoint: unknown }).elementsFromPoint = () => [div, canvas];
+    expect(findSamplableAtPoint(10, 10)).toBe(canvas);
+  });
+
+  it('スタックに canvas/img が無ければ null', () => {
+    (document as unknown as { elementsFromPoint: unknown }).elementsFromPoint = () => [
+      document.createElement('div'),
+      document.createElement('span'),
+    ];
+    expect(findSamplableAtPoint(10, 10)).toBeNull();
   });
 });

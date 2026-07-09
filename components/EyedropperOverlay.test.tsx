@@ -54,6 +54,26 @@ describe('EyedropperOverlay', () => {
     }
   });
 
+  it('サンプリング中は hover（pointermove/pointerover）を 3D へ伝播させない（ドア/窓の優先・ツールチップを止める）', () => {
+    render(<EyedropperOverlay />);
+    act(() => { useEyedropper.getState().start(() => {}); });
+    let leaked = false;
+    const onHover = () => { leaked = true; };
+    document.body.addEventListener('pointermove', onHover);
+    document.body.addEventListener('pointerover', onHover);
+    try {
+      act(() => {
+        document.body.dispatchEvent(new MouseEvent('pointermove', { bubbles: true }));
+        document.body.dispatchEvent(new MouseEvent('pointerover', { bubbles: true }));
+      });
+      expect(leaked).toBe(false); // capture の window リスナが stopImmediatePropagation で止める
+      expect(useEyedropper.getState().active).toBe(true); // hover ではサンプリングは終了しない
+    } finally {
+      document.body.removeEventListener('pointermove', onHover);
+      document.body.removeEventListener('pointerover', onHover);
+    }
+  });
+
   it('アンマウント時にサンプリング中でも解除される（ホームに戻る等）', () => {
     const { unmount } = render(<EyedropperOverlay />);
     act(() => { useEyedropper.getState().start(() => {}); });

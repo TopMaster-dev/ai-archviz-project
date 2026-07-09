@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useEyedropper } from '../lib/store/eyedropperStore.js';
-import { findSamplableElement, readPixelHex } from '../utils/eyedropperSample.js';
+import { findSamplableAtPoint, readPixelHex } from '../utils/eyedropperSample.js';
 
 /**
  * アプリ内スポイトのオーバーレイ（260709）。アプリに一度だけ常設する。
@@ -39,14 +39,18 @@ export function EyedropperOverlay() {
       e.stopPropagation();
       (e as unknown as { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.();
     };
+    // hover 系（move/over/out）は伝播だけ止める（preventDefault は不要でカーソルを乱さない）。
+    // これで 3D の当たり判定（ドア/窓のハイライト・「クリックで選択」ツールチップ・カーソル変更）が
+    // スポイト中は一切反応しなくなり、「ドア/窓が優先されて色を取れない」を防ぐ。
+    const block = (e: Event) => {
+      e.stopPropagation();
+      (e as unknown as { stopImmediatePropagation?: () => void }).stopImmediatePropagation?.();
+    };
 
     const onPointerDown = (e: PointerEvent) => {
       swallow(e);
-      const el =
-        typeof document.elementFromPoint === 'function'
-          ? document.elementFromPoint(e.clientX, e.clientY)
-          : null;
-      const target = findSamplableElement(el);
+      // DOM装飾（pointer-events:none のツールチップ等）が重なっていても、その下の canvas/img を拾う。
+      const target = findSamplableAtPoint(e.clientX, e.clientY);
       if (!target) {
         pending = { kind: 'cancel' };
         return;
@@ -85,11 +89,18 @@ export function EyedropperOverlay() {
     window.addEventListener('pointerup', onPointerUp, true);
     window.addEventListener('click', onClick, true);
     window.addEventListener('keydown', onKeyDown, true);
+    // hover を 3D へ渡さない（ドア/窓のハイライト・ツールチップ・カーソル変更を止める）
+    window.addEventListener('pointermove', block, true);
+    window.addEventListener('pointerover', block, true);
+    window.addEventListener('pointerout', block, true);
     return () => {
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('pointerup', onPointerUp, true);
       window.removeEventListener('click', onClick, true);
       window.removeEventListener('keydown', onKeyDown, true);
+      window.removeEventListener('pointermove', block, true);
+      window.removeEventListener('pointerover', block, true);
+      window.removeEventListener('pointerout', block, true);
       document.body.style.cursor = prevCursor;
     };
   }, [active]);

@@ -80,6 +80,30 @@ export function findSamplableElement(
 }
 
 /**
+ * クリック地点(client座標)にある要素を「上から順に」見て、最初の canvas/img を返す。
+ * pointer-events を持たない装飾DOM（ツールチップ等）が上に重なっていても、その下の
+ * 3Dキャンバス/画像を拾えるようにするため elementsFromPoint を使う（無ければ elementFromPoint）。
+ */
+export function findSamplableAtPoint(
+  clientX: number,
+  clientY: number
+): HTMLCanvasElement | HTMLImageElement | null {
+  if (typeof document === 'undefined') return null;
+  let list: Element[] = [];
+  if (typeof document.elementsFromPoint === 'function') {
+    list = document.elementsFromPoint(clientX, clientY);
+  } else if (typeof document.elementFromPoint === 'function') {
+    const el = document.elementFromPoint(clientX, clientY);
+    if (el) list = [el];
+  }
+  for (const el of list) {
+    const s = findSamplableElement(el);
+    if (s) return s;
+  }
+  return null;
+}
+
+/**
  * 表示中の canvas / img の、クリック位置のピクセル色を hex で返す。読めなければ null。
  * - 3D canvas は preserveDrawingBuffer:true なので drawImage で現在フレームを取得できる。
  * - クロスオリジン画像で getImageData が拒否（タインテッド）された場合などは null（安全に無視）。
