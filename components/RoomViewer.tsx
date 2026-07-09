@@ -2380,6 +2380,12 @@ const WallSegment: React.FC<{
   //     単一 THREE.Shape では非連結領域を表現できず境界に極薄の帯を残していた（腰壁分割線の継ぎ目/穴あけ破綻）。
   // 新: solidRectsForSegment でセグメント矩形−開口の実体矩形を求め、THREE.ShapeGeometry(配列) で描く。
   //     分断された柱も欠けず、穴が外周に接する退化ポリゴンも生じない。UVは頂点座標(m)＝実寸タイリングを維持。
+  // openingsInSegment / wallOpenings は親の map で毎レンダー新しい配列として作られる（内容は同じでも参照が毎回変わる）。
+  // これを useMemo 依存にそのまま入れると、巾木カラー変更のように「開口が変わらない再レンダー」でも壁/巾木ジオメトリを
+  // 毎回作り直して重くなる。スポイトの連続 onChange で毎フレーム再構築され画面が固まる不具合の原因（260709）。
+  // 内容ベースのキー（JSON 文字列）で依存を安定化し、開口が実際に変わったときだけ作り直す。
+  const openingsKey = JSON.stringify(openingsInSegment);
+  const wallOpeningsKey = JSON.stringify(wallOpenings);
   const wallShapes = useMemo(() => {
     // 開口をセグメントのローカル座標（中心原点・m）へ変換し、セグメント範囲へ縦クリップする。
     const localOpenings = openingsInSegment.map((op: Opening) => {
@@ -2405,15 +2411,88 @@ const WallSegment: React.FC<{
       s.lineTo(r.xL, r.yB);
       return s;
     });
-  }, [
-    lengthM,
-    actualWallH,
-    actualWallY,
-    segmentMinY,
-    segmentMaxY,
-    openingsInSegment,
-    isCCW,
-  ]);
+    // openingsInSegment は openingsKey（内容キー）で安定化して依存に入れている（参照ではなく内容で判定）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lengthM, actualWallH, actualWallY, segmentMinY, segmentMaxY, openingsKey, isCCW]);
+
+  // 巾木ジオメトリ（開口ぶんの穴あき ShapeGeometry）。以前は render 内で毎レンダー new していたため、巾木カラーを
+  // 変えるたびにジオメトリを作り直して重かった（スポイトの連続変更で画面が固まる主因・260709）。形状に関わる依存だけで
+  // useMemo 化し、色(bbColor)変更では作り直さない（色はマテリアルにのみ反映＝安価）。開口は wallOpeningsKey で内容安定化。
+  const baseboardGeometry = useMemo(() => {
+    if (!bbEnabled) return null;
+    const baseboardShape = new THREE.Shape();
+    baseboardShape.moveTo(-lengthM / 2, -bbHeightM / 2);
+    baseboardShape.lineTo(lengthM / 2, -bbHeightM / 2);
+    baseboardShape.lineTo(lengthM / 2, bbHeightM / 2);
+    baseboardShape.lineTo(-lengthM / 2, bbHeightM / 2);
+    baseboardShape.lineTo(-lengthM / 2, -bbHeightM / 2);
+
+    const baseboardMinY = yOffset;
+    const baseboardMaxY = yOffset + bbHeightM;
+    const bbHalfH = bbHeightM / 2;
+    const bbMinYL = -bbHalfH + HOLE_INSET_EPS_M;
+    const bbMaxYL = bbHalfH - HOLE_INSET_EPS_M;
+    const bbTopNoInsetYL = bbHalfH;
+    const bbMinXL = -lengthM / 2 + HOLE_INSET_EPS_M;
+    const bbMaxXL = lengthM / 2 - HOLE_INSET_EPS_M;
+
+    [...wallOpenings]
+      .sort((a: Opening, b: Opening) => a.ratioPosition - b.ratioPosition)
+      .forEach((op: Opening) => {
+        const openingMinY = getOpeningBottomM(op);
+        const openingMaxY = openingMinY + op.height / 1000;
+        const clippedBottom = Math.max(openingMinY, baseboardMinY);
+        const clippedTop = Math.min(openingMaxY, baseboardMaxY);
+        if (clippedBottom >= clippedTop) return;
+        const clippedHeight = clippedTop - clippedBottom;
+        if (clippedHeight <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+        const holeX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
+        const holeW = getEffectiveOpeningWidthMm(op) / 1000;
+        let hy = (clippedBottom + clippedTop) / 2 - (yOffset + bbHeightM / 2);
+        let hh = clippedHeight / 2;
+        let hx = holeX;
+        let hw = holeW / 2;
+
+        let yBot = hy - hh;
+        let yTop = hy + hh;
+        yBot = Math.max(yBot, bbMinYL);
+        // 壁との共有境界（baseboardMaxY）に接する穴だけは上端EPSを外し、境界スリバーを防ぐ
+        const touchesBaseboardTop = Math.abs(clippedTop - baseboardMaxY) <= HOLE_INSET_EPS_M;
+        yTop = Math.min(yTop, touchesBaseboardTop ? bbTopNoInsetYL : bbMaxYL);
+        if (yTop <= yBot) return;
+        hy = (yTop + yBot) / 2;
+        hh = (yTop - yBot) / 2;
+        if (hh * 2 <= MIN_WALL_HOLE_HEIGHT_M) return;
+
+        let xL = hx - hw;
+        let xR = hx + hw;
+        xL = Math.max(xL, bbMinXL);
+        xR = Math.min(xR, bbMaxXL);
+        if (xR <= xL) return;
+        hx = (xL + xR) / 2;
+        hw = (xR - xL) / 2;
+
+        const holePath = new THREE.Path();
+        holePath.moveTo(hx - hw, hy - hh);
+        holePath.lineTo(hx - hw, hy + hh);
+        holePath.lineTo(hx + hw, hy + hh);
+        holePath.lineTo(hx + hw, hy - hh);
+        holePath.lineTo(hx - hw, hy - hh);
+        baseboardShape.holes.push(holePath);
+      });
+
+    return new THREE.ShapeGeometry(baseboardShape);
+    // 開口は wallOpeningsKey（内容キー）で安定化。bbColor は意図的に依存に含めない（色でジオメトリを作り直さない）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bbEnabled, lengthM, bbHeightM, yOffset, wallOpeningsKey, isCCW]);
+
+  // 形状が変わって新しいジオメトリになった/アンマウント時は、古いジオメトリを破棄（GPUメモリのリーク防止・260709）。
+  useEffect(() => {
+    return () => {
+      baseboardGeometry?.dispose();
+    };
+  }, [baseboardGeometry]);
 
   return (
     <>
@@ -2487,92 +2566,26 @@ const WallSegment: React.FC<{
             );
           })}
 
-      {bbEnabled &&
-        (() => {
-          const baseboardShape = new THREE.Shape();
-          baseboardShape.moveTo(-lengthM / 2, -bbHeightM / 2);
-          baseboardShape.lineTo(lengthM / 2, -bbHeightM / 2);
-          baseboardShape.lineTo(lengthM / 2, bbHeightM / 2);
-          baseboardShape.lineTo(-lengthM / 2, bbHeightM / 2);
-          baseboardShape.lineTo(-lengthM / 2, -bbHeightM / 2);
-
-          const baseboardMinY = yOffset;
-          const baseboardMaxY = yOffset + bbHeightM;
-          const bbHalfH = bbHeightM / 2;
-          const bbMinYL = -bbHalfH + HOLE_INSET_EPS_M;
-          const bbMaxYL = bbHalfH - HOLE_INSET_EPS_M;
-          const bbTopNoInsetYL = bbHalfH;
-          const bbMinXL = -lengthM / 2 + HOLE_INSET_EPS_M;
-          const bbMaxXL = lengthM / 2 - HOLE_INSET_EPS_M;
-
-          [...wallOpenings]
-            .sort((a: Opening, b: Opening) => a.ratioPosition - b.ratioPosition)
-            .forEach((op: Opening) => {
-            const openingMinY = getOpeningBottomM(op);
-            const openingMaxY = openingMinY + op.height / 1000;
-            const clippedBottom = Math.max(openingMinY, baseboardMinY);
-            const clippedTop = Math.min(openingMaxY, baseboardMaxY);
-            if (clippedBottom >= clippedTop) return;
-            const clippedHeight = clippedTop - clippedBottom;
-            if (clippedHeight <= MIN_WALL_HOLE_HEIGHT_M) return;
-
-            const holeX = openingRatioToWallLocalX(op.ratioPosition, lengthM, isCCW);
-            const holeW = getEffectiveOpeningWidthMm(op) / 1000;
-            let hy = (clippedBottom + clippedTop) / 2 - (yOffset + bbHeightM / 2);
-            let hh = clippedHeight / 2;
-            let hx = holeX;
-            let hw = holeW / 2;
-
-            let yBot = hy - hh;
-            let yTop = hy + hh;
-            yBot = Math.max(yBot, bbMinYL);
-            // 壁との共有境界（baseboardMaxY）に接する穴だけは上端EPSを外し、境界スリバーを防ぐ
-            const touchesBaseboardTop = Math.abs(clippedTop - baseboardMaxY) <= HOLE_INSET_EPS_M;
-            yTop = Math.min(yTop, touchesBaseboardTop ? bbTopNoInsetYL : bbMaxYL);
-            if (yTop <= yBot) return;
-            hy = (yTop + yBot) / 2;
-            hh = (yTop - yBot) / 2;
-            if (hh * 2 <= MIN_WALL_HOLE_HEIGHT_M) return;
-
-            let xL = hx - hw;
-            let xR = hx + hw;
-            xL = Math.max(xL, bbMinXL);
-            xR = Math.min(xR, bbMaxXL);
-            if (xR <= xL) return;
-            hx = (xL + xR) / 2;
-            hw = (xR - xL) / 2;
-
-            const holePath = new THREE.Path();
-            holePath.moveTo(hx - hw, hy - hh);
-            holePath.lineTo(hx - hw, hy + hh);
-            holePath.lineTo(hx + hw, hy + hh);
-            holePath.lineTo(hx + hw, hy - hh);
-            holePath.lineTo(hx - hw, hy - hh);
-            baseboardShape.holes.push(holePath);
-          });
-
-          const baseboardGeometry = new THREE.ShapeGeometry(baseboardShape);
-
-          return (
-            <mesh
-              position={[0, yOffset + bbHeightM / 2, 0]}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey);
-              }}
-              onPointerOver={(e) => {
-                e.stopPropagation();
-                onHoverNameChange?.(subWallName);
-              }}
-              onPointerOut={() => onHoverNameChange?.(null)}
-              castShadow={shadowEnabled}
-              receiveShadow={shadowEnabled}
-            >
-              <primitive object={baseboardGeometry} attach="geometry" />
-              <meshStandardMaterial color={bbColor} side={THREE.DoubleSide} roughness={0.7} />
-            </mesh>
-          );
-        })()}
+      {bbEnabled && baseboardGeometry && (
+        <mesh
+          position={[0, yOffset + bbHeightM / 2, 0]}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (!isDraggingRef.current) onMeshClick('Wall', subWallName, e.shiftKey);
+          }}
+          onPointerOver={(e) => {
+            e.stopPropagation();
+            onHoverNameChange?.(subWallName);
+          }}
+          onPointerOut={() => onHoverNameChange?.(null)}
+          castShadow={shadowEnabled}
+          receiveShadow={shadowEnabled}
+        >
+          {/* ジオメトリは useMemo 済み（形状が変わったときだけ再構築）。色はマテリアルにだけ反映＝カラー変更は安価。 */}
+          <primitive object={baseboardGeometry} attach="geometry" />
+          <meshStandardMaterial color={bbColor} side={THREE.DoubleSide} roughness={0.7} />
+        </mesh>
+      )}
     </>
   );
 };
@@ -2595,6 +2608,9 @@ const UpperBandSegment: React.FC<{
 }> = ({ length, bandM, yTop, openings, isCCW, selections, materialSettings, captureStep, shadowEnabled, isDraggingRef, onMeshClick, onHoverNameChange }) => {
   const ref = useRef<THREE.Mesh>(null);
   // 上部壁バンドも窓・ドアの開口を差し引く（巾木/壁と同じ処理）。これがないと開口の上部が箱で覆われる（260623）。
+  // openings は親から毎レンダー新しい配列（.filter 済み）で渡るため、参照依存だとカラー変更等の再レンダーでも
+  // バンドジオメトリを作り直して重い（スポイト連続変更で固まる一因・260709）。内容キーで安定化する。
+  const openingsKey = JSON.stringify(openings);
   const bandGeometry = useMemo(() => {
     const shape = new THREE.Shape();
     shape.moveTo(-length / 2, -bandM / 2);
@@ -2655,7 +2671,16 @@ const UpperBandSegment: React.FC<{
         shape.holes.push(holePath);
       });
     return new THREE.ShapeGeometry(shape);
-  }, [length, bandM, yTop, openings, isCCW]);
+    // openings は openingsKey（内容キー）で安定化して依存に入れている（毎レンダーの新規配列では作り直さない・260709）。
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [length, bandM, yTop, openingsKey, isCCW]);
+
+  // 形状が変わって新しいジオメトリになった/アンマウント時は、古いジオメトリを破棄（GPUメモリのリーク防止・260709）。
+  useEffect(() => {
+    return () => {
+      bandGeometry?.dispose();
+    };
+  }, [bandGeometry]);
 
   return (
     <mesh
