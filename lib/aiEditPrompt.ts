@@ -152,8 +152,12 @@ ${MODE_INSTRUCTIONS[mode]}${overlapNote}
 `.trim();
 }
 
-/** 「継ぎ目をなじませる（全体を1枚に均一化）」仕上げパスの有効化フラグ（キルスイッチ・260706）。false で UI から隠す。 */
-export const ENABLE_HARMONIZE_FLATTEN = true;
+/**
+ * 「継ぎ目をなじませる（全体を1枚に均一化）」仕上げパスの有効化フラグ（キルスイッチ・260706）。false で UI から隠す。
+ * 260710 クライアント要望により非表示（false）。継ぎ目は常時オンの決定論的な境界なじませ（harmonizeEditToBase＝①）
+ * で対応済みのため、この任意の全体再生成パス（②）は UI から隠す。コードは将来のロールバック用に残置。
+ */
+export const ENABLE_HARMONIZE_FLATTEN = false;
 
 /**
  * 「継ぎ目をなじませる」全体仕上げパス用プロンプト（260706 クライアント提案）。
