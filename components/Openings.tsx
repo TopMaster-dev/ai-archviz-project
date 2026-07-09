@@ -149,7 +149,7 @@ export const ParametricDoor: React.FC<DoorProps> = ({
   depth = OPENING_DEPTH_M,
   type = 'door_single',
   doorColor = '#ffffff', // 既定を白に（巾木の既定色に合わせる・260709）
-  frameColor = '#444',
+  frameColor = '#ece5d3', // 既定を白に近いベージュに（白いドアと少し差をつける・260709）
   handleColor = '#ffd700',
   swingFlipX,
   swingFlipY,

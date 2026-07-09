@@ -2873,7 +2873,7 @@ const SketchRoom = ({
                 const bbColor = matSettings.baseboardColor ?? '#ffffff';
                 const openingStyle = materialSettings.__openings__ ?? {};
                 const doorColor = openingStyle.doorColor ?? '#ffffff'; // 既定を白に（巾木の既定色に合わせる・260709）
-                const doorFrameColor = openingStyle.doorFrameColor ?? '#444';
+                const doorFrameColor = openingStyle.doorFrameColor ?? '#ece5d3'; // 既定を白に近いベージュに（白いドアと少し差をつける・260709）
                 const windowFrameColor = openingStyle.windowFrameColor ?? '#333';
 
                 const actualWallH = bbEnabled ? segHeight - bbHeightM : segHeight;
