@@ -2872,7 +2872,7 @@ const SketchRoom = ({
                 const bbHeightM = Math.min(Math.max(0, (matSettings.baseboardHeight ?? 60) / 1000), Math.max(0, segHeight - 0.001));
                 const bbColor = matSettings.baseboardColor ?? '#ffffff';
                 const openingStyle = materialSettings.__openings__ ?? {};
-                const doorColor = openingStyle.doorColor ?? '#8b4513';
+                const doorColor = openingStyle.doorColor ?? '#ffffff'; // 既定を白に（巾木の既定色に合わせる・260709）
                 const doorFrameColor = openingStyle.doorFrameColor ?? '#444';
                 const windowFrameColor = openingStyle.windowFrameColor ?? '#333';
 

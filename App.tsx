@@ -4125,7 +4125,7 @@ const App: React.FC = () => {
                                     const op = activeOpening;
                                     const isDoorOpening = op.type.startsWith('door');
                                     const openingSettings = materialSettings[OPENINGS_MATERIAL_KEY] || {} as any;
-                                    const doorColor = openingSettings.doorColor ?? '#8b4513';
+                                    const doorColor = openingSettings.doorColor ?? '#ffffff'; // 既定を白に（巾木の既定色に合わせる・260709）
                                     const doorFrameColor = openingSettings.doorFrameColor ?? '#444';
                                     const windowFrameColor = openingSettings.windowFrameColor ?? '#333';
 
