@@ -31,7 +31,7 @@ import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
-import { shouldCompositeAreaEdit } from '../utils/areaEditDecision.js';
+import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
 import {
   unionBBoxOfPlacements,
   padBBox,
@@ -39,7 +39,7 @@ import {
   snapCropToAspect,
   remapPlacementsToCrop,
   shouldCropRegion,
-  isLargeRegion,
+  isConfinedRegion,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -565,15 +565,15 @@ export function AiEditWorkspace({
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
       const allPlacements = draftObjects.flatMap((o) => o.placements);
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
-      // 参照画像を伴う配置があるか（家具の追加/差し替え）。テキストのみ（既存内容の変更）では合成せず全画面のまま
-      // 採用し、領域境界の継ぎ目を出さない（260710・shouldCompositeAreaEdit 参照）。
-      const hasReferenceImage = objectsScaled.some((o) => !!o.imageDataUrl);
+      // 囲みの被覆率（幾何）で経路を決める（260711・参照画像の有無ではなく“範囲外を守るべきか”で判定）。
+      // 実質全画面（被覆≥GLOBAL）＝守る外がほぼ無い→全画面直（継ぎ目なし）。それ未満は範囲外を必ず守る。
+      const unionCoverage = unionBBox ? unionBBox.w * unionBBox.h : 1;
+      const isGlobalRegion = allPlacements.length > 0 && unionCoverage >= GLOBAL_REGION_COVERAGE;
 
-      // 生成前の事前解析（対象の説明＋遮蔽判定 occluded・260709 クライアント要望）。目的: 「対象が別の家具の後ろに
-      // 隠れている（occluded）とき」だけ切り取り方式（案1）に切り替え、狙った対象を確実に編集する。通常は自然な全画面（案2）。
-      // narratives は生成本体へ渡して再解析を省く（二重解析回避）。解析失敗は非クロップ（自然）で続行。
+      // 生成前の事前解析（対象の説明 narratives・260709）。クロップ経路の出し分けは被覆率（幾何・isConfinedRegion）で
+      // 決めるようになった（260711）ので、この解析は「どの対象を編集するか」の特定補助に使う（遮蔽判定は今は使わない）。
+      // narratives は生成本体へ渡して再解析を省く（二重解析回避）。解析失敗は narratives 無しで続行。
       let narratives: Record<string, string> = {};
-      let occluded: Record<string, boolean> = {};
       try {
         // 事前解析は /api/ai-edit に analyze:true で相乗り（Hobbyプランのサーバレス関数数上限=12 対策・専用
         // エンドポイントを増やさない・260709）。遮蔽判定はベース画像＋範囲（座標）だけで足りるので、参照画像
@@ -590,16 +590,16 @@ export function AiEditWorkspace({
         const adata = await ares.json();
         if (adata?.success) {
           narratives = adata.narratives ?? {};
-          occluded = adata.occluded ?? {};
         }
       } catch {
         /* 解析失敗は非クロップ（自然）で続行 */
       }
 
-      // 案1（切り取り）を使うのは「対象が隠れている（occluded）とき」だけ。加えてクロップが利く小さめの領域に限定
-      // （大領域はクロップ利得が無く継ぎ目も大きい→自然のまま）。それ以外は全画面の自然生成（案2）。
-      const anyOccluded = draftObjects.some((o) => occluded[o.id] === true);
-      const useCrop = anyOccluded && !!unionBBox && !isLargeRegion(unionBBox);
+      // クロップ（案1）は「囲みが局所（isConfinedRegion）」なら常時使う（260711・以前は遮蔽時だけ）。
+      // 囲みの範囲だけをモデルへ送る＝範囲外の画素はモデルに渡らない＝範囲外は物理的に絶対変わらない
+      // （クライアント「範囲内の椅子を消したのに範囲外の椅子が消えた」＝閉じ込め破れの恒久対策）。
+      // クロップ内の対象は一意なので取り違えも起きにくい。遮蔽解析(narratives)は対象特定に引き続き利用。
+      const useCrop = !!unionBBox && isConfinedRegion(unionBBox);
 
       let cropPx: CropPx | null = null;
       if (useCrop && unionBBox) {
@@ -626,7 +626,7 @@ export function AiEditWorkspace({
         imageSize,
         learnedHints,
         // 切り取り（案1）のときは範囲に厳密＝strict、通常（自然）は soft でプロンプトの言い回しを一致させる。
-        strictConfine: !!cropPx,
+        strictConfine: !!cropPx || (allPlacements.length > 0 && !isGlobalRegion),
         // 事前解析は解析済みを渡して再解析を省く（二重解析回避）。クロップ時は座標系が変わるが説明は対象識別用（参考）なので流用可。
         ...(Object.keys(narratives).length > 0 ? { placementNarratives: narratives } : {}),
       };
@@ -643,10 +643,9 @@ export function AiEditWorkspace({
 
       let outUrl = data.url as string;
       // 編集結果の後処理。
-      // ・案1（cropPx あり＝対象が隠れているとき）: 切り取り編集をベースへ貼り戻し→境界を決定論でなじませ（①）→
-      //   多角形でクリップ合成。範囲外＝ベース画像のまま（バイト保持）＝他は一切変えない。境界は羽根ぼかし＋色合わせ
-      //   で目立たなくする（クライアント選択: ①中心＝他を絶対に変えない）。
-      // ・通常（自然）: 全画面生成をそのまま採用（合成しない＝陰影・パースがなじむ）。
+      // ・案1（cropPx あり＝囲みが局所 isConfinedRegion のとき・260711）: 切り取り編集をベースへ貼り戻し→境界を
+      //   決定論でなじませ（①）→クロップ矩形でクリップ合成。範囲外はモデルへ送っていない＝バイト保持で一切変えない。
+      // ・全画面（大領域/実質全画面）: 被覆 < 0.85 は合成して範囲外をベース復元、≥ 0.85 は全画面のまま採用。
       if (cropPx) {
         // 合成マスクは「囲った多角形」ではなく「クロップ矩形（対象＋余白）」を使う（260709 クライアント報告
         // 「差し替えた椅子が全部表示されない＝見切れる」対策）。多角形で切り抜くと、差し替え家具が元の小さな囲み
@@ -669,16 +668,21 @@ export function AiEditWorkspace({
       } else {
         // 全画面生成をベース寸法へ整える。アスペクト差が大きいときだけ contain（差し替え家具が欠けないように）。
         const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
+        // 囲まれた範囲（局所・非全画面）は「範囲外を絶対に変えない」を最優先（クライアント必須指摘260711）。
+        // contain（レターボックス）は座標がズレるため合成をスキップ＝全画面をそのまま採用＝範囲外が変わりうる。
+        // よって bounded（placementあり＆非グローバル）のときは常に cover に固定し、必ず合成→範囲外をベース復元する。
+        // 代償: モデルがアスペクトを大きく外した稀ケースで差し替え家具の縁が欠けうるが、閉じ込め＞完全表示（①）。
+        const isBoundedRegion = allPlacements.length > 0 && !isGlobalRegion;
         const mode: 'cover' | 'contain' =
-          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
+          !isBoundedRegion && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
         const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, mode);
-        // 合成する/しないの判定は shouldCompositeAreaEdit（260710）に集約。
-        // ・テキストのみ（参照画像なし＝既存内容の変更：窓を昼に／照明を追加 等）→ 合成せず全画面のまま採用＝
-        //   領域境界の継ぎ目を出さない（260707 の挙動に戻す・クライアント致命報告260710対応）。
-        // ・参照画像あり（家具の追加/差し替え）→ 囲った領域だけを合成（マスク外はベース固定）＝湧き出し防止（260709）。
+        // 合成する/しないの判定は shouldCompositeAreaEdit（被覆率基準・260711）に集約。
+        // ・囲まれた範囲（被覆 < 0.85）→ 参照画像の有無を問わず必ず合成（マスク外をベースへ厳密復元）＝範囲外を
+        //   絶対に変えない（クライアント致命報告260711「範囲内の椅子を消したら範囲外の椅子が消えた」対応）。
+        //   ※ さらに小さい範囲（被覆 < 0.6）はそもそも上流で crop 経路に回り、範囲外をモデルへ送らない。
+        // ・実質全画面（被覆 ≥ 0.85）→ 守る外がほぼ無いので全画面のまま採用＝継ぎ目なし（260707 挙動を温存）。
         //   膨張(dilate)は差し替え家具が囲みの縁で切れるのを防ぐ生成ズレ吸収（隙間を橋渡ししない小ささ）。
-        // ・contain（レターボックス）時は座標がズレるため合成しない。
-        if (shouldCompositeAreaEdit({ hasReferenceImage, placementCount: allPlacements.length, fitMode: mode })) {
+        if (shouldCompositeAreaEdit({ placementCount: allPlacements.length, fitMode: mode, unionCoverage })) {
           const dilate = Math.round(Math.max(baseW, baseH) * 0.01); // ≈10px@1024（隙間を橋渡ししない小ささ＋生成ズレ吸収）
           const feather = Math.round(Math.max(baseW, baseH) * 0.008);
           const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);

@@ -36,6 +36,18 @@ export function isLargeRegion(bbox: BBox01, threshold = LARGE_REGION_COVERAGE): 
   return bbox.w * bbox.h >= threshold;
 }
 
+/**
+ * 「囲みが局所か」＝クロップして“範囲外の画素をモデルへ送らずに済む”か（260711・確実な閉じ込め用）。
+ * 局所ならクロップ経路にする＝範囲外は物理的にモデルへ渡らない＝範囲外は絶対に変わらない（クライアント
+ * 「範囲内の椅子を消したのに範囲外の椅子が消えた」＝閉じ込め破れの恒久対策）。加えてクロップ内の対象は
+ * 一意なので「どの対象を編集するか」の取り違えも起きにくい。被覆がこのしきい値以上（＝ほぼ全画面）なら
+ * 守るべき“外”がほぼ無いので全画面直（継ぎ目なし・260707 挙動）に任せる。純関数。
+ */
+export const CONFINED_MAX_COVERAGE = 0.6;
+export function isConfinedRegion(bbox: BBox01, threshold = CONFINED_MAX_COVERAGE): boolean {
+  return bbox.w * bbox.h < threshold;
+}
+
 /** 正規化 0..1 の矩形。 */
 export interface BBox01 {
   x: number;
