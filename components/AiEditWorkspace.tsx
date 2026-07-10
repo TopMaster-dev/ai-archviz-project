@@ -44,7 +44,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
-import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_HYBRID } from '../lib/aiEditPrompt.js';
+import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -171,23 +171,6 @@ type Props = {
   /** 使い方ガイドを開く（260624: AI画像編集にも「?」を出し、2D/3D 同様に見返せるように）。 */
   onOpenGuide?: () => void;
 };
-
-/**
- * 版チェーンの根（最初のレンダー・parentId=null）を返す（260708「元の画像から編集」＝画質を保つ用）。
- * 各編集は直近の出力を土台に連なるため、繰り返すと画質が徐々に劣化する。根＝最初の高画質レンダーを土台に
- * すれば劣化を避けられる（ただしそれまでの編集は引き継がない）。訪問済みを追跡し循環参照でも無限ループしない。
- */
-function findRootVersion(versions: AiEditVersion[], v: AiEditVersion | null): AiEditVersion | null {
-  if (!v) return null;
-  const byId = new Map(versions.map((x) => [x.id, x]));
-  let cur: AiEditVersion = v;
-  const seen = new Set<string>();
-  while (cur.parentId && byId.has(cur.parentId) && !seen.has(cur.id)) {
-    seen.add(cur.id);
-    cur = byId.get(cur.parentId)!;
-  }
-  return cur;
-}
 
 export function AiEditWorkspace({
   isOpen,
@@ -554,13 +537,8 @@ export function AiEditWorkspace({
     try {
       // 土台（base）は従来どおり直近の画像＝連続編集のワークフローを維持する。
       const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
-      // 画質を保つ（260708 ハイブリッド）: keepQuality=ON かつ根（最初のレンダー）が別にあれば、その高画質画像を
-      // 「画質・素材・質感の見本」として一緒に渡す（形・位置・変更は直近画像に従い、見本は画質参照のみ）。
-      const rootVersion = keepQuality ? findRootVersion(versions, activeVersion) : null;
-      const qualityRefUrl =
-        rootVersion && rootVersion.id !== activeVersion.id
-          ? await downscaleDataUrlIfNeeded(await ensureDataUrl(rootVersion.outputImageDataUrl))
-          : null;
+      // 「画質を高める」は 2枚目の見本画像を渡す旧方式を廃止（ゴースト原因・260710）。生成後に現在の1枚だけを
+      // 精細化する後処理パス（enhanceDetail）に置換したため、ここでは見本画像を一切用意しない。
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       // 生成サイズは動作実績のある AIレンダリングと同じプレビュー用(1K)に揃える。2K のままだと新しい画像
@@ -651,8 +629,6 @@ export function AiEditWorkspace({
         strictConfine: !!cropPx,
         // 事前解析は解析済みを渡して再解析を省く（二重解析回避）。クロップ時は座標系が変わるが説明は対象識別用（参考）なので流用可。
         ...(Object.keys(narratives).length > 0 ? { placementNarratives: narratives } : {}),
-        // 画質を保つ（260708 ハイブリッド）: 最初のレンダー画像を「画質・素材・質感の見本」として渡す（あれば）。
-        ...(qualityRefUrl ? { qualityRefImage: qualityRefUrl } : {}),
       };
 
       const res = await fetch('/api/ai-edit', {
@@ -734,6 +710,30 @@ export function AiEditWorkspace({
           }
         } catch {
           /* 均一化失敗は無視＝合成結果をそのまま使う */
+        }
+      }
+      // 「画質を高める（仕上げに精細化）」（260710）: keepQuality=ON のとき、確定した結果の“現在の1枚だけ”を
+      // もう一度AIに通し、構図・家具・色を変えずに素材の質感と輪郭のキレだけを引き上げる。見本画像（2枚目）は
+      // 一切渡さない＝重ね焼き（ゴースト）が構造的に起きない。失敗時は元の結果をそのまま使う（best-effort）。
+      if (ENABLE_KEEP_QUALITY_ENHANCE && keepQuality) {
+        try {
+          const eres = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({
+              baseImage: outUrl,
+              enhanceDetail: true,
+              aspectRatio: pickClosestAspectRatio(baseW, baseH),
+              imageSize, // 1K 据え置き（2K はこのモデルで白っぽくぼやける既知事象）
+            }),
+          });
+          const edata = await eres.json();
+          if (edata.success && edata.url) {
+            void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+            outUrl = await fitDataUrlToSize(edata.url as string, baseW, baseH, 'cover');
+          }
+        } catch {
+          /* 精細化失敗は無視＝元の結果をそのまま使う */
         }
       }
       // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
@@ -1867,10 +1867,9 @@ export function AiEditWorkspace({
                   </span>
                 </label>
               )}
-              {/* 画質を保つ（ハイブリッド・260708）: 土台は直近の画像のまま連続編集を維持しつつ、最初のレンダー画像を
-                  「画質・素材の見本」として毎回渡す。260710: 最初のレンダーと現在の構図が異なるとパースが二枚重なる
-                  破綻が出るため、キルスイッチ ENABLE_KEEP_QUALITY_HYBRID=false で UI から隠す（コードは残置）。 */}
-              {activeTool === 'area' && ENABLE_KEEP_QUALITY_HYBRID && (
+              {/* 画質を高める（精細化・260710）: 旧「見本画像を2枚目として添付」方式（ゴースト原因）を廃止し、
+                  生成後に現在の1枚だけをAIで精細化する後処理に刷新。2枚目を渡さないのでゴースト/二重は起きない。 */}
+              {activeTool === 'area' && ENABLE_KEEP_QUALITY_ENHANCE && (
                 <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1880,8 +1879,8 @@ export function AiEditWorkspace({
                     disabled={isSubmitting}
                   />
                   <span className="text-[11px] leading-snug text-neutral-300">
-                    <span className="font-bold text-neutral-100">画質を保つ（元画像を見本にする）</span>
-                    <span className="block text-neutral-500">編集はこれまでどおり直近の画像から続けつつ、最初のレンダリング画像を「画質・素材の見本」として一緒に渡します。編集を繰り返して画質が落ちてきたときにON（これまでの編集内容は引き継がれます）。</span>
+                    <span className="font-bold text-neutral-100">画質を高める（仕上げに精細化）</span>
+                    <span className="block text-neutral-500">生成後に、構図・家具・配置・色を一切変えずに、ぼやけ・のっぺりを抑えて素材の精細感だけを引き上げます。編集を繰り返して画質が落ちてきたときにON（もう一度AIを通すため少し時間がかかります）。</span>
                   </span>
                 </label>
               )}

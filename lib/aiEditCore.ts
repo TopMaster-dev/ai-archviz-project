@@ -19,6 +19,8 @@ export interface AiEditRequestBody {
   imageSize?: string;
   coordinate?: boolean;
   harmonize?: boolean;
+  /** 画質を高める（精細化）パス（260710）。true のときベース1枚のみを、内容を変えず精細化する。 */
+  enhanceDetail?: boolean;
   learnedHints?: unknown;
   /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
   strictConfine?: boolean;
@@ -51,6 +53,8 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
   const coordinate = body.coordinate === true;
   // 継ぎ目なじませ（全体を1枚に均一化）パス（260706）: ベース1枚だけを入力に均一化する。個別入力は不要。
   const harmonize = body.harmonize === true;
+  // 画質を高める（精細化）パス（260710）: ベース1枚だけを入力に精細化する。個別入力は不要（見本画像は渡さない＝ゴースト無し）。
+  const enhanceDetail = body.enhanceDetail === true;
   // in-context反映（row 211/219）: 過去の高評価傾向。プロンプト末尾に参考添付。
   const learnedHints = Array.isArray(body.learnedHints)
     ? body.learnedHints.filter((h): h is string => typeof h === 'string' && h.trim().length > 0).slice(0, 5)
@@ -88,7 +92,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       o.placementMemos.some((m) => m.trim().length > 0)
   );
   const areaPlacementCount = objects.reduce((sum, o) => sum + o.placements.length, 0);
-  if (!coordinate && !harmonize && !hasSituationInput && !hasAreaEditInput) {
+  if (!coordinate && !harmonize && !enhanceDetail && !hasSituationInput && !hasAreaEditInput) {
     return {
       success: false,
       status: 400,
@@ -121,7 +125,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
     }
     if (Object.keys(cleaned).length > 0) placementNarratives = cleaned;
   }
-  if (!placementNarratives && !harmonize && objects.length > 0) {
+  if (!placementNarratives && !harmonize && !enhanceDetail && objects.length > 0) {
     const analysis = await generatePlacementNarratives(apiKey, {
       baseImageDataUrl: body.baseImage,
       objects,
@@ -143,6 +147,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       placementNarratives,
       coordinate,
       harmonize,
+      enhanceDetail,
       learnedHints,
       strictConfine: body.strictConfine === true,
       qualityRefImageDataUrl,

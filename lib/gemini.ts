@@ -1,5 +1,5 @@
 import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
-import { buildAiEditReferenceGuide, buildHarmonizePrompt, describeObjectPlacements } from './aiEditPrompt.js';
+import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildEnhanceDetailPrompt, describeObjectPlacements } from './aiEditPrompt.js';
 import { resolveAgentRecommendations } from './agentCatalog.js';
 import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './agentAttachments.js';
 
@@ -362,24 +362,31 @@ export async function generateGeminiImageEdit(
     learnedHints?: string[];
     /** 継ぎ目なじませ（全体を1枚に均一化）パス（260706）。true のとき創作系を使わずベース1枚のみを均一化する。 */
     harmonize?: boolean;
+    /** 画質を高める（精細化）パス（260710）。true のときベース1枚のみを、内容を変えずに精細化する（見本画像は渡さない）。 */
+    enhanceDetail?: boolean;
     /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
     strictConfine?: boolean;
     /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
     qualityRefImageDataUrl?: string | null;
   }
 ): Promise<{ url: string; usage: TokenUsage | null }> {
+  // 単一画像パス（harmonize=継ぎ目なじませ / enhanceDetail=精細化）: ベース1枚だけを入力にする＝
+  // スタイル・見本・オブジェクト参照など2枚目以降を一切添付しない（＝重ね焼き＝ゴーストが構造的に起きない）。
+  const singlePass = !!params.harmonize || !!params.enhanceDetail;
   // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
-  const styleUrls = params.harmonize
+  const styleUrls = singlePass
     ? []
     : params.styleImageDataUrls && params.styleImageDataUrls.length > 0
       ? params.styleImageDataUrls
       : params.styleImageDataUrl
         ? [params.styleImageDataUrl]
         : [];
-  // 画質を保つ見本（最初のレンダー）は均一化パスでは使わない。
-  const qualityRefUrl = params.harmonize ? null : params.qualityRefImageDataUrl || null;
+  // 見本（最初のレンダー）は単一画像パスでは使わない。
+  const qualityRefUrl = singlePass ? null : params.qualityRefImageDataUrl || null;
   const instruction = params.harmonize
     ? buildHarmonizePrompt()
+    : params.enhanceDetail
+    ? buildEnhanceDetailPrompt()
     : buildAiEditReferenceGuide({
         hasStyle: styleUrls.length > 0,
         styleImageCount: styleUrls.length,
@@ -418,7 +425,7 @@ export async function generateGeminiImageEdit(
     });
   }
 
-  if (!params.harmonize) {
+  if (!singlePass) {
     for (const o of params.objects) {
       if (!o.imageDataUrl) continue;
       const ob = parseImageDataUrl(o.imageDataUrl);
@@ -439,8 +446,8 @@ export async function generateGeminiImageEdit(
       },
     ],
     generationConfig: {
-      // 均一化は最小変更＝低温度で（構図/内容を動かさない）。
-      temperature: params.harmonize ? 0.1 : 0.25,
+      // 均一化・精細化は最小変更＝低温度で（構図/内容を動かさない）。
+      temperature: params.harmonize ? 0.1 : params.enhanceDetail ? 0.12 : 0.25,
       responseModalities: ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio,
