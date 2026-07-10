@@ -31,6 +31,7 @@ import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
+import { shouldCompositeAreaEdit } from '../utils/areaEditDecision.js';
 import {
   unionBBoxOfPlacements,
   padBBox,
@@ -43,7 +44,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
-import { ENABLE_HARMONIZE_FLATTEN } from '../lib/aiEditPrompt.js';
+import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_HYBRID } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -586,6 +587,9 @@ export function AiEditWorkspace({
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
       const allPlacements = draftObjects.flatMap((o) => o.placements);
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
+      // 参照画像を伴う配置があるか（家具の追加/差し替え）。テキストのみ（既存内容の変更）では合成せず全画面のまま
+      // 採用し、領域境界の継ぎ目を出さない（260710・shouldCompositeAreaEdit 参照）。
+      const hasReferenceImage = objectsScaled.some((o) => !!o.imageDataUrl);
 
       // 生成前の事前解析（対象の説明＋遮蔽判定 occluded・260709 クライアント要望）。目的: 「対象が別の家具の後ろに
       // 隠れている（occluded）とき」だけ切り取り方式（案1）に切り替え、狙った対象を確実に編集する。通常は自然な全画面（案2）。
@@ -692,14 +696,13 @@ export function AiEditWorkspace({
         const mode: 'cover' | 'contain' =
           coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
         const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, mode);
-        // 自然（全画面）経路の“湧き出し”対策（260709 クライアント報告: 指示のない場所に椅子が勝手に追加される）:
-        // 全画面再生成はマスクを通らないため、指示外の追加を構造的に止められない（プロンプト強化でも残った）。
-        // そこで、囲った領域（＋膨張＋羽根ぼかし）だけを採用し、範囲外はベース画像のまま固定する＝囲みのない隙間へ
-        // 勝手に足された家具は消える。膨張(dilate)は「差し替え家具が囲みの縁で切れる」のを防ぐ生成ズレ吸収用。ただし
-        // 大きくすると近接した領域どうしをつなぎ“領域の間の隙間”まで採用範囲に入れてしまう＝隙間に湧いた家具を消せなく
-        // なる（検証WFの指摘260709）。そこで膨張はごく小さく（2*dilate が領域間の隙間より小さくなるよう）控えめにする。
-        // contain（レターボックス）時は座標がズレるため合成せず全画面をそのまま採用する（極端なアスペクトのみ・稀）。
-        if (allPlacements.length > 0 && mode === 'cover') {
+        // 合成する/しないの判定は shouldCompositeAreaEdit（260710）に集約。
+        // ・テキストのみ（参照画像なし＝既存内容の変更：窓を昼に／照明を追加 等）→ 合成せず全画面のまま採用＝
+        //   領域境界の継ぎ目を出さない（260707 の挙動に戻す・クライアント致命報告260710対応）。
+        // ・参照画像あり（家具の追加/差し替え）→ 囲った領域だけを合成（マスク外はベース固定）＝湧き出し防止（260709）。
+        //   膨張(dilate)は差し替え家具が囲みの縁で切れるのを防ぐ生成ズレ吸収（隙間を橋渡ししない小ささ）。
+        // ・contain（レターボックス）時は座標がズレるため合成しない。
+        if (shouldCompositeAreaEdit({ hasReferenceImage, placementCount: allPlacements.length, fitMode: mode })) {
           const dilate = Math.round(Math.max(baseW, baseH) * 0.01); // ≈10px@1024（隙間を橋渡ししない小ささ＋生成ズレ吸収）
           const feather = Math.round(Math.max(baseW, baseH) * 0.008);
           const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
@@ -1865,8 +1868,9 @@ export function AiEditWorkspace({
                 </label>
               )}
               {/* 画質を保つ（ハイブリッド・260708）: 土台は直近の画像のまま連続編集を維持しつつ、最初のレンダー画像を
-                  「画質・素材の見本」として毎回渡す。形・位置・これまでの変更は直近画像に従い、見本は画質参照のみ。 */}
-              {activeTool === 'area' && (
+                  「画質・素材の見本」として毎回渡す。260710: 最初のレンダーと現在の構図が異なるとパースが二枚重なる
+                  破綻が出るため、キルスイッチ ENABLE_KEEP_QUALITY_HYBRID=false で UI から隠す（コードは残置）。 */}
+              {activeTool === 'area' && ENABLE_KEEP_QUALITY_HYBRID && (
                 <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
                   <input
                     type="checkbox"
