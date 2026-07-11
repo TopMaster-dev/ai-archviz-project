@@ -32,6 +32,8 @@ import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js'
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
 import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
+import { chooseAreaEditRoute } from '../lib/inpaint/inpaintRoute.js';
+import { rasterizeMaskDataUrl } from '../utils/maskRaster.js';
 import {
   unionBBoxOfPlacements,
   padBBox,
@@ -114,6 +116,13 @@ function loadImageNaturalSize(dataUrl: string): Promise<{ w: number; h: number }
     img.src = dataUrl;
   });
 }
+
+/**
+ * マスクベース専用エンジン（削除/生成）でエリア編集を処理するかのフラグ（260711・フェーズ1）。
+ * 既定 OFF。運営が Replicate 等の共通キー（サーバー env REPLICATE_API_TOKEN）を設定し、実機テスト準備が
+ * できたら VITE_ENABLE_INPAINT=true で有効化する。有効でもエンジン失敗時は自動で従来 Gemini 経路へフォールバック。
+ */
+const ENABLE_INPAINT_ENGINE = import.meta.env.VITE_ENABLE_INPAINT === 'true';
 
 type Props = {
   isOpen: boolean;
@@ -570,6 +579,64 @@ export function AiEditWorkspace({
       const unionCoverage = unionBBox ? unionBBox.w * unionBBox.h : 1;
       const isGlobalRegion = allPlacements.length > 0 && unionCoverage >= GLOBAL_REGION_COVERAGE;
 
+      // 生成結果。まず専用エンジン（削除/生成）を試し、失敗/無効なら下の Gemini 経路へフォールバックする（260711 フェーズ1）。
+      let outUrl: string | null = null;
+
+      // === マスクベース専用エンジン（削除/生成・260711 フェーズ1）===
+      // エリア編集は「囲った範囲だけを変える」。削除/生成はマスク方式の専用エンジンで処理し、範囲外は
+      // 必ずベースへ貼り戻して1ピクセルも変えない。エンジンが未設定/失敗なら outUrl は null のままで Gemini へフォールバック。
+      const instructionText = draftObjects
+        .flatMap((o) => [o.memo, ...(o.placementMemos ?? [])])
+        .map((s) => (s ?? '').trim())
+        .filter(Boolean)
+        .join(' / ');
+      const hasReferenceImage = objectsScaled.some((o) => !!o.imageDataUrl);
+      const route = chooseAreaEditRoute({ instruction: instructionText, hasReferenceImage, unionCoverage });
+      if (
+        ENABLE_INPAINT_ENGINE &&
+        allPlacements.length > 0 &&
+        (route === 'inpaint-remove' || route === 'inpaint-generate')
+      ) {
+        try {
+          const op: 'remove' | 'generate' = route === 'inpaint-remove' ? 'remove' : 'generate';
+          // マスクは範囲＋わずかな膨張（生成物が縁で切れないよう）。範囲外の保証は下の貼り戻しで別途担保する。
+          const maskDilate = Math.round(Math.max(baseW, baseH) * 0.01);
+          const maskDataUrl = await rasterizeMaskDataUrl(allPlacements, baseW, baseH, { dilatePx: maskDilate });
+          const referenceImageDataUrl = objectsScaled.find((o) => !!o.imageDataUrl)?.imageDataUrl ?? null;
+          const ires = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({
+              inpaint: true,
+              op,
+              imageDataUrl: baseScaled,
+              maskDataUrl,
+              prompt: op === 'generate' ? instructionText : undefined,
+              referenceImageDataUrl: op === 'generate' ? referenceImageDataUrl : null,
+            }),
+          });
+          const idata = await ires.json();
+          if (idata.success && idata.url) {
+            // 範囲外を絶対に変えない保証: エンジン出力をベース寸法へ整え、範囲外はベースへ貼り戻す（マスク外はバイト保持）。
+            const fitted = await fitDataUrlToSize(idata.url as string, baseW, baseH, 'cover');
+            const feather = Math.round(Math.max(baseW, baseH) * 0.008);
+            const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
+            outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH, feather);
+            void recordAiUsage({
+              feature: 'ai_edit',
+              model: (idata.engine as string) || 'inpaint',
+              imageCount: 1,
+              projectId: projectSession?.projectId ?? null,
+            });
+          }
+          // idata.success=false（キー未設定・失敗など）→ outUrl は null のまま → 下の Gemini 経路へフォールバック。
+        } catch {
+          /* ネットワーク等の失敗 → Gemini へフォールバック */
+        }
+      }
+
+      // === Gemini 経路（専用エンジンが未使用/失敗のときのみ）===
+      if (outUrl == null) {
       // 生成前の事前解析（対象の説明 narratives・260709）。クロップ経路の出し分けは被覆率（幾何・isConfinedRegion）で
       // 決めるようになった（260711）ので、この解析は「どの対象を編集するか」の特定補助に使う（遮蔽判定は今は使わない）。
       // narratives は生成本体へ渡して再解析を省く（二重解析回避）。解析失敗は narratives 無しで続行。
@@ -641,7 +708,7 @@ export function AiEditWorkspace({
       // トークン計測（row 58・無効時は no-op）。
       void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
 
-      let outUrl = data.url as string;
+      outUrl = data.url as string;
       // 編集結果の後処理。
       // ・案1（cropPx あり＝囲みが局所 isConfinedRegion のとき・260711）: 切り取り編集をベースへ貼り戻し→境界を
       //   決定論でなじませ（①）→クロップ矩形でクリップ合成。範囲外はモデルへ送っていない＝バイト保持で一切変えない。
@@ -715,6 +782,12 @@ export function AiEditWorkspace({
         } catch {
           /* 均一化失敗は無視＝合成結果をそのまま使う */
         }
+      }
+      } // === Gemini 経路ここまで（if (outUrl == null)）===
+
+      // 専用エンジンも Gemini も結果を得られなかった場合の保険（通常は上でどちらかが outUrl を設定する）。
+      if (outUrl == null) {
+        throw new Error('編集に失敗しました。しばらくして再度お試しください。');
       }
       // 「画質を高める（仕上げに精細化）」（260710）: keepQuality=ON のとき、確定した結果の“現在の1枚だけ”を
       // もう一度AIに通し、構図・家具・色を変えずに素材の質感と輪郭のキレだけを引き上げる。見本画像（2枚目）は
