@@ -416,6 +416,22 @@ export default defineConfig(({ mode }) => {
             if (req.url?.split('?')[0] === '/api/admin/orphan-cleanup' && (req.method === 'GET' || req.method === 'POST')) {
                 void (async () => {
                     res.setHeader('Content-Type', 'application/json');
+                    // 管理ダッシュボード読取（メール許可リスト認証・本番 api/admin/orphan-cleanup.ts と一致・260711）。
+                    const action = (() => { try { return new URL(req.url || '', 'http://x').searchParams.get('action') || ''; } catch { return ''; } })();
+                    if (action === 'whoami' || action === 'keyhealth' || action === 'usage') {
+                        const authHeader = (req.headers['authorization'] as string) || '';
+                        const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+                        const { verifyAdmin, getKeyHealth, getUsageSummary } = await import('./lib/server/adminDashboard.js');
+                        const admin = await verifyAdmin(token);
+                        if (action === 'whoami') {
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify({ isAdmin: admin.ok, email: admin.ok ? admin.email : null }));
+                        }
+                        if (!admin.ok) { res.statusCode = admin.status; return res.end(JSON.stringify({ error: admin.error })); }
+                        res.statusCode = 200;
+                        if (action === 'keyhealth') return res.end(JSON.stringify({ success: true, keys: getKeyHealth() }));
+                        return res.end(JSON.stringify({ success: true, summary: await getUsageSummary() }));
+                    }
                     const secret = process.env.CRON_SECRET || env.CRON_SECRET || '';
                     const auth = (req.headers['authorization'] as string) || '';
                     if (!secret || auth !== `Bearer ${secret}`) {

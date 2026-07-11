@@ -8,7 +8,9 @@ import { getSupabase } from './supabaseClient.js';
 //
 // 注: 本「基礎」は計測のためのクライアント記録。RLS により他人へは書けないが、自分の値は理論上偽装し得る。
 // 課金に耐える権威ある計測は、運営APIへ切替えるフェーズ2（row 65）でサーバ側に置く前提。
-export const ENABLE_TOKEN_METERING = false;
+// 260711: 管理ダッシュボード（利用状況・費用）にデータを溜めるため有効化。専用エンジン（Replicate）も
+// クライアントから同じ recordAiUsage で model 別に記録される（費用は運営側の単価表 lib/admin/aiPricing で算出）。
+export const ENABLE_TOKEN_METERING = true;
 
 export type AiUsageFeature = 'render' | 'ai_edit' | 'ai_coordinate' | 'agent' | 'export';
 
