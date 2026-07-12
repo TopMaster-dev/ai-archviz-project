@@ -96,6 +96,44 @@ export function getKeyHealth(): KeyHealthItem[] {
   return items;
 }
 
+// ---- キーの疎通テスト（無料の検証エンドポイントを叩く・実値は返さない）----
+
+export interface KeyTestResult {
+  engine: string;
+  configured: boolean;
+  valid: boolean;
+  detail: string;
+}
+
+/** サービス側キーの有効性を、無料の検証呼び出しで確認する（管理者のみが呼ぶ前提）。 */
+export async function testKey(engine: 'gemini' | 'replicate'): Promise<KeyTestResult> {
+  if (engine === 'gemini') {
+    const key = process.env.GEMINI_API_KEY || '';
+    if (!key) return { engine, configured: false, valid: false, detail: '未設定' };
+    try {
+      // モデル一覧は無料・副作用なし。キーが有効なら 200。
+      const res = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(key)}`,
+      );
+      return { engine, configured: true, valid: res.ok, detail: res.ok ? '有効' : `無効 (HTTP ${res.status})` };
+    } catch {
+      return { engine, configured: true, valid: false, detail: '通信エラー' };
+    }
+  }
+  // replicate
+  const key = process.env.REPLICATE_API_TOKEN || '';
+  if (!key) return { engine, configured: false, valid: false, detail: '未設定' };
+  try {
+    // アカウント情報取得は無料・副作用なし。
+    const res = await fetch('https://api.replicate.com/v1/account', {
+      headers: { Authorization: `Bearer ${key}` },
+    });
+    return { engine, configured: true, valid: res.ok, detail: res.ok ? '有効' : `無効 (HTTP ${res.status})` };
+  } catch {
+    return { engine, configured: true, valid: false, detail: '通信エラー' };
+  }
+}
+
 // ---- 利用状況の集計 ----
 
 interface UsageRow {

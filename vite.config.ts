@@ -339,6 +339,23 @@ export default defineConfig(({ mode }) => {
                             res.statusCode = 200;
                             return res.end(JSON.stringify({ success: false, skipped: true, reason: 'invalid-token' }));
                         }
+                        // AI利用の記録（260712・本番 api/session-log.ts と一致）: kind:'ai_usage' なら service_role で ai_usage_events へ。
+                        if (parsed && (parsed as { kind?: string }).kind === 'ai_usage') {
+                            const uu = parsed as { feature?: string; model?: string; imageCount?: number; projectId?: string | null; usage?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | null };
+                            const num = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
+                            const { error: aiErr } = await admin.from('ai_usage_events').insert({
+                                user_id: userId,
+                                project_id: typeof uu.projectId === 'string' ? uu.projectId : null,
+                                feature: str(uu.feature, 32) || 'ai_edit',
+                                model: str(uu.model, 128),
+                                input_tokens: num(uu.usage?.promptTokenCount),
+                                output_tokens: num(uu.usage?.candidatesTokenCount),
+                                total_tokens: num(uu.usage?.totalTokenCount),
+                                image_count: num(uu.imageCount),
+                            });
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify(aiErr ? { success: false, reason: 'insert-failed' } : { success: true }));
+                        }
                         // INSERT 失敗（例: キーが anon で RLS 拒否）を握りつぶさず error を検査する。
                         const { error: insErr } = await admin.from('login_events').insert({
                             user_id: userId,
@@ -417,11 +434,12 @@ export default defineConfig(({ mode }) => {
                 void (async () => {
                     res.setHeader('Content-Type', 'application/json');
                     // 管理ダッシュボード読取（メール許可リスト認証・本番 api/admin/orphan-cleanup.ts と一致・260711）。
-                    const action = (() => { try { return new URL(req.url || '', 'http://x').searchParams.get('action') || ''; } catch { return ''; } })();
-                    if (action === 'whoami' || action === 'keyhealth' || action === 'usage') {
+                    const url0 = new URL(req.url || '', 'http://x');
+                    const action = url0.searchParams.get('action') || '';
+                    if (['whoami', 'keyhealth', 'usage', 'testkey', 'infra'].includes(action)) {
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-                        const { verifyAdmin, getKeyHealth, getUsageSummary } = await import('./lib/server/adminDashboard.js');
+                        const { verifyAdmin, getKeyHealth, getUsageSummary, testKey } = await import('./lib/server/adminDashboard.js');
                         const admin = await verifyAdmin(token);
                         if (action === 'whoami') {
                             res.statusCode = 200;
@@ -430,7 +448,15 @@ export default defineConfig(({ mode }) => {
                         if (!admin.ok) { res.statusCode = admin.status; return res.end(JSON.stringify({ error: admin.error })); }
                         res.statusCode = 200;
                         if (action === 'keyhealth') return res.end(JSON.stringify({ success: true, keys: getKeyHealth() }));
-                        return res.end(JSON.stringify({ success: true, summary: await getUsageSummary() }));
+                        if (action === 'usage') return res.end(JSON.stringify({ success: true, summary: await getUsageSummary() }));
+                        if (action === 'infra') {
+                            const { getInfraStatus } = await import('./lib/server/adminInfra.js');
+                            return res.end(JSON.stringify({ success: true, infra: await getInfraStatus() }));
+                        }
+                        // testkey
+                        const engine = url0.searchParams.get('engine') || '';
+                        if (engine !== 'gemini' && engine !== 'replicate') { res.statusCode = 400; return res.end(JSON.stringify({ error: "engine は 'gemini' か 'replicate'。" })); }
+                        return res.end(JSON.stringify({ success: true, result: await testKey(engine) }));
                     }
                     const secret = process.env.CRON_SECRET || env.CRON_SECRET || '';
                     const auth = (req.headers['authorization'] as string) || '';

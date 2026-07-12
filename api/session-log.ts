@@ -62,6 +62,36 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ success: false, skipped: true, reason: 'invalid-token' });
     }
 
+    // AI利用の記録（260712・フェーズ2 サーバー側計測）: recordAiUsage はここへ集約する。トークンで検証した
+    // user_id で service_role INSERT する（クライアントの直接 INSERT を廃し、他ユーザーへの付け替えを不可にする）。
+    // ※ project_id・回数はクライアント申告のため、完全な改ざん耐性（AI呼び出し地点での実測記録）は次段の課題。
+    const usageBody = (req.body ?? {}) as {
+      kind?: string;
+      feature?: string;
+      model?: string;
+      imageCount?: number;
+      projectId?: string | null;
+      usage?: { promptTokenCount?: number; candidatesTokenCount?: number; totalTokenCount?: number } | null;
+    };
+    if (usageBody.kind === 'ai_usage') {
+      const num = (v: unknown) => Math.max(0, Math.round(Number(v) || 0));
+      const { error: insErr } = await admin.from('ai_usage_events').insert({
+        user_id: userId,
+        project_id: typeof usageBody.projectId === 'string' ? usageBody.projectId : null,
+        feature: str(usageBody.feature, 32) || 'ai_edit',
+        model: str(usageBody.model, 128),
+        input_tokens: num(usageBody.usage?.promptTokenCount),
+        output_tokens: num(usageBody.usage?.candidatesTokenCount),
+        total_tokens: num(usageBody.usage?.totalTokenCount),
+        image_count: num(usageBody.imageCount),
+      });
+      if (insErr) {
+        console.error('ai_usage insert failed:', insErr.message);
+        return res.status(200).json({ success: false, reason: 'insert-failed' });
+      }
+      return res.status(200).json({ success: true });
+    }
+
     const b = (req.body ?? {}) as { userAgent?: string; screen?: string; timezone?: string; language?: string };
     const ip = clientIp(req);
     const userAgent = str(b.userAgent, 500);

@@ -1,5 +1,6 @@
 import { runOrphanCleanup } from '../../lib/server/orphanCleanup.js';
-import { verifyAdmin, getKeyHealth, getUsageSummary } from '../../lib/server/adminDashboard.js';
+import { verifyAdmin, getKeyHealth, getUsageSummary, testKey } from '../../lib/server/adminDashboard.js';
+import { getInfraStatus } from '../../lib/server/adminInfra.js';
 
 // 運用者向け管理エンドポイント。Vercel Hobby の関数数上限(12/12)のため、ここに以下を相乗りさせる（260711）:
 //  - 既定（action なし）: 孤児 AI生成画像の掃除。CRON_SECRET（Authorization: Bearer）で保護。?execute=1 で実削除。
@@ -16,6 +17,14 @@ function getAction(req: any): string {
   }
 }
 
+function getEngineParam(req: any): string {
+  try {
+    return new URL(req.url || '', 'http://x').searchParams.get('engine') || '';
+  } catch {
+    return '';
+  }
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -23,7 +32,8 @@ export default async function handler(req: any, res: any) {
 
   // --- 管理ダッシュボード読取（メール許可リスト認証）---
   const action = getAction(req);
-  if (action === 'whoami' || action === 'keyhealth' || action === 'usage') {
+  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'testkey', 'infra'];
+  if (DASHBOARD_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
     const admin = await verifyAdmin(token);
@@ -33,7 +43,14 @@ export default async function handler(req: any, res: any) {
     }
     if (!admin.ok) return res.status(admin.status).json({ error: admin.error });
     if (action === 'keyhealth') return res.status(200).json({ success: true, keys: getKeyHealth() });
-    return res.status(200).json({ success: true, summary: await getUsageSummary() }); // action === 'usage'
+    if (action === 'usage') return res.status(200).json({ success: true, summary: await getUsageSummary() });
+    if (action === 'infra') return res.status(200).json({ success: true, infra: await getInfraStatus() });
+    // action === 'testkey'
+    const engine = getEngineParam(req);
+    if (engine !== 'gemini' && engine !== 'replicate') {
+      return res.status(400).json({ error: "engine は 'gemini' か 'replicate'。" });
+    }
+    return res.status(200).json({ success: true, result: await testKey(engine) });
   }
 
   // --- 既定: 孤児掃除（CRON_SECRET 認証・従来どおり）---

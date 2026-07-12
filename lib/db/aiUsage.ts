@@ -20,7 +20,13 @@ interface UsageTokens {
   totalTokenCount?: number;
 }
 
-/** AI生成1回のトークン消費を記録する（無効時・ゲスト・未ログインは何もしない）。 */
+/**
+ * AI生成1回のトークン消費を記録する（無効時・ゲスト・未ログインは何もしない）。
+ * 260712（フェーズ2・サーバー側計測）: クライアントからの直接 INSERT を廃し、アクセストークンを付けて
+ * /api/session-log(kind:'ai_usage') へ送る。サーバーがトークンを検証した user_id で service_role INSERT する
+ * （他ユーザーへの付け替えを不可にする）。※ project_id・回数はクライアント申告のため、AI呼び出し地点での
+ * 実測記録（完全な改ざん耐性）は次段の課題。ベストエフォート（失敗しても UI を妨げない）。
+ */
 export async function recordAiUsage(opts: {
   feature: AiUsageFeature;
   usage?: UsageTokens | null;
@@ -32,21 +38,20 @@ export async function recordAiUsage(opts: {
   const sb = getSupabase();
   if (!sb) return;
   try {
-    const { data: userData } = await sb.auth.getUser();
-    const uid = userData.user?.id;
-    if (!uid) return;
-    const u = opts.usage ?? null;
-    const { error } = await sb.from('ai_usage_events').insert({
-      user_id: uid,
-      project_id: opts.projectId ?? null,
-      feature: opts.feature,
-      model: opts.model ?? null,
-      input_tokens: u?.promptTokenCount ?? 0,
-      output_tokens: u?.candidatesTokenCount ?? 0,
-      total_tokens: u?.totalTokenCount ?? 0,
-      image_count: opts.imageCount ?? 0,
+    const token = (await sb.auth.getSession()).data.session?.access_token;
+    if (!token) return;
+    await fetch('/api/session-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+      body: JSON.stringify({
+        kind: 'ai_usage',
+        feature: opts.feature,
+        model: opts.model ?? null,
+        imageCount: opts.imageCount ?? 0,
+        usage: opts.usage ?? null,
+        projectId: opts.projectId ?? null,
+      }),
     });
-    if (error) throw error;
   } catch (e) {
     console.warn('[ai usage] 記録に失敗', e);
   }

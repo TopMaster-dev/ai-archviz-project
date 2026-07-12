@@ -36,6 +36,32 @@ interface Summary {
   byProject: GroupAgg[];
   note: string;
 }
+interface KeyTest {
+  engine: string;
+  configured: boolean;
+  valid: boolean;
+  detail: string;
+}
+interface InfraProvider {
+  id: string;
+  label: string;
+  configured: boolean;
+  link: string;
+  metrics?: Array<{ label: string; value: string }>;
+  note?: string;
+  error?: string;
+}
+interface InfraStatus {
+  cloudinary: InfraProvider;
+  supabase: InfraProvider;
+  vercel: InfraProvider;
+}
+
+/** キー id → テスト用エンジン名（テスト可能なもののみ）。 */
+const KEY_ENGINE: Record<string, 'gemini' | 'replicate'> = {
+  'gemini-service': 'gemini',
+  'eraser-replicate': 'replicate',
+};
 
 const yen = (usd: number) => `約¥${Math.round(usd * 150).toLocaleString('ja-JP')}`; // 150円/$の概算表示
 const usd = (v: number) => `$${v.toFixed(v < 1 ? 4 : 2)}`;
@@ -102,6 +128,8 @@ export function AdminDashboard() {
   const [email, setEmail] = useState<string | null>(null);
   const [keys, setKeys] = useState<KeyItem[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [infra, setInfra] = useState<InfraStatus | null>(null);
+  const [tests, setTests] = useState<Record<string, KeyTest | 'testing'>>({});
 
   useEffect(() => {
     void (async () => {
@@ -112,18 +140,30 @@ export function AdminDashboard() {
           return;
         }
         setEmail(who.email ?? null);
-        const [kh, us] = await Promise.all([
+        const [kh, us, inf] = await Promise.all([
           adminFetch('keyhealth').then((r) => r.json()),
           adminFetch('usage').then((r) => r.json()),
+          adminFetch('infra').then((r) => r.json()),
         ]);
         setKeys(Array.isArray(kh?.keys) ? kh.keys : []);
         setSummary(us?.summary ?? null);
+        setInfra(inf?.infra ?? null);
         setState('ready');
       } catch {
         setState('error');
       }
     })();
   }, []);
+
+  const runTest = async (engine: 'gemini' | 'replicate') => {
+    setTests((t) => ({ ...t, [engine]: 'testing' }));
+    try {
+      const r = await (await adminFetch(`testkey&engine=${engine}`)).json();
+      setTests((t) => ({ ...t, [engine]: r?.result ?? { engine, configured: false, valid: false, detail: 'error' } }));
+    } catch {
+      setTests((t) => ({ ...t, [engine]: { engine, configured: false, valid: false, detail: '通信エラー' } }));
+    }
+  };
 
   if (state === 'loading') {
     return <div className="min-h-screen bg-neutral-950 p-8 text-neutral-300">読み込み中…</div>;
@@ -172,6 +212,27 @@ export function AdminDashboard() {
                   <span className="font-mono">{k.envVar}</span> ・ 費用: {k.billing === 'operator' ? '運営負担' : 'ユーザー(BYOK)'}
                 </div>
                 {k.note && <div className="mt-1 text-[11px] text-neutral-500">{k.note}</div>}
+                {KEY_ENGINE[k.id] && k.configured && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void runTest(KEY_ENGINE[k.id])}
+                      disabled={tests[KEY_ENGINE[k.id]] === 'testing'}
+                      className="rounded-md border border-white/10 bg-neutral-800 px-2.5 py-1 text-[11px] text-neutral-200 hover:border-emerald-400 disabled:opacity-50"
+                    >
+                      {tests[KEY_ENGINE[k.id]] === 'testing' ? 'テスト中…' : 'テスト'}
+                    </button>
+                    {tests[KEY_ENGINE[k.id]] && tests[KEY_ENGINE[k.id]] !== 'testing' && (
+                      <span
+                        className={`text-[11px] font-bold ${
+                          (tests[KEY_ENGINE[k.id]] as KeyTest).valid ? 'text-emerald-300' : 'text-red-300'
+                        }`}
+                      >
+                        {(tests[KEY_ENGINE[k.id]] as KeyTest).detail}
+                      </span>
+                    )}
+                  </div>
+                )}
               </Card>
             ))}
           </div>
@@ -209,6 +270,48 @@ export function AdminDashboard() {
               </p>
             </>
           )}
+        </section>
+
+        {/* インフラ状況（Cloudinary / Supabase / Vercel） */}
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold text-neutral-200">インフラ状況</h2>
+          <div className="grid gap-3 sm:grid-cols-3">
+            {infra &&
+              [infra.cloudinary, infra.supabase, infra.vercel].map((p) => (
+                <Card key={p.id}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold">{p.label}</span>
+                    <span
+                      className={`rounded px-2 py-0.5 text-[11px] font-bold ${
+                        p.configured ? 'bg-emerald-500/15 text-emerald-300' : 'bg-neutral-700/50 text-neutral-400'
+                      }`}
+                    >
+                      {p.configured ? '接続' : '未設定'}
+                    </span>
+                  </div>
+                  {p.metrics && p.metrics.length > 0 && (
+                    <dl className="mt-2 space-y-1">
+                      {p.metrics.map((m) => (
+                        <div key={m.label} className="flex justify-between text-xs">
+                          <dt className="text-neutral-400">{m.label}</dt>
+                          <dd className="font-mono text-neutral-200 break-all text-right">{m.value}</dd>
+                        </div>
+                      ))}
+                    </dl>
+                  )}
+                  {p.error && <div className="mt-1 text-[11px] text-red-300">取得エラー: {p.error}</div>}
+                  {p.note && <div className="mt-1 text-[11px] text-neutral-500">{p.note}</div>}
+                  <a
+                    href={p.link}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-2 inline-block text-[11px] text-emerald-400 hover:underline"
+                  >
+                    提供元ダッシュボードを開く →
+                  </a>
+                </Card>
+              ))}
+          </div>
         </section>
       </div>
     </div>
