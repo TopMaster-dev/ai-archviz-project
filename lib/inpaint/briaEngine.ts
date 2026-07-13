@@ -74,6 +74,7 @@ export const briaEraserEngine: InpaintEngine = {
     const url = await briaCall(apiKey, 'erase', {
       image: toBase64OrUrl(req.imageDataUrl),
       mask: toBase64OrUrl(req.maskDataUrl),
+      mask_type: 'manual', // こちらが精密マスクを渡す（Briaに自動検出させない）。既定と同じだが明示。
     });
     return { imageDataUrl: url, engine: this.id, costUsd: this.approxCostUsd };
   },
