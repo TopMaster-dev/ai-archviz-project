@@ -1,5 +1,5 @@
 import { runInpaint, type InpaintCoreBody, type InpaintCoreResult } from './inpaintCore.js';
-import { resolveInpaintEngine, getInpaintApiKey } from './engineRegistry.js';
+import { resolveInpaintEngine, getEngineApiKey } from './engineRegistry.js';
 
 /**
  * /api/ai-edit の mode:'inpaint' の共有ハンドラ（260711）。本番 api/ai-edit.ts と 開発 vite.config.ts の
@@ -15,6 +15,8 @@ export async function handleInpaintRequest(body: InpaintCoreBody): Promise<Inpai
     return { success: false, status: 400, error: "op は 'remove' / 'generate' / 'cutout' / 'relight' のいずれかを指定してください。" };
   }
   const engine = resolveInpaintEngine(op);
-  const apiKey = getInpaintApiKey();
+  // キーはエンジンのプロバイダに応じて解決する（Replicate=REPLICATE_API_TOKEN / Bria=BRIA_API_TOKEN）。
+  // engine が null（未登録）のときは runInpaint 側が 501 を返すため空文字で良い。
+  const apiKey = engine ? getEngineApiKey(engine) : '';
   return runInpaint(engine, apiKey, { ...body, op });
 }

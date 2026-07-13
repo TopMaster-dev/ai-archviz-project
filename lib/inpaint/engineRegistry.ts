@@ -5,6 +5,7 @@ import {
   replicateCutoutEngine,
   replicateIcLightEngine,
 } from './replicateEngine.js';
+import { briaEraserEngine, briaRemoveBgEngine } from './briaEngine.js';
 
 /**
  * インペイントエンジンの登録簿（260711・サーバー側専用）。候補エンジンを id で登録し、操作ごとに env で選ぶ。
@@ -16,6 +17,9 @@ const ENGINES: Record<string, InpaintEngine> = {
   [replicateFluxFillEngine.id]: replicateFluxFillEngine,
   [replicateCutoutEngine.id]: replicateCutoutEngine,
   [replicateIcLightEngine.id]: replicateIcLightEngine,
+  // Bria（候補エンジン・別キー BRIA_API_TOKEN）。env で切替可能: INPAINT_REMOVE_ENGINE=bria:eraser 等。
+  [briaEraserEngine.id]: briaEraserEngine,
+  [briaRemoveBgEngine.id]: briaRemoveBgEngine,
 };
 
 const DEFAULT_ENGINE_BY_OP: Record<InpaintOp, string> = {
@@ -40,10 +44,16 @@ export function resolveInpaintEngine(op: InpaintOp): InpaintEngine | null {
 }
 
 /**
- * アプリ保有の共通キー（ユーザーのキーではない）。サーバー env にのみ置く。
- * Vercel の env 欄への貼り付けで前後に空白/改行が混入しやすく、そのまま `Bearer <token>` に入れると
- * Replicate が 401「Invalid token」を返す（260713 実機で発生）。ここで trim して事故を防ぐ。
+ * エンジンごとのAPIキーを env から取り出す（プロバイダで env 名が違う: Replicate/Bria）。
+ * Vercel の env 欄への貼り付けで前後に空白/改行が混入しやすく、そのまま送ると認証エラー（401）になるため trim する
+ * （260713 実機で Replicate が 401「Invalid token」を返した対策を全プロバイダへ適用）。
  */
+export function getEngineApiKey(engine: InpaintEngine): string {
+  const envName = engine.apiKeyEnv ?? 'REPLICATE_API_TOKEN';
+  return (process.env[envName] || '').trim();
+}
+
+/** アプリ保有の共通キー（Replicate・後方互換）。サーバー env にのみ置く。 */
 export function getInpaintApiKey(): string {
   return (process.env.REPLICATE_API_TOKEN || '').trim();
 }

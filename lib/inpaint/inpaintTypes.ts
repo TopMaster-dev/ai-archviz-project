@@ -41,10 +41,16 @@ export interface InpaintResult {
   costUsd?: number | null;
 }
 
-/** マスクベース編集エンジン。実装は各プロバイダ（Replicate など）。サーバー側でのみ呼ぶ。 */
+/** マスクベース編集エンジン。実装は各プロバイダ（Replicate / Bria など）。サーバー側でのみ呼ぶ。 */
 export interface InpaintEngine {
-  /** エンジン識別子（例: replicate:lama, replicate:flux-fill）。 */
+  /** エンジン識別子（例: replicate:remove-object, bria:eraser）。 */
   id: string;
+  /**
+   * このエンジンのAPIキーを保持するサーバー環境変数名（既定 REPLICATE_API_TOKEN）。
+   * プロバイダごとにキーが違う（Replicate=REPLICATE_API_TOKEN / Bria=BRIA_API_TOKEN）ため、
+   * エンジン解決時にこの名前で env からキーを取り出す（getEngineApiKey）。
+   */
+  apiKeyEnv?: string;
   /** このエンジンが対応する操作。 */
   supports: InpaintOp[];
   /** 参照画像（差し替える特定商品画像）を実際に使えるか（既定=false）。false のエンジンに参照が来たら実行を拒否しフェイルソフトさせる。 */
