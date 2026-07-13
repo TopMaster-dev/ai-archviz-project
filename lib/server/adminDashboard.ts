@@ -120,8 +120,8 @@ export async function testKey(engine: 'gemini' | 'replicate'): Promise<KeyTestRe
       return { engine, configured: true, valid: false, detail: '通信エラー' };
     }
   }
-  // replicate
-  const key = process.env.REPLICATE_API_TOKEN || '';
+  // replicate（実呼び出しと同じく trim 済みのキーで検証する＝前後の空白/改行による偽陰性を防ぐ）。
+  const key = (process.env.REPLICATE_API_TOKEN || '').trim();
   if (!key) return { engine, configured: false, valid: false, detail: '未設定' };
   try {
     // アカウント情報取得は無料・副作用なし。

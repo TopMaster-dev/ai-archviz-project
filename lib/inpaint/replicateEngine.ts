@@ -80,6 +80,37 @@ async function outputToDataUrl(output: unknown): Promise<string> {
   return `data:${mime};base64,${buf.toString('base64')}`;
 }
 
+/**
+ * モデルの最新バージョンID（64桁）を返す。無ければ null（versionless の公式モデル）。
+ * コミュニティモデルは version 指定の /v1/predictions が必須なため、これで解決する。
+ */
+async function resolveLatestVersion(apiKey: string, modelPath: string): Promise<string | null> {
+  const auth = { Authorization: `Bearer ${apiKey}` };
+  // 1) モデル取得（GET /v1/models/{owner}/{name}）の latest_version.id。
+  try {
+    const res = await fetch(`${REPLICATE_BASE}/models/${modelPath}`, { headers: auth });
+    if (res.ok) {
+      const data = (await res.json()) as { latest_version?: { id?: string } };
+      const id = data?.latest_version?.id;
+      if (typeof id === 'string' && id) return id;
+    }
+  } catch {
+    /* 次のフォールバックへ */
+  }
+  // 2) フォールバック: バージョン一覧（先頭＝最新）。model GET に latest_version が無いケースを拾う。
+  try {
+    const res = await fetch(`${REPLICATE_BASE}/models/${modelPath}/versions`, { headers: auth });
+    if (res.ok) {
+      const data = (await res.json()) as { results?: Array<{ id?: string }> };
+      const id = data?.results?.[0]?.id;
+      if (typeof id === 'string' && id) return id;
+    }
+  } catch {
+    /* versionless（公式）にフォールバック */
+  }
+  return null;
+}
+
 /** 予測を作成（Prefer: wait）し、未完了ならポーリングして成功出力の data URL を返す。失敗は throw。 */
 async function createAndAwait(
   apiKey: string,
@@ -87,14 +118,21 @@ async function createAndAwait(
   input: Record<string, unknown>
 ): Promise<string> {
   const startedAt = Date.now(); // wait も含めた総時間を関数枠(60s)内に収めるため、作成前から計測する。
-  const res = await fetch(`${REPLICATE_BASE}/models/${modelPath}/predictions`, {
+  // 実行エンドポイントの選択（260713 修正・実機の 404 対応）:
+  //  - /v1/models/{owner}/{name}/predictions は**公式モデル専用**で、コミュニティモデルは 404 になる。
+  //  - そこで最新バージョンを解決できたら version 指定の /v1/predictions（公式・コミュニティ両対応）で実行し、
+  //    バージョンが無い公式 versionless モデルだけ従来の /v1/models/.../predictions にフォールバックする。
+  const version = await resolveLatestVersion(apiKey, modelPath);
+  const createUrl = version ? `${REPLICATE_BASE}/predictions` : `${REPLICATE_BASE}/models/${modelPath}/predictions`;
+  const body: Record<string, unknown> = version ? { version, input } : { input };
+  const res = await fetch(createUrl, {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
       Prefer: `wait=${WAIT_SECONDS}`,
     },
-    body: JSON.stringify({ input }),
+    body: JSON.stringify(body),
   });
   if (!res.ok) {
     throw new Error(`Replicate 予測作成失敗: ${res.status} ${await safeText(res)}`);

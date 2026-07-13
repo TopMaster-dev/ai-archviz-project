@@ -39,9 +39,13 @@ export function resolveInpaintEngine(op: InpaintOp): InpaintEngine | null {
   return ENGINES[id] ?? null;
 }
 
-/** アプリ保有の共通キー（ユーザーのキーではない）。サーバー env にのみ置く。 */
+/**
+ * アプリ保有の共通キー（ユーザーのキーではない）。サーバー env にのみ置く。
+ * Vercel の env 欄への貼り付けで前後に空白/改行が混入しやすく、そのまま `Bearer <token>` に入れると
+ * Replicate が 401「Invalid token」を返す（260713 実機で発生）。ここで trim して事故を防ぐ。
+ */
 export function getInpaintApiKey(): string {
-  return process.env.REPLICATE_API_TOKEN || '';
+  return (process.env.REPLICATE_API_TOKEN || '').trim();
 }
 
 /** 登録済みエンジンの一覧（管理画面・診断用）。 */
