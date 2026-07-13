@@ -636,7 +636,14 @@ export function AiEditWorkspace({
             // 範囲外を絶対に変えない保証: エンジン出力をベース寸法へ整え、範囲外はベースへ貼り戻す（マスク外はバイト保持）。
             const fitted = await fitDataUrlToSize(idata.url as string, baseW, baseH, 'cover');
             const feather = Math.round(Math.max(baseW, baseH) * 0.008);
-            const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
+            // 削除(remove)ではトーン合わせをしない（260714 実機報告）。トーン合わせは「マスク境界内側のリング」で
+            // 色を測るが、削除マスクの内側リングには“消す対象そのもの”が含まれるため、綺麗な埋め戻しが対象の色へ
+            // 引っ張られ、薄いゴーストとして残ることがある。専用エンジン(Bria等)の埋め戻しは元々シーンに馴染むので、
+            // 削除ではそのまま使う。生成(generate)は範囲内に新規生成＝周囲へなじませたいのでトーン合わせを維持する。
+            const matched =
+              op === 'generate'
+                ? await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH)
+                : fitted;
             outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH, feather);
             void recordAiUsage({
               feature: 'ai_edit',
