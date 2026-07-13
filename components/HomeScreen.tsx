@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Settings, Image as ImageIcon, HelpCircle } from 'lucide-react';
+import { Settings, Image as ImageIcon, HelpCircle, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
+import { fetchIsAdmin, openAdminDashboard } from '../lib/admin/adminClient.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
 import { createShareLink, getDeletedProjects, purgeProject } from '../lib/db/projects.js';
 import type { DeletedProjectSummary, ProjectSummary } from '../lib/db/types.js';
@@ -95,6 +96,9 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   const [newMemo, setNewMemo] = useState('');
   const [newKind, setNewKind] = useState<'full' | 'photo'>('full');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  // 運営（管理者）だけに右上「運営」ボタンを見せる（260713）。判定はサーバー（whoami＝ADMIN_EMAILS 許可リスト）。
+  // 既定は非表示で、管理者と確認できたときだけ表示する（非管理者には一切出さない・チラつかせない）。
+  const [isAdmin, setIsAdmin] = useState(false);
   // 操作ガイド（オンボーディング）。初回のみ自動表示し、以降は右上の「?」から見返せる（260623）。
   const [onboardingOpen, setOnboardingOpen] = useState(false);
   // 共有（2b）: 閲覧用URLの発行・クリップボードコピーの結果通知。
@@ -114,6 +118,18 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   useEffect(() => {
     if (!renaming) setNameDraft(projectName);
   }, [projectName, renaming]);
+
+  // ログイン中ユーザーが管理者かをサーバーに問い合わせ、管理者なら右上に「運営」ボタンを出す（260713）。
+  // 失敗・未ログイン・非管理者では isAdmin=false のまま（ボタンは出ない）。
+  useEffect(() => {
+    let alive = true;
+    void fetchIsAdmin().then((ok) => {
+      if (alive) setIsAdmin(ok);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // 初回訪問時だけガイドを自動で開く（以降は右上の「?」ボタンから見返せる・260623）。
   useEffect(() => {
@@ -396,6 +412,19 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           <p className="text-[11px] text-neutral-400">建築・内装向け AI 空間デザイン</p>
         </div>
         <div className="flex items-center gap-3 text-xs">
+          {/* 運営（管理者）だけに表示。クリックで運営ダッシュボード（?admin）を開く。260713・クライアント要望。 */}
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={openAdminDashboard}
+              title="運営ダッシュボード（管理者のみ）"
+              aria-label="運営ダッシュボードを開く"
+              className="flex items-center gap-1.5 rounded-md bg-emerald-600/90 px-2.5 py-1.5 font-semibold text-white transition hover:bg-emerald-500"
+            >
+              <ShieldCheck className="h-4 w-4" />
+              <span className="hidden sm:inline">運営</span>
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setOnboardingOpen(true)}

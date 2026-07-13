@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from 'react';
+import { ArrowLeft } from 'lucide-react';
 import { getSupabase } from '../../lib/db/supabaseClient.js';
+import { exitAdminDashboard } from '../../lib/admin/adminClient.js';
 
 /**
  * 運営（管理者）向けダッシュボード（260711・フェーズ1）。URL に ?admin を付けて開く。
@@ -176,6 +178,13 @@ export function AdminDashboard() {
           アクセス権がありません（管理者のみ）。ログイン中のアカウントのメールを、環境変数 <code>ADMIN_EMAILS</code>
           に追加すると閲覧できます。
         </p>
+        <button
+          type="button"
+          onClick={exitAdminDashboard}
+          className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-neutral-800 px-3 py-2 text-sm text-neutral-200 transition hover:bg-neutral-700"
+        >
+          <ArrowLeft className="h-4 w-4" /> ホームに戻る
+        </button>
       </div>
     );
   }
@@ -186,8 +195,18 @@ export function AdminDashboard() {
   return (
     <div className="min-h-screen bg-neutral-950 p-6 text-white">
       <div className="mx-auto max-w-5xl space-y-6">
-        <header className="flex items-baseline justify-between">
-          <h1 className="text-xl font-black">運営ダッシュボード</h1>
+        <header className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={exitAdminDashboard}
+              title="ホーム（プロジェクト一覧）に戻る"
+              className="inline-flex items-center gap-1.5 rounded-lg bg-neutral-800 px-2.5 py-1.5 text-xs text-neutral-200 transition hover:bg-neutral-700"
+            >
+              <ArrowLeft className="h-4 w-4" /> ホームに戻る
+            </button>
+            <h1 className="text-xl font-black">運営ダッシュボード</h1>
+          </div>
           <span className="text-xs text-neutral-400">{email}</span>
         </header>
 
