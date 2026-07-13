@@ -2,18 +2,19 @@
  * エリア編集を「どのエンジン・どの操作」で処理するかを決める純粋関数（260711・フェーズ1）。
  *
  * 新方針（適材適所）:
- * - エリア編集（囲った範囲の限定編集）は、マスクベースの専用エンジンで処理する。
+ * - エリア編集（囲った範囲の限定編集）は、内容に応じて最適なエンジンで処理する。
+ *   ・参照画像あり（特定商品の差し替え/新規配置）→ 決定論合成（composite・切り抜き→配置→トーン合わせ・フェーズ2）。
  *   ・削除（「消す/削除」等・参照画像なし）→ 物体消去（インペイント remove）。
- *   ・それ以外（置換・追加・素材変更／テキストor参照画像）→ マスク内生成（インペイント generate）。
+ *   ・テキストのみの置換・追加・素材変更 → マスク内生成（インペイント generate）。
  * - ただし囲みが実質「全画面」（被覆が非常に大きい）なら、守るべき“外”がほぼ無いので従来の Gemini 全画面に任せる。
- * - コーディネート（部屋全体の再提案）や、専用エンジンが使えない/失敗した場合は Gemini にフォールバックする。
+ * - コーディネート（部屋全体の再提案）や、専用エンジン/合成が使えない・失敗した場合は Gemini にフォールバックする。
  *
  * ここは外部APIに依存しない純粋な判定のみ（ユニットテスト可能）。実際のエンジン呼び出しは lib/inpaint/inpaintCore。
  */
 
 import { GLOBAL_REGION_COVERAGE } from '../../utils/areaEditDecision.js';
 
-export type AreaEditRoute = 'inpaint-remove' | 'inpaint-generate' | 'gemini';
+export type AreaEditRoute = 'inpaint-remove' | 'inpaint-generate' | 'composite' | 'gemini';
 
 /** 「全画面」とみなす被覆率（これ以上は守る外がほぼ無いので Gemini 全画面へ）。areaEditDecision と単一ソースに統一（ドリフト防止）。 */
 export const INPAINT_GLOBAL_COVERAGE = GLOBAL_REGION_COVERAGE;
@@ -55,10 +56,10 @@ export function chooseAreaEditRoute(params: {
   const globalT = params.globalCoverageThreshold ?? INPAINT_GLOBAL_COVERAGE;
   // 実質全画面＝守る外がほぼ無い → 従来の Gemini 全画面（インペイントの利点が無い）。
   if (params.unionCoverage >= globalT) return 'gemini';
-  // 参照画像あり（特定商品の差し替え/配置）は当面 Gemini に任せる。フェーズ1の生成エンジン（FLUX Fill）は
-  // 参照画像を使わない＝そのまま回すと参照を無視した幻覚生成になり、しかも成功扱いでフェイルソフトしないため。
-  // 参照画像の忠実配置はフェーズ2（参照対応エンジン or 決定論合成）で扱う。
-  if (params.hasReferenceImage) return 'gemini';
+  // 参照画像あり（特定商品の差し替え/配置）→ 決定論合成（フェーズ2・260712）。商品の切り抜きを囲った範囲へ
+  // そのまま貼る（モデルに商品ピクセルを渡さない）ので、ブランド・比率・形が一切崩れず完全一致する。
+  // AIが生成に絡まないため幻覚もない。合成が失敗すれば呼び出し側が Gemini へフェイルソフトする。
+  if (params.hasReferenceImage) return 'composite';
   // 削除意図（参照画像なし）→ 物体消去。
   if (isRemovalInstruction(params.instruction)) return 'inpaint-remove';
   // テキストのみの置換・追加・素材変更 → マスク内生成。

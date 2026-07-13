@@ -1,5 +1,10 @@
 import type { InpaintEngine, InpaintOp } from './inpaintTypes.js';
-import { replicateRemoveEngine, replicateFluxFillEngine } from './replicateEngine.js';
+import {
+  replicateRemoveEngine,
+  replicateFluxFillEngine,
+  replicateCutoutEngine,
+  replicateIcLightEngine,
+} from './replicateEngine.js';
 
 /**
  * インペイントエンジンの登録簿（260711・サーバー側専用）。候補エンジンを id で登録し、操作ごとに env で選ぶ。
@@ -9,17 +14,28 @@ import { replicateRemoveEngine, replicateFluxFillEngine } from './replicateEngin
 const ENGINES: Record<string, InpaintEngine> = {
   [replicateRemoveEngine.id]: replicateRemoveEngine,
   [replicateFluxFillEngine.id]: replicateFluxFillEngine,
+  [replicateCutoutEngine.id]: replicateCutoutEngine,
+  [replicateIcLightEngine.id]: replicateIcLightEngine,
 };
 
-const DEFAULT_REMOVE_ENGINE = replicateRemoveEngine.id;
-const DEFAULT_GENERATE_ENGINE = replicateFluxFillEngine.id;
+const DEFAULT_ENGINE_BY_OP: Record<InpaintOp, string> = {
+  remove: replicateRemoveEngine.id,
+  generate: replicateFluxFillEngine.id,
+  cutout: replicateCutoutEngine.id,
+  relight: replicateIcLightEngine.id,
+};
 
-/** 操作に対して使うエンジンを解決する。env（INPAINT_REMOVE_ENGINE / INPAINT_GENERATE_ENGINE）で差し替え可能。 */
+// 操作ごとの env 差し替えキー（未設定なら既定エンジン）。
+const ENGINE_ENV_BY_OP: Record<InpaintOp, string> = {
+  remove: 'INPAINT_REMOVE_ENGINE',
+  generate: 'INPAINT_GENERATE_ENGINE',
+  cutout: 'INPAINT_CUTOUT_ENGINE',
+  relight: 'INPAINT_RELIGHT_ENGINE',
+};
+
+/** 操作に対して使うエンジンを解決する。env（INPAINT_{OP}_ENGINE）で差し替え可能。 */
 export function resolveInpaintEngine(op: InpaintOp): InpaintEngine | null {
-  const id =
-    op === 'remove'
-      ? process.env.INPAINT_REMOVE_ENGINE || DEFAULT_REMOVE_ENGINE
-      : process.env.INPAINT_GENERATE_ENGINE || DEFAULT_GENERATE_ENGINE;
+  const id = process.env[ENGINE_ENV_BY_OP[op]] || DEFAULT_ENGINE_BY_OP[op];
   return ENGINES[id] ?? null;
 }
 

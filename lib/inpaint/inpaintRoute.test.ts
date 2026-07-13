@@ -40,13 +40,18 @@ describe('chooseAreaEditRoute（経路判定・純関数）', () => {
       chooseAreaEditRoute({ instruction: '範囲内の椅子を消して', hasReferenceImage: false, unionCoverage: 0.1 })
     ).toBe('inpaint-remove');
   });
-  it('参照画像あり（特定商品の差し替え/配置）は当面 Gemini（フェーズ1の生成エンジンは参照画像非対応）', () => {
+  it('参照画像あり（特定商品の差し替え/配置）→ composite（決定論合成・フェーズ2）', () => {
     expect(
       chooseAreaEditRoute({ instruction: 'このソファに差し替えて', hasReferenceImage: true, unionCoverage: 0.1 })
-    ).toBe('gemini');
-    // 参照画像＋削除語という矛盾入力でも、参照画像がある時点で Gemini（幻覚生成を避ける）
+    ).toBe('composite');
+    // 参照画像＋削除語という矛盾入力でも、参照画像がある時点で composite（配置意図を優先・幻覚生成を避ける）。
     expect(
       chooseAreaEditRoute({ instruction: '椅子を消して', hasReferenceImage: true, unionCoverage: 0.1 })
+    ).toBe('composite');
+  });
+  it('参照画像ありでも実質全画面（被覆≥0.85）は Gemini（守る外がほぼ無い）', () => {
+    expect(
+      chooseAreaEditRoute({ instruction: 'このソファに差し替えて', hasReferenceImage: true, unionCoverage: 0.9 })
     ).toBe('gemini');
   });
   it('テキスト配置・置換・素材変更 → inpaint-generate', () => {

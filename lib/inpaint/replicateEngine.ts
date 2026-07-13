@@ -129,11 +129,23 @@ async function runReplicate(
   req: InpaintRequest,
   buildInput: (imageUrl: string, maskUrl: string) => Record<string, unknown>
 ): Promise<string> {
+  if (!req.maskDataUrl) throw new Error('mask が必要です');
   const [imageUrl, maskUrl] = await Promise.all([
     uploadFile(apiKey, req.imageDataUrl, 'base.png'),
     uploadFile(apiKey, req.maskDataUrl, 'mask.png'),
   ]);
   return createAndAwait(apiKey, modelPath, buildInput(imageUrl, maskUrl));
+}
+
+/** マスク無し（画像1枚を処理）モデル用ランナー。cutout（背景除去）などに使う。 */
+async function runReplicateImageOnly(
+  apiKey: string,
+  modelPath: string,
+  imageDataUrl: string,
+  buildInput: (imageUrl: string) => Record<string, unknown>
+): Promise<string> {
+  const imageUrl = await uploadFile(apiKey, imageDataUrl, 'input.png');
+  return createAndAwait(apiKey, modelPath, buildInput(imageUrl));
 }
 
 /** 物体消去（LaMa 系）。image + mask（白=消す）→ 背景で埋めた画像。 */
@@ -163,6 +175,53 @@ export const replicateFluxFillEngine: InpaintEngine = {
       prompt,
       output_format: 'png',
     }));
+    return { imageDataUrl: url, engine: this.id, costUsd: this.approxCostUsd };
+  },
+};
+
+/**
+ * 商品画像の背景除去＝切り抜き（cutout・フェーズ2）。image → RGBA（背景透明）PNG。
+ * 決定論合成で「そのまま貼る」ための素材を作る（モデルは生成に関与しない）。安価（約 $0.0005/回）。
+ */
+export const replicateCutoutEngine: InpaintEngine = {
+  id: 'replicate:background-remover',
+  supports: ['cutout'],
+  approxCostUsd: 0.0005,
+  async run(apiKey, req): Promise<InpaintResult> {
+    const url = await runReplicateImageOnly(apiKey, '851-labs/background-remover', req.imageDataUrl, (image) => ({
+      image,
+      // RGBA=背景を透明にして返す（合成でそのまま重ねられる）。threshold 0＝アルファを二値化せず滑らかに残す。
+      background_type: 'rgba',
+      threshold: 0,
+      format: 'png',
+    }));
+    return { imageDataUrl: url, engine: this.id, costUsd: this.approxCostUsd };
+  },
+};
+
+/**
+ * 合成済み画像を背景の照明へ馴染ませる（relight・IC-Light 系）。フェーズ2の「任意・既定OFF」トグル。
+ * ※ 未検証のダークシップ: 実キー（REPLICATE_API_TOKEN）＋ VITE_ENABLE_RELIGHT=true で有効化して実機確認する前提。
+ *    入力スキーマ（subject/background の項目名）はモデル更新で変わりうる。失敗しても合成結果は保たれる設計
+ *    （呼び出し側で relight 失敗時は合成のまま採用）。有効化前に必ずライブで出力を確認すること。
+ */
+export const replicateIcLightEngine: InpaintEngine = {
+  id: 'replicate:ic-light-background',
+  supports: ['relight'],
+  acceptsReference: true,
+  approxCostUsd: 0.01,
+  async run(apiKey, req): Promise<InpaintResult> {
+    const subject = req.imageDataUrl;
+    const background = req.backgroundImageDataUrl || req.imageDataUrl;
+    const [subjectUrl, bgUrl] = await Promise.all([
+      uploadFile(apiKey, subject, 'subject.png'),
+      uploadFile(apiKey, background, 'bg.png'),
+    ]);
+    const url = await createAndAwait(apiKey, 'zsxkib/ic-light-background', {
+      subject_image: subjectUrl,
+      background_image: bgUrl,
+      prompt: req.prompt?.trim() || 'natural interior lighting, photorealistic',
+    });
     return { imageDataUrl: url, engine: this.id, costUsd: this.approxCostUsd };
   },
 };

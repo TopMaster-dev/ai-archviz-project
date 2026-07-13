@@ -9,19 +9,27 @@
  *    必ず compositeMaskedEdit で範囲外を元画像へ貼り戻すことで担保する（エンジンの挙動に依存しない）。
  */
 
-export type InpaintOp = 'remove' | 'generate';
+export type InpaintOp = 'remove' | 'generate' | 'cutout' | 'relight';
 
 export interface InpaintRequest {
-  /** 編集対象のベース画像（data URL）。 */
+  /**
+   * 処理対象の画像（data URL）。
+   * remove/generate = 編集するベース画像 / cutout = 背景を抜く商品画像 / relight = 合成済み画像。
+   */
   imageDataUrl: string;
-  /** 編集する範囲のマスク（data URL・白=編集する範囲 / 黒=保持）。 */
-  maskDataUrl: string;
-  /** 'remove'=物体消去（背景で埋める）/ 'generate'=マスク内に prompt/参照で生成。 */
+  /** 編集する範囲のマスク（data URL・白=編集する範囲 / 黒=保持）。remove/generate のみ必須。cutout/relight は不要。 */
+  maskDataUrl?: string;
+  /**
+   * 'remove'=物体消去 / 'generate'=マスク内に prompt/参照で生成 /
+   * 'cutout'=商品画像の背景を除去して切り抜き（RGBA）/ 'relight'=合成済み画像を背景の照明へ馴染ませる。
+   */
   op: InpaintOp;
   /** generate 時のテキスト指示（例: 木製の椅子を置いて）。remove では未使用。 */
   prompt?: string;
   /** generate 時の参照画像（差し替える家具など・data URL）。任意。 */
   referenceImageDataUrl?: string | null;
+  /** relight 時の背景画像（合成先のベース・data URL）。照明の基準に使う。任意。 */
+  backgroundImageDataUrl?: string | null;
 }
 
 export interface InpaintResult {

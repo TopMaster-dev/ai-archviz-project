@@ -105,4 +105,45 @@ describe('runInpaint（検証＋委譲＋フェイルソフト）', () => {
     });
     expect(await runInpaint(eng, 'k', body)).toMatchObject({ success: false, status: 502 });
   });
+
+  it('cutout: マスク不要（image だけで実行）', async () => {
+    const eng = mockEngine({ supports: ['cutout'] });
+    const r = await runInpaint(eng, 'k', { imageDataUrl: 'data:image/png;base64,PROD', op: 'cutout' });
+    expect(r.success).toBe(true);
+    expect(eng.run).toHaveBeenCalledOnce();
+  });
+
+  it('remove/generate はマスク欠如で 400（範囲内編集はマスク必須）', async () => {
+    const eng = mockEngine();
+    expect(await runInpaint(eng, 'k', { imageDataUrl: 'i', op: 'remove' })).toMatchObject({
+      success: false,
+      status: 400,
+    });
+  });
+
+  it('relight: 背景画像が無ければ 400', async () => {
+    const eng = mockEngine({ supports: ['relight'] });
+    expect(await runInpaint(eng, 'k', { imageDataUrl: 'i', op: 'relight' })).toMatchObject({
+      success: false,
+      status: 400,
+    });
+    expect(eng.run).not.toHaveBeenCalled();
+  });
+
+  it('relight: 背景画像があれば実行', async () => {
+    const eng = mockEngine({ supports: ['relight'] });
+    const r = await runInpaint(eng, 'k', {
+      imageDataUrl: 'i',
+      op: 'relight',
+      backgroundImageDataUrl: 'data:image/png;base64,BG',
+    });
+    expect(r.success).toBe(true);
+  });
+
+  it('未知の op（foo）は 400', async () => {
+    expect(await runInpaint(mockEngine(), 'k', { imageDataUrl: 'i', maskDataUrl: 'm', op: 'foo' })).toMatchObject({
+      success: false,
+      status: 400,
+    });
+  });
 });
