@@ -14,8 +14,13 @@ import { AuthedShell } from './AuthedShell.js';
  * - 構成済み・未ログイン: ログイン/ランディング画面を表示。
  * - 構成済み・ログイン済み・本登録未完了（招待直後）: 本登録画面を表示（row 38）。
  * - 構成済み・ログイン済み・本登録済み: アプリを表示。
+ *
+ * bare=true: 認証チェック（ログイン必須・本登録・ロック）はそのまま通すが、通常アプリの
+ *   プロジェクト・シェル（ProjectSessionProvider + AuthedShell）を挟まず children を直接描画する。
+ *   運営ダッシュボード（?admin）のような全画面ビュー用。AuthedShell は「プロジェクトを開くまで
+ *   ホーム画面を表示し children を無視する」ため、そこへ管理画面を入れると永久に表示されない（260713 修正）。
  */
-export function AuthGate({ children }: { children: ReactNode }) {
+export function AuthGate({ children, bare = false }: { children: ReactNode; bare?: boolean }) {
   const { configured, loading, userId, profile } = useAuth();
 
   if (!configured) {
@@ -54,6 +59,12 @@ export function AuthGate({ children }: { children: ReactNode }) {
   // registered_at が未設定なら本登録（属性入力・規約同意）画面を表示する（管理表 row 38）。
   if (!profile.registered_at) {
     return <RegistrationScreen />;
+  }
+
+  // 全画面ビュー（運営ダッシュボード等）は、プロジェクト・シェルを挟まず直接描画する。
+  // AuthedShell はプロジェクトを開くまでホーム画面を出し children を無視するため、ここを通すと表示されない。
+  if (bare) {
+    return <>{children}</>;
   }
 
   // ログイン後はホーム画面（プロジェクト管理）→ エディタ の順。AuthedShell が切替を担う。

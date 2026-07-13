@@ -19,6 +19,8 @@ if (!rootElement) {
 const shareToken = new URLSearchParams(window.location.search).get('share');
 // 運営ダッシュボード（260711）: `?admin` があれば AuthGate（ログイン必須）の内側で AdminDashboard を描画。
 // 実際の管理者判定はサーバー側（ADMIN_EMAILS 許可リスト）で行い、非管理者にはアクセス権なしを表示する。
+// bare モードで描画する＝通常アプリのシェル（AuthedShell はプロジェクトを開くまでホームを出し children を
+// 無視する）を挟まず、全画面でダッシュボードを表示する（260713 修正: これが無いと ?admin でもホームが出る）。
 const adminView = new URLSearchParams(window.location.search).has('admin');
 
 const root = ReactDOM.createRoot(rootElement);
@@ -29,7 +31,7 @@ root.render(
         {shareToken ? (
           <SharedProjectViewer token={shareToken} />
         ) : (
-          <AuthGate>{adminView ? <AdminDashboard /> : <App />}</AuthGate>
+          <AuthGate bare={adminView}>{adminView ? <AdminDashboard /> : <App />}</AuthGate>
         )}
       </ConfirmProvider>
     </AuthProvider>
