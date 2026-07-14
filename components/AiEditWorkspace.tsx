@@ -596,6 +596,23 @@ export function AiEditWorkspace({
       // 【範囲ごとに個別処理（260714・クライアント選択の方式B）】複数範囲＋複数画像を一度に渡すと、どの画像を
       // どの範囲へ入れるかをモデルが自己判断し「入れ替わり」が起きる。そこで範囲を1つずつ、その範囲＋その1枚だけを
       // 渡して順に編集し（渡す画像が1枚なので入れ替わり不可）、直前の結果へ貼り戻す（範囲外は保持）。最後に継ぎ目をなじませる。
+      // 【文脈クロップは全範囲で共有】各範囲を個別に小さくクロップして送ると、モデルは部屋全体の文脈を失い、参照画像の
+      // 対象を「置く／差し替える」べき場面を誤判断する（空きスペースへ椅子を置くべき所で対象なしと判断して消す・
+      // テーブルを無変化で返す＝260714 クライアント報告）。旧・単一呼び出しは全範囲(union)の外接矩形でクロップして
+      // 全体文脈を保っていた。範囲ごと個別化してもクロップは全範囲基準(sharedCropPx)を共有し、各呼び出しで絞るのは
+      // 「送る参照画像＋フォーカス範囲＝1つずつ」だけにする（入れ替わりは画像1枚化で防止・文脈は全範囲クロップで確保）。
+      const allPlacements = objectsScaled.flatMap((o) => o.placements);
+      const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
+      let sharedCropPx: CropPx | null = null;
+      if (unionBBox && isConfinedRegion(unionBBox)) {
+        const bbox = padBBox(unionBBox);
+        const targetAspect = parseAspectRatioKey(
+          pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
+        );
+        const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
+        if (shouldCropRegion(bbox, candidate, baseW, baseH)) sharedCropPx = candidate;
+      }
+
       // editOneRegion: base に対して1領域 o を Gemini で編集し、範囲外を base のまま保った全画像を返す（失敗は null）。
       const editOneRegion = async (
         base: string,
@@ -609,16 +626,9 @@ export function AiEditWorkspace({
           if (!objBBox) return null;
           const objCoverage = objBBox.w * objBBox.h;
           const objIsGlobal = objCoverage >= GLOBAL_REGION_COVERAGE;
-          // 局所なら範囲＋余白だけを送る＝範囲外はモデルに渡らず不変。
-          let cropPx: CropPx | null = null;
-          if (isConfinedRegion(objBBox)) {
-            const bbox = padBBox(objBBox);
-            const targetAspect = parseAspectRatioKey(
-              pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
-            );
-            const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
-            if (shouldCropRegion(bbox, candidate, baseW, baseH)) cropPx = candidate;
-          }
+          // クロップは全範囲共有（sharedCropPx）＝この範囲“だけ”でなく全範囲を含む文脈でモデルへ送る（上のコメント参照）。
+          // 全範囲が広く展開している（isConfinedRegion=false）ときは sharedCropPx=null＝全画面をそのまま文脈として送る。
+          const cropPx = sharedCropPx;
           // クロップ経路ではベース・配置座標・アスペクト比をクロップ空間に統一。渡す objects はこの1領域だけ（入れ替わり防止）。
           const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
           const postObjects = cropPx
