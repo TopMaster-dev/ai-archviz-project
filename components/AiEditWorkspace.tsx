@@ -572,6 +572,8 @@ export function AiEditWorkspace({
       // 決めるようになった（260711）ので、この解析は「どの対象を編集するか」の特定補助に使う（遮蔽判定は今は使わない）。
       // narratives は生成本体へ渡して再解析を省く（二重解析回避）。解析失敗は narratives 無しで続行。
       let narratives: Record<string, string> = {};
+      // 各対象が手前の家具に隠れているか（遮蔽）。遮蔽対象を「先に・単独編集相当のフォーカスクロップ」で処理するため（260715）。
+      let occludedMap: Record<string, boolean> = {};
       try {
         // 事前解析は /api/ai-edit に analyze:true で相乗り（Hobbyプランのサーバレス関数数上限=12 対策・専用
         // エンドポイントを増やさない・260709）。遮蔽判定はベース画像＋範囲（座標）だけで足りるので、参照画像
@@ -588,6 +590,7 @@ export function AiEditWorkspace({
         const adata = await ares.json();
         if (adata?.success) {
           narratives = adata.narratives ?? {};
+          occludedMap = adata.occluded ?? {};
         }
       } catch {
         /* 解析失敗は非クロップ（自然）で続行 */
@@ -601,23 +604,27 @@ export function AiEditWorkspace({
       // テーブルを無変化で返す＝260714 クライアント報告）。旧・単一呼び出しは全範囲(union)の外接矩形でクロップして
       // 全体文脈を保っていた。範囲ごと個別化してもクロップは全範囲基準(sharedCropPx)を共有し、各呼び出しで絞るのは
       // 「送る参照画像＋フォーカス範囲＝1つずつ」だけにする（入れ替わりは画像1枚化で防止・文脈は全範囲クロップで確保）。
+      // bbox（正規化外接矩形）→ 送信用クロップ（局所なら範囲＋余白、そうでなければ null=全画面）を作る共通ヘルパ。
+      // 全範囲共有クロップにも、遮蔽対象の“単独編集相当”フォーカスクロップ（その対象だけ）にも使う。
+      const cropForBBox = (bbox: ReturnType<typeof unionBBoxOfPlacements> | null): CropPx | null => {
+        if (!bbox || !isConfinedRegion(bbox)) return null;
+        const padded = padBBox(bbox);
+        const targetAspect = parseAspectRatioKey(
+          pickClosestAspectRatio(Math.max(1, Math.round(padded.w * baseW)), Math.max(1, Math.round(padded.h * baseH)))
+        );
+        const candidate = snapCropToAspect(padded, baseW, baseH, targetAspect);
+        return shouldCropRegion(padded, candidate, baseW, baseH) ? candidate : null;
+      };
       const allPlacements = objectsScaled.flatMap((o) => o.placements);
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
-      let sharedCropPx: CropPx | null = null;
-      if (unionBBox && isConfinedRegion(unionBBox)) {
-        const bbox = padBBox(unionBBox);
-        const targetAspect = parseAspectRatioKey(
-          pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
-        );
-        const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
-        if (shouldCropRegion(bbox, candidate, baseW, baseH)) sharedCropPx = candidate;
-      }
+      const sharedCropPx: CropPx | null = cropForBBox(unionBBox);
 
       // editOneRegion: base に対して1領域 o を Gemini で編集し、範囲外を base のまま保った全画像を返す（失敗は null）。
       const editOneRegion = async (
         base: string,
         o: (typeof objectsScaled)[number],
-        multiRegion: boolean
+        multiRegion: boolean,
+        isOccluded: boolean
       ): Promise<string | null> => {
         // この範囲の編集で throw が起きても（ネットワーク/JSON/canvas 等）他範囲を巻き込まずスキップできるよう
         // 本体全体を try で囲み、失敗は null を返す（呼び出し側のループは null を飛ばして次の範囲へ進む）。
@@ -626,9 +633,13 @@ export function AiEditWorkspace({
           if (!objBBox) return null;
           const objCoverage = objBBox.w * objBBox.h;
           const objIsGlobal = objCoverage >= GLOBAL_REGION_COVERAGE;
-          // クロップは全範囲共有（sharedCropPx）＝この範囲“だけ”でなく全範囲を含む文脈でモデルへ送る（上のコメント参照）。
-          // 全範囲が広く展開している（isConfinedRegion=false）ときは sharedCropPx=null＝全画面をそのまま文脈として送る。
-          const cropPx = sharedCropPx;
+          // クロップ選択:
+          // ・遮蔽対象（isOccluded）: その対象“だけ”に絞ったフォーカスクロップ（＝単独編集と同じ見え方）。奥に隠れた
+          //   対象を全範囲の広いクロップで送ると、部屋全体の中で見失い別位置へ複製されやすい（単独なら正確に差し替わる
+          //   ＝クロップが対象に絞られているから・260715 report）。対象が小さすぎ/大きすぎてフォーカスクロップを作れない
+          //   ときは全画面ではなく sharedCropPx（全範囲クロップ）へフォールバック＝少なくとも従来（変更前）より広げない。
+          // ・それ以外: 全範囲共有（sharedCropPx）＝部屋全体の文脈で送る（空きスペースへの配置等の誤判断を防ぐ）。
+          const cropPx = isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
           // 【差し替え対象は必ず全体表示・見切れ厳禁（260714 report）】参照画像で差し替える家具は囲みより大きく
           // なりがちで、囲み(o.placements)で切ると背もたれ・脚が枠の縁で見切れる。囲みは“注目の目印”にすぎない。
           // そこで複数範囲の差し替えでは、囲みを広げた矩形 thisKeep（padBBox を広め pad で流用）を採用し、枠外へ
@@ -720,11 +731,17 @@ export function AiEditWorkspace({
       };
 
       // 範囲を1つずつ順に編集（各回に渡す参照画像は1枚だけ＝入れ替わり不可）。直前の結果を土台に次の範囲を編集する。
+      // 【遮蔽対象を先に処理（260715 クライアント提案）】奥に隠れた対象は、他の差し替えが入る前のきれいな土台に対して、
+      // その対象だけに絞ったフォーカスクロップ（＝単独編集と同じ）で先に差し替えると正確（「単独なら正確に差し替わる」
+      // の再現）。その後で遮蔽なしの対象を処理する。安定ソート（同順位は元の並び）で遮蔽=先頭へ。
       const multiRegion = objectsScaled.length > 1;
+      const processOrder = [...objectsScaled].sort(
+        (a, b) => (occludedMap[a.id] ? 0 : 1) - (occludedMap[b.id] ? 0 : 1)
+      );
       let workingBase = baseScaled;
       let editedCount = 0;
-      for (const o of objectsScaled) {
-        const r = await editOneRegion(workingBase, o, multiRegion);
+      for (const o of processOrder) {
+        const r = await editOneRegion(workingBase, o, multiRegion, !!occludedMap[o.id]);
         if (r) {
           workingBase = r;
           editedCount += 1;
