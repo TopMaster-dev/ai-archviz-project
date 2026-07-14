@@ -740,26 +740,34 @@ export function AiEditWorkspace({
       );
       let workingBase = baseScaled;
       let editedCount = 0;
+      let editedRegions = 0; // 編集に成功した“範囲（placement）”の総数。最終仕上げの発火判定に使う（オブジェクト数ではなく範囲数）。
+      let editedHasReplacement = false; // 実際に成功した編集の中に「差し替え（参照画像あり）」が含まれるか＝最終パスの種類選択に使う。
       for (const o of processOrder) {
         const r = await editOneRegion(workingBase, o, multiRegion, !!occludedMap[o.id]);
         if (r) {
           workingBase = r;
           editedCount += 1;
+          editedRegions += o.placements.length;
+          if (o.imageDataUrl) editedHasReplacement = true;
         }
       }
       if (editedCount === 0) throw new Error('編集に失敗しました。しばらくして再度お試しください。');
       outUrl = workingBase;
 
-      // 【最終の全体なじませ（複数範囲のときのみ・260714 クライアント要望）】各範囲を個別に差し替えて元位置へ貼り
-      // 合わせた1枚を、最後に Gemini で1回だけ通し、置かれた家具は変えずに環境へ自然に統合する（接地影・落ち影・
-      // 前後関係の遮蔽・部屋の光での陰影/色温度・継ぎ目消し）。プロンプトは「家具の正体・位置・構図・アスペクトは
-      // 一切変えず、環境へのなじませだけ」（buildNaturalizePrompt）。失敗時は貼り合わせ結果を採用。
-      if (editedCount >= 2) {
+      // 【最終の全体仕上げ（編集した“範囲”が2つ以上のとき）】各範囲を個別に編集して貼り合わせた1枚を、最後に Gemini で
+      // 1回だけ通して境界をなじませる。発火は“オブジェクト数”ではなく“範囲（placement）数”で判定＝1つのエリアに複数の
+      // 範囲を追加した場合（例: 窓を2箇所）も対象にする（260715 report: 窓周りの継ぎ目が残る＝最終パスが未発火だったのが原因）。
+      // パスの種類は編集内容で出し分ける:
+      // ・差し替え（参照画像あり）を含む → naturalize（置いた家具は変えず環境へ統合＝接地影/前後関係/光/継ぎ目消し）。
+      // ・テキストのみ（窓の外・色替え等・参照画像なし） → harmonize（継ぎ目・段差だけを消し、オブジェクト・環境は
+      //   一切変えない＝クライアント『オブジェクトや環境は変えない』要望に合致）。失敗時は貼り合わせ結果を採用。
+      if (editedRegions >= 2) {
+        const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
         try {
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: outUrl, naturalize: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+            body: JSON.stringify({ baseImage: outUrl, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
           });
           const hdata = await hres.json();
           if (hdata.success && hdata.url) {
