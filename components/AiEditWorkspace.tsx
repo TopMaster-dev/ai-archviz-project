@@ -47,7 +47,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
-import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE } from '../lib/aiEditPrompt.js';
+import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE, ENABLE_COMPOSITE_INTEGRATE } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -597,6 +597,8 @@ export function AiEditWorkspace({
 
       // 生成結果。まず専用エンジン（削除/生成）を試し、失敗/無効なら下の Gemini 経路へフォールバックする（260711 フェーズ1）。
       let outUrl: string | null = null;
+      // 決定論合成（参照商品の配置）で結果を作ったか。合成のときだけ任意の「背景になじませ」仕上げを掛ける（260714）。
+      let usedComposite = false;
 
       // === マスクベース専用エンジン（削除/生成・260711 フェーズ1）===
       // エリア編集は「囲った範囲だけを変える」。削除/生成はマスク方式の専用エンジンで処理し、範囲外は
@@ -742,6 +744,7 @@ export function AiEditWorkspace({
           //   範囲内(placed)は placeBase 由来＝既存物が消えた床＋商品なので、置き換えは成立する。
           const feather = Math.round(Math.max(baseW, baseH) * 0.008);
           outUrl = await compositeMaskedEdit(baseScaled, placed, allPlacements, baseW, baseH, feather);
+          usedComposite = true; // 合成成功。下の「背景になじませ」仕上げ（任意）の対象にする。
 
           // 第4段（任意・既定OFF）AIリライト: 照明を背景へ馴染ませる。失敗しても合成結果を維持（Gemini へは流さない）。
           if (ENABLE_RELIGHT && outUrl) {
@@ -926,6 +929,31 @@ export function AiEditWorkspace({
       // 専用エンジンも Gemini も結果を得られなかった場合の保険（通常は上でどちらかが outUrl を設定する）。
       if (outUrl == null) {
         throw new Error('編集に失敗しました。しばらくして再度お試しください。');
+      }
+      // 「背景になじませる（前後関係・光を整える）」（260714）: 決定論合成のときは常に、合成結果を最後に1回 Gemini へ
+      // 通し、貼り付けた家具の前後関係（オクルージョン）・遠近・接地影・光を背景になじませる（クライアント要望で自動化＝
+      // チェックボックス廃止）。平面貼りゆえの「手前の家具の前にはみ出す／床から浮く」を解消する（忠実さより自然さ優先）。
+      // keepQuality の前に掛ける（なじませ→精細化の順）。失敗時は合成結果をそのまま使う（best-effort）。
+      if (ENABLE_COMPOSITE_INTEGRATE && usedComposite) {
+        try {
+          const gres = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({
+              baseImage: outUrl,
+              integrate: true,
+              aspectRatio: pickClosestAspectRatio(baseW, baseH),
+              imageSize,
+            }),
+          });
+          const gdata = await gres.json();
+          if (gdata.success && gdata.url) {
+            void recordAiUsage({ feature: 'ai_edit', usage: gdata.usage, model: gdata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+            outUrl = await fitDataUrlToSize(gdata.url as string, baseW, baseH, 'cover');
+          }
+        } catch {
+          /* なじませ失敗は無視＝合成結果をそのまま使う */
+        }
       }
       // 「画質を高める（仕上げに精細化）」（260710）: keepQuality=ON のとき、確定した結果の“現在の1枚だけ”を
       // もう一度AIに通し、構図・家具・色を変えずに素材の質感と輪郭のキレだけを引き上げる。見本画像（2枚目）は
@@ -2082,6 +2110,11 @@ export function AiEditWorkspace({
                   </span>
                 </label>
               )}
+              {/* 背景になじませる（前後関係・光を整える・260714 クライアント要望）: 参照商品の決定論合成は平面貼りのため
+                  既存家具との前後関係（オクルージョン）・遠近・接地影が不自然になりうる（貼った家具が手前の家具の前に
+                  はみ出す等）。ONにすると合成結果を最後に1回Geminiでなじませる（忠実さより自然さ優先）。 */}
+              {/* 「背景になじませる（前後関係・光を整える）」は決定論合成のとき自動で掛かる（260714・チェックボックス廃止）。
+                  UIトグルは無し。キルスイッチは ENABLE_COMPOSITE_INTEGRATE（lib/aiEditPrompt）。 */}
               {/* 画質を高める（精細化・260710）: 旧「見本画像を2枚目として添付」方式（ゴースト原因）を廃止し、
                   生成後に現在の1枚だけをAIで精細化する後処理に刷新。2枚目を渡さないのでゴースト/二重は起きない。 */}
               {activeTool === 'area' && ENABLE_KEEP_QUALITY_ENHANCE && (
