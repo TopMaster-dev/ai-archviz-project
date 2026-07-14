@@ -1,5 +1,5 @@
 import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
-import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildEnhanceDetailPrompt, buildIntegratePrompt, describeObjectPlacements } from './aiEditPrompt.js';
+import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildEnhanceDetailPrompt, describeObjectPlacements } from './aiEditPrompt.js';
 import { resolveAgentRecommendations } from './agentCatalog.js';
 import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './agentAttachments.js';
 
@@ -364,9 +364,6 @@ export async function generateGeminiImageEdit(
     harmonize?: boolean;
     /** 画質を高める（精細化）パス（260710）。true のときベース1枚のみを、内容を変えずに精細化する（見本画像は渡さない）。 */
     enhanceDetail?: boolean;
-    /** 背景になじませる（前後関係・光を整える）パス（260714）。true のとき合成画像1枚のみを入力に、家具の種類/色を
-     *  変えずに前後関係(オクルージョン)・遠近・接地影・光をなじませる。見本画像は渡さない（＝ゴースト無し）。 */
-    integrate?: boolean;
     /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
     strictConfine?: boolean;
     /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
@@ -375,7 +372,7 @@ export async function generateGeminiImageEdit(
 ): Promise<{ url: string; usage: TokenUsage | null }> {
   // 単一画像パス（harmonize=継ぎ目なじませ / enhanceDetail=精細化）: ベース1枚だけを入力にする＝
   // スタイル・見本・オブジェクト参照など2枚目以降を一切添付しない（＝重ね焼き＝ゴーストが構造的に起きない）。
-  const singlePass = !!params.harmonize || !!params.enhanceDetail || !!params.integrate;
+  const singlePass = !!params.harmonize || !!params.enhanceDetail;
   // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
   const styleUrls = singlePass
     ? []
@@ -390,8 +387,6 @@ export async function generateGeminiImageEdit(
     ? buildHarmonizePrompt()
     : params.enhanceDetail
     ? buildEnhanceDetailPrompt()
-    : params.integrate
-    ? buildIntegratePrompt()
     : buildAiEditReferenceGuide({
         hasStyle: styleUrls.length > 0,
         styleImageCount: styleUrls.length,
@@ -451,9 +446,8 @@ export async function generateGeminiImageEdit(
       },
     ],
     generationConfig: {
-      // 均一化・精細化・なじませは最小変更＝低温度で（構図/家具の種類/色を動かさない）。
-      // integrate は前後関係を描き直すぶん harmonize より僅かに高め（0.15）だが依然として低温度。
-      temperature: params.harmonize ? 0.1 : params.enhanceDetail ? 0.12 : params.integrate ? 0.15 : 0.25,
+      // 均一化・精細化は最小変更＝低温度で（構図/内容を動かさない）。
+      temperature: params.harmonize ? 0.1 : params.enhanceDetail ? 0.12 : 0.25,
       responseModalities: ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio,

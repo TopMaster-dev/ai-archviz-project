@@ -63,8 +63,6 @@ export interface KeyHealthItem {
 export function getKeyHealth(): KeyHealthItem[] {
   const geminiService = process.env.GEMINI_API_KEY;
   const viteGemini = process.env.VITE_GEMINI_API_KEY;
-  const replicate = process.env.REPLICATE_API_TOKEN;
-  const bria = process.env.BRIA_API_TOKEN;
   const items: KeyHealthItem[] = [
     {
       id: 'gemini-service',
@@ -73,22 +71,6 @@ export function getKeyHealth(): KeyHealthItem[] {
       billing: 'user-byok',
       note: '通常はユーザー各自のキー（BYOK）を使用。これは未設定ユーザー向けのフォールバック。',
       ...maskTail(geminiService),
-    },
-    {
-      id: 'eraser-replicate',
-      label: 'Eraser / インペイント（Replicate）',
-      envVar: 'REPLICATE_API_TOKEN',
-      billing: 'operator',
-      note: '削除・生成の専用エンジン。費用は運営負担。',
-      ...maskTail(replicate),
-    },
-    {
-      id: 'eraser-bria',
-      label: 'Eraser / 背景除去（Bria・候補）',
-      envVar: 'BRIA_API_TOKEN',
-      billing: 'operator',
-      note: '候補エンジン。INPAINT_REMOVE_ENGINE=bria:eraser / INPAINT_CUTOUT_ENGINE=bria:remove-background で切替。',
-      ...maskTail(bria),
     },
   ];
   // VITE_ 接頭辞のキーはクライアントへ露出しうるので、設定されていたら警告表示する。

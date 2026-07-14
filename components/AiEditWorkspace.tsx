@@ -30,11 +30,8 @@ import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
-import { placeCutoutIntoRegion } from '../utils/compositeCutout.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
 import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
-import { chooseAreaEditRoute } from '../lib/inpaint/inpaintRoute.js';
-import { rasterizeMaskDataUrl } from '../utils/maskRaster.js';
 import {
   unionBBoxOfPlacements,
   padBBox,
@@ -47,7 +44,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
-import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE, ENABLE_COMPOSITE_INTEGRATE } from '../lib/aiEditPrompt.js';
+import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -117,28 +114,6 @@ function loadImageNaturalSize(dataUrl: string): Promise<{ w: number; h: number }
     img.src = dataUrl;
   });
 }
-
-/**
- * マスクベース専用エンジン（削除/生成）でエリア編集を処理するかのフラグ（260711・フェーズ1）。
- * 既定 OFF。運営が Replicate 等の共通キー（サーバー env REPLICATE_API_TOKEN）を設定し、実機テスト準備が
- * できたら VITE_ENABLE_INPAINT=true で有効化する。有効でもエンジン失敗時は自動で従来 Gemini 経路へフォールバック。
- */
-const ENABLE_INPAINT_ENGINE = import.meta.env.VITE_ENABLE_INPAINT === 'true';
-
-/**
- * 参照商品の「決定論合成」経路（260712・フェーズ2）。既定 OFF。参照画像（差し替え/配置する家具の画像）が
- * あるエリア編集で、商品の切り抜きを囲った範囲へそのまま貼る（＝ブランド・比率・形が完全一致・AI幻覚なし）。
- * 切り抜きに Replicate（背景除去）を使うため、運営が REPLICATE_API_TOKEN を設定し実機準備ができたら
- * VITE_ENABLE_COMPOSITE=true で有効化する。有効でも失敗時は自動で従来 Gemini 経路へフォールバックする。
- */
-const ENABLE_COMPOSITE = import.meta.env.VITE_ENABLE_COMPOSITE === 'true';
-
-/**
- * 合成後の「AIリライト」（照明を背景へ馴染ませる・IC-Light 系）。既定 OFF・未検証のダークシップ。
- * 合成そのものは決定論で完結するため、リライトは任意の後処理。VITE_ENABLE_RELIGHT=true かつ実キーがあるときのみ
- * 実機で出力を確認してから使う。失敗しても合成結果はそのまま採用する（Gemini へは流さない）。
- */
-const ENABLE_RELIGHT = import.meta.env.VITE_ENABLE_RELIGHT === 'true';
 
 type Props = {
   isOpen: boolean;
@@ -595,188 +570,10 @@ export function AiEditWorkspace({
       const unionCoverage = unionBBox ? unionBBox.w * unionBBox.h : 1;
       const isGlobalRegion = allPlacements.length > 0 && unionCoverage >= GLOBAL_REGION_COVERAGE;
 
-      // 生成結果。まず専用エンジン（削除/生成）を試し、失敗/無効なら下の Gemini 経路へフォールバックする（260711 フェーズ1）。
+      // 生成結果（エリア編集は Gemini のみ・クロップ＋範囲外の閉じ込め）。
       let outUrl: string | null = null;
-      // 決定論合成（参照商品の配置）で結果を作ったか。合成のときだけ任意の「背景になじませ」仕上げを掛ける（260714）。
-      let usedComposite = false;
 
-      // === マスクベース専用エンジン（削除/生成・260711 フェーズ1）===
-      // エリア編集は「囲った範囲だけを変える」。削除/生成はマスク方式の専用エンジンで処理し、範囲外は
-      // 必ずベースへ貼り戻して1ピクセルも変えない。エンジンが未設定/失敗なら outUrl は null のままで Gemini へフォールバック。
-      const instructionText = draftObjects
-        .flatMap((o) => [o.memo, ...(o.placementMemos ?? [])])
-        .map((s) => (s ?? '').trim())
-        .filter(Boolean)
-        .join(' / ');
-      const hasReferenceImage = objectsScaled.some((o) => !!o.imageDataUrl);
-      const route = chooseAreaEditRoute({ instruction: instructionText, hasReferenceImage, unionCoverage });
-      // 削除(inpaint-remove)は専用エンジンを使わず Gemini クロップ＋閉じ込めへ回す（260714 方針転換）。
-      // 実機比較で LaMa/Bria の埋め戻しより Gemini の holistic 再生成の方が自然（継ぎ目/青み/ゴーストが出ない）で、
-      // クロップ経路なら範囲外はモデルに渡らず不変。よってこのブロックはテキストのみのマスク内生成(generate)だけを扱う。
-      if (ENABLE_INPAINT_ENGINE && allPlacements.length > 0 && route === 'inpaint-generate') {
-        try {
-          // マスクは範囲＋わずかな膨張（生成物が縁で切れないよう）。範囲外の保証は下の貼り戻しで別途担保する。
-          const maskDilate = Math.round(Math.max(baseW, baseH) * 0.01);
-          const maskDataUrl = await rasterizeMaskDataUrl(allPlacements, baseW, baseH, { dilatePx: maskDilate });
-          const referenceImageDataUrl = objectsScaled.find((o) => !!o.imageDataUrl)?.imageDataUrl ?? null;
-          const ires = await fetch('/api/ai-edit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({
-              inpaint: true,
-              op: 'generate',
-              imageDataUrl: baseScaled,
-              maskDataUrl,
-              prompt: instructionText,
-              referenceImageDataUrl,
-            }),
-          });
-          const idata = await ires.json();
-          if (idata.success && idata.url) {
-            // 範囲外を絶対に変えない保証: エンジン出力をベース寸法へ整え、範囲外はベースへ貼り戻す（マスク外はバイト保持）。
-            const fitted = await fitDataUrlToSize(idata.url as string, baseW, baseH, 'cover');
-            const feather = Math.round(Math.max(baseW, baseH) * 0.008);
-            // 生成は範囲内に新規生成＝周囲へなじませたいのでトーン合わせを維持する。
-            const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
-            outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH, feather);
-            void recordAiUsage({
-              feature: 'ai_edit',
-              model: (idata.engine as string) || 'inpaint',
-              imageCount: 1,
-              projectId: projectSession?.projectId ?? null,
-            });
-          }
-          // idata.success=false（キー未設定・失敗など）→ outUrl は null のまま → 下の Gemini 経路へフォールバック。
-        } catch {
-          /* ネットワーク等の失敗 → Gemini へフォールバック */
-        }
-      }
-
-      // 置き換えの第1段（260714 クライアント要望）: Gemini で「囲った範囲の中身を消して背景だけ」にしたクリーンな
-      // ベースを作る（crop+confine で範囲外は不変）。これを土台に第2段で参照商品を配置＝“追加”でなく“置き換え”。
-      // トーン合わせは削除では行わない（対象色に引っ張られてゴースト化するため）。失敗時は null（呼び出し側は元
-      // ベースへ配置＝従来の追加挙動へフェイルソフト）。
-      const geminiEmptyRegion = async (base: string): Promise<string | null> => {
-        try {
-          const useCropR = !!unionBBox && isConfinedRegion(unionBBox);
-          let cropR: CropPx | null = null;
-          if (useCropR && unionBBox) {
-            const bbox = padBBox(unionBBox);
-            const targetAspect = parseAspectRatioKey(
-              pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
-            );
-            const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
-            if (shouldCropRegion(bbox, candidate, baseW, baseH)) cropR = candidate;
-          }
-          const removeObjects = [
-            {
-              id: 'replace-clear',
-              imageDataUrl: null,
-              memo: 'この範囲の中にある物・家具をすべて消し、壁と床だけの何も無い状態にしてください。',
-              placements: cropR ? remapPlacementsToCrop(allPlacements, cropR, baseW, baseH) : allPlacements,
-            },
-          ];
-          const postBase = cropR ? await cropDataUrl(base, cropR) : base;
-          const postAspect = cropR ? pickClosestAspectRatio(cropR.sw, cropR.sh) : aspectRatio;
-          const res = await fetch('/api/ai-edit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: postBase, objects: removeObjects, aspectRatio: postAspect, imageSize, strictConfine: true }),
-          });
-          const data = await res.json();
-          if (!data.success || !data.url) return null;
-          void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-          const feather = Math.round(Math.max(baseW, baseH) * 0.008);
-          if (cropR) {
-            const cropRect: NormalizedRect = { x: cropR.sx / baseW, y: cropR.sy / baseH, width: cropR.sw / baseW, height: cropR.sh / baseH };
-            const fittedCrop = await fitDataUrlToSize(data.url as string, cropR.sw, cropR.sh, 'cover');
-            const full = await pasteCropIntoBase(base, fittedCrop, cropR, baseW, baseH);
-            return await compositeMaskedEdit(base, full, [cropRect], baseW, baseH, feather);
-          }
-          const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover');
-          return await compositeMaskedEdit(base, fitted, allPlacements, baseW, baseH, feather);
-        } catch {
-          return null;
-        }
-      };
-
-      // === 決定論合成（参照商品の忠実配置・260712 フェーズ2 / 置き換え2段化・260714）===
-      // 参照画像（差し替え/配置する家具）があるエリア編集は、AIに生成させず「商品の切り抜きをそのまま貼る」。
-      // 商品ピクセルはモデルに一切渡さないので、ブランド・比率・形が完全一致し、幻覚も起きない。
-      // 第1段: 範囲内の既存物を Gemini で除去（geminiEmptyRegion）。第2段: 除去済みベースへ切り抜きを配置。
-      // 切り抜き（背景除去）だけ Replicate を使い、配置・閉じ込めはクライアントで決定論的に行う（照明合わせは任意）。
-      if (ENABLE_COMPOSITE && outUrl == null && allPlacements.length > 0 && route === 'composite') {
-        try {
-          const refObjects = objectsScaled.filter((o) => !!o.imageDataUrl);
-          if (refObjects.length === 0) throw new Error('参照画像なし'); // 念のため（route=composite は参照ありのはず）
-          // 第1段: 既存物を除去して背景だけのベースを作る（失敗時は元ベース＝従来の“追加”へフェイルソフト）。
-          const cleaned = await geminiEmptyRegion(baseScaled);
-          const placeBase = cleaned ?? baseScaled;
-          // 第2段: 参照商品の切り抜きを除去済みベースへ配置する。
-          let placed = placeBase;
-          for (const o of refObjects) {
-            // 各参照はその領域（複数なら結合矩形）へ配置する。領域が無ければ全体の結合矩形にフォールバック。
-            const region = (o.placements.length > 0 ? unionBBoxOfPlacements(o.placements) : unionBBox) ?? unionBBox;
-            if (!region) continue;
-            // 切り抜き（背景除去）。失敗すれば throw → 下の catch で Gemini へフェイルソフト。
-            const cres = await fetch('/api/ai-edit', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-              body: JSON.stringify({ inpaint: true, op: 'cutout', imageDataUrl: o.imageDataUrl }),
-            });
-            const cdata = await cres.json();
-            if (!cdata.success || !cdata.url) throw new Error('cutout 失敗');
-            // 決定論配置（アスペクト維持・床接地）。被写体なし/退化/失敗は null → throw で Gemini へフェイルソフト。
-            const next = await placeCutoutIntoRegion(placed, cdata.url as string, region, { fitFrac: 0.9, anchor: 'floor' });
-            if (next == null) throw new Error('切り抜きに被写体がありません（フェイルソフト）');
-            placed = next;
-            void recordAiUsage({
-              feature: 'ai_edit',
-              model: (cdata.engine as string) || 'cutout',
-              imageCount: 1,
-              projectId: projectSession?.projectId ?? null,
-            });
-          }
-          // 第3段: 描いた範囲でクリップして貼り戻す。**外側は元画像(baseScaled)から復元**する（除去済みベース
-          //   placeBase ではない）。placeBase は crop+pad を Gemini が再生成しているため、描いた範囲の外側の帯
-          //   （crop と範囲の差分）に別の家具の消失等が焼き込まれうる。外側を baseScaled にすることで、範囲外は
-          //   元画像とバイト一致＝「範囲内の椅子を消したのに範囲外の椅子が消えた」型の破れを防ぐ（260714 検証で検出）。
-          //   範囲内(placed)は placeBase 由来＝既存物が消えた床＋商品なので、置き換えは成立する。
-          const feather = Math.round(Math.max(baseW, baseH) * 0.008);
-          outUrl = await compositeMaskedEdit(baseScaled, placed, allPlacements, baseW, baseH, feather);
-          usedComposite = true; // 合成成功。下の「背景になじませ」仕上げ（任意）の対象にする。
-
-          // 第4段（任意・既定OFF）AIリライト: 照明を背景へ馴染ませる。失敗しても合成結果を維持（Gemini へは流さない）。
-          if (ENABLE_RELIGHT && outUrl) {
-            try {
-              const rres = await fetch('/api/ai-edit', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-                body: JSON.stringify({
-                  inpaint: true,
-                  op: 'relight',
-                  imageDataUrl: outUrl,
-                  backgroundImageDataUrl: placeBase,
-                  prompt: instructionText,
-                }),
-              });
-              const rdata = await rres.json();
-              if (rdata.success && rdata.url) {
-                const relit = await fitDataUrlToSize(rdata.url as string, baseW, baseH, 'cover');
-                // 第3段と同じく外側は元画像から復元（範囲外バイト保持）。
-                outUrl = await compositeMaskedEdit(baseScaled, relit, allPlacements, baseW, baseH, feather);
-              }
-            } catch {
-              /* リライト失敗 → 合成結果（outUrl）をそのまま採用 */
-            }
-          }
-        } catch {
-          // 切り抜き/合成の失敗 → outUrl は null のまま → 下の Gemini 経路へフェイルソフト。
-          outUrl = null;
-        }
-      }
-
-      // === Gemini 経路（専用エンジンが未使用/失敗のときのみ）===
+      // === Gemini 経路 ===
       if (outUrl == null) {
       // 生成前の事前解析（対象の説明 narratives・260709）。クロップ経路の出し分けは被覆率（幾何・isConfinedRegion）で
       // 決めるようになった（260711）ので、この解析は「どの対象を編集するか」の特定補助に使う（遮蔽判定は今は使わない）。
@@ -926,34 +723,9 @@ export function AiEditWorkspace({
       }
       } // === Gemini 経路ここまで（if (outUrl == null)）===
 
-      // 専用エンジンも Gemini も結果を得られなかった場合の保険（通常は上でどちらかが outUrl を設定する）。
+      // Gemini から結果を得られなかった場合の保険（通常は上で outUrl が設定される）。
       if (outUrl == null) {
         throw new Error('編集に失敗しました。しばらくして再度お試しください。');
-      }
-      // 「背景になじませる（前後関係・光を整える）」（260714）: 決定論合成のときは常に、合成結果を最後に1回 Gemini へ
-      // 通し、貼り付けた家具の前後関係（オクルージョン）・遠近・接地影・光を背景になじませる（クライアント要望で自動化＝
-      // チェックボックス廃止）。平面貼りゆえの「手前の家具の前にはみ出す／床から浮く」を解消する（忠実さより自然さ優先）。
-      // keepQuality の前に掛ける（なじませ→精細化の順）。失敗時は合成結果をそのまま使う（best-effort）。
-      if (ENABLE_COMPOSITE_INTEGRATE && usedComposite) {
-        try {
-          const gres = await fetch('/api/ai-edit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({
-              baseImage: outUrl,
-              integrate: true,
-              aspectRatio: pickClosestAspectRatio(baseW, baseH),
-              imageSize,
-            }),
-          });
-          const gdata = await gres.json();
-          if (gdata.success && gdata.url) {
-            void recordAiUsage({ feature: 'ai_edit', usage: gdata.usage, model: gdata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-            outUrl = await fitDataUrlToSize(gdata.url as string, baseW, baseH, 'cover');
-          }
-        } catch {
-          /* なじませ失敗は無視＝合成結果をそのまま使う */
-        }
       }
       // 「画質を高める（仕上げに精細化）」（260710）: keepQuality=ON のとき、確定した結果の“現在の1枚だけ”を
       // もう一度AIに通し、構図・家具・色を変えずに素材の質感と輪郭のキレだけを引き上げる。見本画像（2枚目）は
@@ -2110,11 +1882,6 @@ export function AiEditWorkspace({
                   </span>
                 </label>
               )}
-              {/* 背景になじませる（前後関係・光を整える・260714 クライアント要望）: 参照商品の決定論合成は平面貼りのため
-                  既存家具との前後関係（オクルージョン）・遠近・接地影が不自然になりうる（貼った家具が手前の家具の前に
-                  はみ出す等）。ONにすると合成結果を最後に1回Geminiでなじませる（忠実さより自然さ優先）。 */}
-              {/* 「背景になじませる（前後関係・光を整える）」は決定論合成のとき自動で掛かる（260714・チェックボックス廃止）。
-                  UIトグルは無し。キルスイッチは ENABLE_COMPOSITE_INTEGRATE（lib/aiEditPrompt）。 */}
               {/* 画質を高める（精細化・260710）: 旧「見本画像を2枚目として添付」方式（ゴースト原因）を廃止し、
                   生成後に現在の1枚だけをAIで精細化する後処理に刷新。2枚目を渡さないのでゴースト/二重は起きない。 */}
               {activeTool === 'area' && ENABLE_KEEP_QUALITY_ENHANCE && (

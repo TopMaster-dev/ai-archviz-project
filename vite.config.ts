@@ -12,7 +12,6 @@ import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/st
 import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { runAiEdit } from './lib/aiEditCore.js';
 import { runAiAnalyze } from './lib/aiAnalyzeCore.js';
-import { handleInpaintRequest } from './lib/inpaint/handleInpaint.js';
 import { deriveMaterialPhysical } from './lib/materialPhysical.js';
 
 export default defineConfig(({ mode }) => {
@@ -201,20 +200,6 @@ export default defineConfig(({ mode }) => {
                 req.on('end', async () => {
                     try {
                         const parsedEarly = body ? JSON.parse(body) : {};
-                        // マスクベース編集（削除/生成）＝アプリ保有の共通キー（Replicate 等）で実行。Gemini キー不要。
-                        // 本番 api/ai-edit.ts と同一の共有ハンドラ（handleInpaintRequest）＝開発と本番で挙動一致（260711）。
-                        if (parsedEarly && parsedEarly.inpaint === true) {
-                            const r = await handleInpaintRequest(parsedEarly);
-                            res.statusCode = r.success ? 200 : r.status;
-                            res.setHeader('Content-Type', 'application/json');
-                            return res.end(
-                                JSON.stringify(
-                                    r.success
-                                        ? { success: true, url: r.result.imageDataUrl, engine: r.result.engine, costUsd: r.result.costUsd ?? null }
-                                        : { success: false, error: r.error }
-                                )
-                            );
-                        }
                         const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
                         // 従来(AIzaSy...)と新フォーマット(AQ....)の両対応（260612）
                         const apiKey = extractGeminiApiKey(rawApiKey);

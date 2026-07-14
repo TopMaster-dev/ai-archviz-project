@@ -3,7 +3,6 @@
  *
  * 注意（正直な前提）:
  * - Gemini（ユーザーBYOK）は実請求を運営から読めないため「呼び出し回数×概算単価」の**推定**。
- * - 専用エンジン（Replicate 等・運営キー）は1回あたりの概算単価。実請求はプロバイダ側が正。
  * - 単価はドル。導入時に最新値へ更新する前提の目安（2026-07 時点の調査値）。
  */
 
@@ -26,9 +25,6 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   'gemini-3-pro-image': { perImageUsd: 0.134 },
   'gemini-2.5-flash-image': { perImageUsd: 0.039 },
   'gemini-2.0-flash': { perImageUsd: 0.039 },
-  'replicate:remove-object': { perCallUsd: 0.0006 },
-  'replicate:flux-fill-pro': { perCallUsd: 0.05 },
-  inpaint: { perCallUsd: 0.05 },
 };
 
 /** モデルIDの前方一致で単価を引く（見つからなければ null）。 */
