@@ -733,14 +733,16 @@ export function AiEditWorkspace({
       if (editedCount === 0) throw new Error('編集に失敗しました。しばらくして再度お試しください。');
       outUrl = workingBase;
 
-      // 最後のなじませ（複数範囲のときのみ）: 貼り合わせた境界の継ぎ目を Gemini で1回消す。プロンプトは
-      // 「継ぎ目を消すだけ・構図/家具/仕上げ材/アスペクトは一切変えない」（buildHarmonizePrompt）。失敗時は貼り合わせ結果を採用。
+      // 【最終の全体なじませ（複数範囲のときのみ・260714 クライアント要望）】各範囲を個別に差し替えて元位置へ貼り
+      // 合わせた1枚を、最後に Gemini で1回だけ通し、置かれた家具は変えずに環境へ自然に統合する（接地影・落ち影・
+      // 前後関係の遮蔽・部屋の光での陰影/色温度・継ぎ目消し）。プロンプトは「家具の正体・位置・構図・アスペクトは
+      // 一切変えず、環境へのなじませだけ」（buildNaturalizePrompt）。失敗時は貼り合わせ結果を採用。
       if (editedCount >= 2) {
         try {
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: outUrl, harmonize: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+            body: JSON.stringify({ baseImage: outUrl, naturalize: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
           });
           const hdata = await hres.json();
           if (hdata.success && hdata.url) {

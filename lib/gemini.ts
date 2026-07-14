@@ -1,5 +1,5 @@
 import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
-import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildEnhanceDetailPrompt, describeObjectPlacements } from './aiEditPrompt.js';
+import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildNaturalizePrompt, buildEnhanceDetailPrompt, describeObjectPlacements } from './aiEditPrompt.js';
 import { resolveAgentRecommendations } from './agentCatalog.js';
 import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './agentAttachments.js';
 
@@ -362,6 +362,9 @@ export async function generateGeminiImageEdit(
     learnedHints?: string[];
     /** 継ぎ目なじませ（全体を1枚に均一化）パス（260706）。true のとき創作系を使わずベース1枚のみを均一化する。 */
     harmonize?: boolean;
+    /** 環境になじませる（1枚の自然な写真に統合）最終パス（260714）。true のときベース1枚のみを、置かれた家具は変えず
+     * 接地影・落ち影・前後関係・光/色調・継ぎ目だけ環境へなじませる（harmonize より一歩踏み込む）。 */
+    naturalize?: boolean;
     /** 画質を高める（精細化）パス（260710）。true のときベース1枚のみを、内容を変えずに精細化する（見本画像は渡さない）。 */
     enhanceDetail?: boolean;
     /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
@@ -372,7 +375,7 @@ export async function generateGeminiImageEdit(
 ): Promise<{ url: string; usage: TokenUsage | null }> {
   // 単一画像パス（harmonize=継ぎ目なじませ / enhanceDetail=精細化）: ベース1枚だけを入力にする＝
   // スタイル・見本・オブジェクト参照など2枚目以降を一切添付しない（＝重ね焼き＝ゴーストが構造的に起きない）。
-  const singlePass = !!params.harmonize || !!params.enhanceDetail;
+  const singlePass = !!params.harmonize || !!params.naturalize || !!params.enhanceDetail;
   // スタイル参照は複数対応（260707）。配列があれば優先、無ければ後方互換の単数を1枚として扱う。
   const styleUrls = singlePass
     ? []
@@ -385,6 +388,8 @@ export async function generateGeminiImageEdit(
   const qualityRefUrl = singlePass ? null : params.qualityRefImageDataUrl || null;
   const instruction = params.harmonize
     ? buildHarmonizePrompt()
+    : params.naturalize
+    ? buildNaturalizePrompt()
     : params.enhanceDetail
     ? buildEnhanceDetailPrompt()
     : buildAiEditReferenceGuide({
@@ -447,7 +452,7 @@ export async function generateGeminiImageEdit(
     ],
     generationConfig: {
       // 均一化・精細化は最小変更＝低温度で（構図/内容を動かさない）。
-      temperature: params.harmonize ? 0.1 : params.enhanceDetail ? 0.12 : 0.25,
+      temperature: params.harmonize ? 0.1 : params.naturalize ? 0.15 : params.enhanceDetail ? 0.12 : 0.25,
       responseModalities: ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio,

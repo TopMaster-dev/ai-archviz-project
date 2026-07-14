@@ -19,6 +19,9 @@ export interface AiEditRequestBody {
   imageSize?: string;
   coordinate?: boolean;
   harmonize?: boolean;
+  /** 環境になじませる（1枚の自然な写真に統合）最終パス（260714）。true のときベース1枚のみを、置かれた家具は
+   * 変えず接地影・落ち影・前後関係・光/色調・継ぎ目だけ環境へなじませる。 */
+  naturalize?: boolean;
   /** 画質を高める（精細化）パス（260710）。true のときベース1枚のみを、内容を変えず精細化する。 */
   enhanceDetail?: boolean;
   learnedHints?: unknown;
@@ -53,6 +56,8 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
   const coordinate = body.coordinate === true;
   // 継ぎ目なじませ（全体を1枚に均一化）パス（260706）: ベース1枚だけを入力に均一化する。個別入力は不要。
   const harmonize = body.harmonize === true;
+  // 環境になじませる（1枚の自然な写真に統合）最終パス（260714）: ベース1枚だけを入力に、置かれた家具は変えず環境へなじませる。個別入力は不要。
+  const naturalize = body.naturalize === true;
   // 画質を高める（精細化）パス（260710）: ベース1枚だけを入力に精細化する。個別入力は不要（見本画像は渡さない＝ゴースト無し）。
   const enhanceDetail = body.enhanceDetail === true;
   // in-context反映（row 211/219）: 過去の高評価傾向。プロンプト末尾に参考添付。
@@ -92,7 +97,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       o.placementMemos.some((m) => m.trim().length > 0)
   );
   const areaPlacementCount = objects.reduce((sum, o) => sum + o.placements.length, 0);
-  if (!coordinate && !harmonize && !enhanceDetail && !hasSituationInput && !hasAreaEditInput) {
+  if (!coordinate && !harmonize && !naturalize && !enhanceDetail && !hasSituationInput && !hasAreaEditInput) {
     return {
       success: false,
       status: 400,
@@ -125,7 +130,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
     }
     if (Object.keys(cleaned).length > 0) placementNarratives = cleaned;
   }
-  if (!placementNarratives && !harmonize && !enhanceDetail && objects.length > 0) {
+  if (!placementNarratives && !harmonize && !naturalize && !enhanceDetail && objects.length > 0) {
     const analysis = await generatePlacementNarratives(apiKey, {
       baseImageDataUrl: body.baseImage,
       objects,
@@ -147,6 +152,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       placementNarratives,
       coordinate,
       harmonize,
+      naturalize,
       enhanceDetail,
       learnedHints,
       strictConfine: body.strictConfine === true,
