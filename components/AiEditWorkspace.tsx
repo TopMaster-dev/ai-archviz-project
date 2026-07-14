@@ -563,14 +563,7 @@ export function AiEditWorkspace({
       // スタイル/プロンプト（styleImage/styleMemo）は一切読み込まない。マスク領域＋余白をクロップして拡大送信し
       // （重なった家具の分離＝精度向上）、編集後は必ずベースへ貼り戻して多角形/矩形でクリップする。これにより
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
-      const allPlacements = draftObjects.flatMap((o) => o.placements);
-      const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
-      // 囲みの被覆率（幾何）で経路を決める（260711・参照画像の有無ではなく“範囲外を守るべきか”で判定）。
-      // 実質全画面（被覆≥GLOBAL）＝守る外がほぼ無い→全画面直（継ぎ目なし）。それ未満は範囲外を必ず守る。
-      const unionCoverage = unionBBox ? unionBBox.w * unionBBox.h : 1;
-      const isGlobalRegion = allPlacements.length > 0 && unionCoverage >= GLOBAL_REGION_COVERAGE;
-
-      // 生成結果（エリア編集は Gemini のみ・クロップ＋範囲外の閉じ込め）。
+      // 生成結果（エリア編集は Gemini のみ・範囲ごとにクロップ＋範囲外の閉じ込め）。
       let outUrl: string | null = null;
 
       // === Gemini 経路 ===
@@ -600,117 +593,114 @@ export function AiEditWorkspace({
         /* 解析失敗は非クロップ（自然）で続行 */
       }
 
-      // クロップ（案1）は「囲みが局所（isConfinedRegion）」なら常時使う（260711・以前は遮蔽時だけ）。
-      // 囲みの範囲だけをモデルへ送る＝範囲外の画素はモデルに渡らない＝範囲外は物理的に絶対変わらない
-      // （クライアント「範囲内の椅子を消したのに範囲外の椅子が消えた」＝閉じ込め破れの恒久対策）。
-      // クロップ内の対象は一意なので取り違えも起きにくい。遮蔽解析(narratives)は対象特定に引き続き利用。
-      const useCrop = !!unionBBox && isConfinedRegion(unionBBox);
-
-      let cropPx: CropPx | null = null;
-      if (useCrop && unionBBox) {
-        const bbox = padBBox(unionBBox);
-        const targetAspect = parseAspectRatioKey(
-          pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
-        );
-        const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
-        if (shouldCropRegion(bbox, candidate, baseW, baseH)) cropPx = candidate;
-      }
-
-      // クロップ経路ではベース画像・配置座標・アスペクト比をクロップ空間に統一して送る（サーバの位置説明生成も同座標系で整合）。
-      const postBase = cropPx ? await cropDataUrl(baseScaled, cropPx) : baseScaled;
-      const postObjects = cropPx
-        ? objectsScaled.map((o) => ({ ...o, placements: remapPlacementsToCrop(o.placements, cropPx as CropPx, baseW, baseH) }))
-        : objectsScaled;
-      const postAspect = cropPx ? pickClosestAspectRatio(cropPx.sw, cropPx.sh) : aspectRatio;
-
-      // エリア編集はスタイル参照/コーディネートのプロンプトを送らない（機能の独立性・コーディネートとは混線させない）。
-      const body: Record<string, unknown> = {
-        baseImage: postBase,
-        objects: postObjects,
-        aspectRatio: postAspect,
-        imageSize,
-        learnedHints,
-        // 切り取り（案1）のときは範囲に厳密＝strict、通常（自然）は soft でプロンプトの言い回しを一致させる。
-        strictConfine: !!cropPx || (allPlacements.length > 0 && !isGlobalRegion),
-        // 事前解析は解析済みを渡して再解析を省く（二重解析回避）。クロップ時は座標系が変わるが説明は対象識別用（参考）なので流用可。
-        ...(Object.keys(narratives).length > 0 ? { placementNarratives: narratives } : {}),
+      // 【範囲ごとに個別処理（260714・クライアント選択の方式B）】複数範囲＋複数画像を一度に渡すと、どの画像を
+      // どの範囲へ入れるかをモデルが自己判断し「入れ替わり」が起きる。そこで範囲を1つずつ、その範囲＋その1枚だけを
+      // 渡して順に編集し（渡す画像が1枚なので入れ替わり不可）、直前の結果へ貼り戻す（範囲外は保持）。最後に継ぎ目をなじませる。
+      // editOneRegion: base に対して1領域 o を Gemini で編集し、範囲外を base のまま保った全画像を返す（失敗は null）。
+      const editOneRegion = async (
+        base: string,
+        o: (typeof objectsScaled)[number],
+        multiRegion: boolean
+      ): Promise<string | null> => {
+        // この範囲の編集で throw が起きても（ネットワーク/JSON/canvas 等）他範囲を巻き込まずスキップできるよう
+        // 本体全体を try で囲み、失敗は null を返す（呼び出し側のループは null を飛ばして次の範囲へ進む）。
+        try {
+          const objBBox = o.placements.length > 0 ? unionBBoxOfPlacements(o.placements) : null;
+          if (!objBBox) return null;
+          const objCoverage = objBBox.w * objBBox.h;
+          const objIsGlobal = objCoverage >= GLOBAL_REGION_COVERAGE;
+          // 局所なら範囲＋余白だけを送る＝範囲外はモデルに渡らず不変。
+          let cropPx: CropPx | null = null;
+          if (isConfinedRegion(objBBox)) {
+            const bbox = padBBox(objBBox);
+            const targetAspect = parseAspectRatioKey(
+              pickClosestAspectRatio(Math.max(1, Math.round(bbox.w * baseW)), Math.max(1, Math.round(bbox.h * baseH)))
+            );
+            const candidate = snapCropToAspect(bbox, baseW, baseH, targetAspect);
+            if (shouldCropRegion(bbox, candidate, baseW, baseH)) cropPx = candidate;
+          }
+          // クロップ経路ではベース・配置座標・アスペクト比をクロップ空間に統一。渡す objects はこの1領域だけ（入れ替わり防止）。
+          const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
+          const postObjects = cropPx
+            ? [{ ...o, placements: remapPlacementsToCrop(o.placements, cropPx, baseW, baseH) }]
+            : [o];
+          const postAspect = cropPx ? pickClosestAspectRatio(cropPx.sw, cropPx.sh) : aspectRatio;
+          const body: Record<string, unknown> = {
+            baseImage: postBase,
+            objects: postObjects,
+            aspectRatio: postAspect,
+            imageSize,
+            learnedHints,
+            // 複数範囲では最終的にこの範囲マスクだけを採用するため、モデルにも「この範囲だけ触る」よう常に指示する。
+            strictConfine: !!cropPx || !objIsGlobal || multiRegion,
+            ...(narratives[o.id] ? { placementNarratives: { [o.id]: narratives[o.id] } } : {}),
+          };
+          const res = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify(body),
+          });
+          const data = await res.json();
+          if (!data.success || !data.url) return null;
+          void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+          const feather = Math.round(Math.max(baseW, baseH) * 0.008);
+          const dilate = Math.round(Math.max(baseW, baseH) * 0.01);
+          if (cropPx) {
+            // クロップ編集を base へ貼り戻す。単一範囲はクロップ矩形でクリップ（矩形外＝元画像で従来どおり）。
+            // 複数範囲では他範囲の結果がクロップ矩形内に入り得るので、この範囲の実マスク（o.placements）だけを採用し、
+            // それ以外は base のまま保つ＝先に編集した範囲の結果を上書きしない。
+            const cropRect: NormalizedRect = { x: cropPx.sx / baseW, y: cropPx.sy / baseH, width: cropPx.sw / baseW, height: cropPx.sh / baseH };
+            const clip: NormalizedRect[] = multiRegion ? o.placements : [cropRect];
+            const fittedCrop = await fitDataUrlToSize(data.url as string, cropPx.sw, cropPx.sh, 'cover');
+            const full = await pasteCropIntoBase(base, fittedCrop, cropPx, baseW, baseH);
+            const matched = await harmonizeEditToBase(base, full, clip, baseW, baseH);
+            // 膨張(dilate)は使わない（単一範囲はもともと 0）。膨張はマスクを外側へ広げ o.placements の外側リングを
+            // 編集画像で塗るため、複数範囲では隣接する先行範囲の結果や元背景を上書きしてしまう。羽根ぼかしは
+            // 内側限定（destination-in でクリップ）なので範囲外を侵さず安全。
+            return await compositeMaskedEdit(base, matched, clip, baseW, baseH, feather);
+          }
+          // 全画面生成（大領域）: base 寸法へ整える。
+          const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
+          const isBounded = !objIsGlobal;
+          // 複数範囲では全画面採用は不可（他範囲を消す）＝必ずこの範囲マスクだけ採用し cover 固定でレターボックスも避ける。
+          const mode: 'cover' | 'contain' =
+            !multiRegion && !isBounded && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
+          const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
+          // 複数範囲では常にこの範囲マスクへ閉じ込める（全画面を素通しすると先行範囲の結果と範囲外を上書きしてしまう）。
+          if (multiRegion || shouldCompositeAreaEdit({ placementCount: o.placements.length, fitMode: mode, unionCoverage: objCoverage })) {
+            const matched = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
+            // 単一範囲は従来どおり膨張ありで縁切れを防ぐ（外側＝元背景なので安全）。複数範囲は膨張0＝範囲外を厳密に base のまま保つ。
+            return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, multiRegion ? 0 : dilate);
+          }
+          return fitted;
+        } catch {
+          // この範囲の編集失敗は他範囲を巻き込まずスキップ（null）。
+          return null;
+        }
       };
 
-      const res = await fetch('/api/ai-edit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || '編集に失敗しました');
-      // トークン計測（row 58・無効時は no-op）。
-      void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-
-      outUrl = data.url as string;
-      // 編集結果の後処理。
-      // ・案1（cropPx あり＝囲みが局所 isConfinedRegion のとき・260711）: 切り取り編集をベースへ貼り戻し→境界を
-      //   決定論でなじませ（①）→クロップ矩形でクリップ合成。範囲外はモデルへ送っていない＝バイト保持で一切変えない。
-      // ・全画面（大領域/実質全画面）: 被覆 < 0.85 は合成して範囲外をベース復元、≥ 0.85 は全画面のまま採用。
-      if (cropPx) {
-        // 合成マスクは「囲った多角形」ではなく「クロップ矩形（対象＋余白）」を使う（260709 クライアント報告
-        // 「差し替えた椅子が全部表示されない＝見切れる」対策）。多角形で切り抜くと、差し替え家具が元の小さな囲み
-        // （＝隠れた対象の“見えている一部”に密着）で切れてしまう。クロップは対象＋余白を含み、モデルはクロップ内で
-        // 手前のソファによる遮蔽も正しく描くので、クロップ矩形ごと貼り戻せば新しい家具が（正しく遮蔽されたうえで）
-        // 全体表示される。矩形の縁は羽根ぼかし＋色合わせ（①）でなじませ、矩形の外は完全にベースのまま。
-        // 代償: クロップ矩形内の周辺（手前ソファの縁・壁・床の一部）も再生成されるが、クロップは対象に密着した
-        // 小さめ範囲なので変化は局所的。
-        const cropRect: NormalizedRect = {
-          x: cropPx.sx / baseW,
-          y: cropPx.sy / baseH,
-          width: cropPx.sw / baseW,
-          height: cropPx.sh / baseH,
-        };
-        const cropFeather = Math.round(Math.max(baseW, baseH) * 0.008); // 矩形の縁をやや広めにぼかしてなじませる
-        const fittedCrop = await fitDataUrlToSize(outUrl, cropPx.sw, cropPx.sh, 'cover');
-        const full = await pasteCropIntoBase(baseScaled, fittedCrop, cropPx, baseW, baseH);
-        const matched = await harmonizeEditToBase(baseScaled, full, [cropRect], baseW, baseH);
-        outUrl = await compositeMaskedEdit(baseScaled, matched, [cropRect], baseW, baseH, cropFeather);
-      } else {
-        // 全画面生成をベース寸法へ整える。アスペクト差が大きいときだけ contain（差し替え家具が欠けないように）。
-        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
-        // 囲まれた範囲（局所・非全画面）は「範囲外を絶対に変えない」を最優先（クライアント必須指摘260711）。
-        // contain（レターボックス）は座標がズレるため合成をスキップ＝全画面をそのまま採用＝範囲外が変わりうる。
-        // よって bounded（placementあり＆非グローバル）のときは常に cover に固定し、必ず合成→範囲外をベース復元する。
-        // 代償: モデルがアスペクトを大きく外した稀ケースで差し替え家具の縁が欠けうるが、閉じ込め＞完全表示（①）。
-        const isBoundedRegion = allPlacements.length > 0 && !isGlobalRegion;
-        const mode: 'cover' | 'contain' =
-          !isBoundedRegion && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-        const fitted = await fitDataUrlToSize(outUrl, baseW, baseH, mode);
-        // 合成する/しないの判定は shouldCompositeAreaEdit（被覆率基準・260711）に集約。
-        // ・囲まれた範囲（被覆 < 0.85）→ 参照画像の有無を問わず必ず合成（マスク外をベースへ厳密復元）＝範囲外を
-        //   絶対に変えない（クライアント致命報告260711「範囲内の椅子を消したら範囲外の椅子が消えた」対応）。
-        //   ※ さらに小さい範囲（被覆 < 0.6）はそもそも上流で crop 経路に回り、範囲外をモデルへ送らない。
-        // ・実質全画面（被覆 ≥ 0.85）→ 守る外がほぼ無いので全画面のまま採用＝継ぎ目なし（260707 挙動を温存）。
-        //   膨張(dilate)は差し替え家具が囲みの縁で切れるのを防ぐ生成ズレ吸収（隙間を橋渡ししない小ささ）。
-        if (shouldCompositeAreaEdit({ placementCount: allPlacements.length, fitMode: mode, unionCoverage })) {
-          const dilate = Math.round(Math.max(baseW, baseH) * 0.01); // ≈10px@1024（隙間を橋渡ししない小ささ＋生成ズレ吸収）
-          const feather = Math.round(Math.max(baseW, baseH) * 0.008);
-          const matched = await harmonizeEditToBase(baseScaled, fitted, allPlacements, baseW, baseH);
-          outUrl = await compositeMaskedEdit(baseScaled, matched, allPlacements, baseW, baseH, feather, dilate);
-        } else {
-          outUrl = fitted;
+      // 範囲を1つずつ順に編集（各回に渡す参照画像は1枚だけ＝入れ替わり不可）。直前の結果を土台に次の範囲を編集する。
+      const multiRegion = objectsScaled.length > 1;
+      let workingBase = baseScaled;
+      let editedCount = 0;
+      for (const o of objectsScaled) {
+        const r = await editOneRegion(workingBase, o, multiRegion);
+        if (r) {
+          workingBase = r;
+          editedCount += 1;
         }
       }
-      // ②（任意・opt-in・既定OFF）: 「継ぎ目をなじませる（全体を1枚に均一化）」AI再生成パス（260706 クライアント提案）。
-      // ①（決定論の境界なじませ）でも薄い継ぎ目が残るとき用。切り取り経路（cropPx）のときだけ効かせる（自然経路は
-      // 継ぎ目が無く不要）。全体再生成のため『他を一切変えない』保証はこのパスを ON にした時だけ外れる（クライアント了承済み）。
-      // 失敗時は合成結果をそのまま使う。
-      if (ENABLE_HARMONIZE_FLATTEN && harmonizeSeams && cropPx) {
+      if (editedCount === 0) throw new Error('編集に失敗しました。しばらくして再度お試しください。');
+      outUrl = workingBase;
+
+      // 最後のなじませ（複数範囲のときのみ）: 貼り合わせた境界の継ぎ目を Gemini で1回消す。プロンプトは
+      // 「継ぎ目を消すだけ・構図/家具/仕上げ材/アスペクトは一切変えない」（buildHarmonizePrompt）。失敗時は貼り合わせ結果を採用。
+      if (editedCount >= 2) {
         try {
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({
-              baseImage: outUrl,
-              harmonize: true,
-              aspectRatio: pickClosestAspectRatio(baseW, baseH),
-              imageSize,
-            }),
+            body: JSON.stringify({ baseImage: outUrl, harmonize: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
           });
           const hdata = await hres.json();
           if (hdata.success && hdata.url) {
@@ -718,7 +708,7 @@ export function AiEditWorkspace({
             outUrl = await fitDataUrlToSize(hdata.url as string, baseW, baseH, 'cover');
           }
         } catch {
-          /* 均一化失敗は無視＝合成結果をそのまま使う */
+          /* なじませ失敗は貼り合わせ結果を採用 */
         }
       }
       } // === Gemini 経路ここまで（if (outUrl == null)）===
