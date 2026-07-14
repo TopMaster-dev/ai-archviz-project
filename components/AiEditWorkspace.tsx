@@ -40,6 +40,7 @@ import {
   remapPlacementsToCrop,
   shouldCropRegion,
   isConfinedRegion,
+  MIN_SKIP_BBOX_COVERAGE,
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
@@ -629,6 +630,26 @@ export function AiEditWorkspace({
           // クロップは全範囲共有（sharedCropPx）＝この範囲“だけ”でなく全範囲を含む文脈でモデルへ送る（上のコメント参照）。
           // 全範囲が広く展開している（isConfinedRegion=false）ときは sharedCropPx=null＝全画面をそのまま文脈として送る。
           const cropPx = sharedCropPx;
+          // 【差し替え対象は必ず全体表示・見切れ厳禁（260714 report）】参照画像で差し替える家具は囲みより大きく
+          // なりがちで、囲み(o.placements)で切ると背もたれ・脚が枠の縁で見切れる。囲みは“注目の目印”にすぎない。
+          // 対象の描画範囲は事前に分からないため、固定パッドの矩形では大きな対象を切りこぼす。そこで参照画像ありの
+          // 範囲では「モデルへ送った画布=クロップ矩形（=全範囲union／全画面時は画面全体）そのもの」を採用して対象の
+          // 全体を必ず取り込み、その上で「他範囲の保護矩形」内だけを base（直前までの確定結果）へ戻し、先に置いた
+          // 他範囲の対象を壊さない。参照画像なし（テキストのみの局所編集）は対象を置かないので従来どおり範囲へ厳密に閉じ込める。
+          const isReplacement = !!o.imageDataUrl;
+          const REPLACE_KEEP_PAD = 0.8;
+          const bboxToRect = (b: { x: number; y: number; w: number; h: number }): NormalizedRect => ({
+            x: b.x,
+            y: b.y,
+            width: b.w,
+            height: b.h,
+          });
+          // 差し替え時に守る「他範囲」の保護矩形（各他範囲を広めに囲う＝他範囲の対象全体を保護）。
+          const otherProtect: NormalizedRect[] = isReplacement
+            ? objectsScaled
+                .filter((x) => x !== o && x.placements.length > 0)
+                .map((x) => bboxToRect(padBBox(unionBBoxOfPlacements(x.placements), REPLACE_KEEP_PAD)))
+            : [];
           // クロップ経路ではベース・配置座標・アスペクト比をクロップ空間に統一。渡す objects はこの1領域だけ（入れ替わり防止）。
           const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
           const postObjects = cropPx
@@ -656,30 +677,54 @@ export function AiEditWorkspace({
           const feather = Math.round(Math.max(baseW, baseH) * 0.008);
           const dilate = Math.round(Math.max(baseW, baseH) * 0.01);
           if (cropPx) {
-            // クロップ編集を base へ貼り戻す。単一範囲はクロップ矩形でクリップ（矩形外＝元画像で従来どおり）。
-            // 複数範囲では他範囲の結果がクロップ矩形内に入り得るので、この範囲の実マスク（o.placements）だけを採用し、
-            // それ以外は base のまま保つ＝先に編集した範囲の結果を上書きしない。
             const cropRect: NormalizedRect = { x: cropPx.sx / baseW, y: cropPx.sy / baseH, width: cropPx.sw / baseW, height: cropPx.sh / baseH };
-            const clip: NormalizedRect[] = multiRegion ? o.placements : [cropRect];
             const fittedCrop = await fitDataUrlToSize(data.url as string, cropPx.sw, cropPx.sh, 'cover');
             const full = await pasteCropIntoBase(base, fittedCrop, cropPx, baseW, baseH);
+            if (isReplacement) {
+              // 差し替え: クロップ矩形“全体”を採用（対象が囲みより大きくても、送った画布の中に描かれているので
+              // 全体が入る＝見切れ厳禁）→ 他範囲の保護矩形内だけ base へ戻す（先に確定した他範囲の対象を壊さない）。
+              // 単一範囲は otherProtect が空＝従来のクロップ矩形合成そのもの（羽根ぼかし込みで継ぎ目なし）。
+              const matched = await harmonizeEditToBase(base, full, [cropRect], baseW, baseH);
+              let out = await compositeMaskedEdit(base, matched, [cropRect], baseW, baseH, feather);
+              if (otherProtect.length) out = await compositeMaskedEdit(out, base, otherProtect, baseW, baseH, feather);
+              return out;
+            }
+            // テキストのみ: 複数=範囲マスクへ厳密閉じ込め／単一=クロップ矩形（従来どおり・矩形外＝元画像）。
+            const clip: NormalizedRect[] = multiRegion ? o.placements : [cropRect];
             const matched = await harmonizeEditToBase(base, full, clip, baseW, baseH);
-            // 膨張(dilate)は使わない（単一範囲はもともと 0）。膨張はマスクを外側へ広げ o.placements の外側リングを
-            // 編集画像で塗るため、複数範囲では隣接する先行範囲の結果や元背景を上書きしてしまう。羽根ぼかしは
-            // 内側限定（destination-in でクリップ）なので範囲外を侵さず安全。
             return await compositeMaskedEdit(base, matched, clip, baseW, baseH, feather);
           }
-          // 全画面生成（大領域）: base 寸法へ整える。
+          // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）: base 寸法へ整える。
           const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
           const isBounded = !objIsGlobal;
-          // 複数範囲では全画面採用は不可（他範囲を消す）＝必ずこの範囲マスクだけ採用し cover 固定でレターボックスも避ける。
+          // 複数範囲では cover 固定でレターボックスを避ける（座標整合）。
           const mode: 'cover' | 'contain' =
             !multiRegion && !isBounded && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
           const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
-          // 複数範囲では常にこの範囲マスクへ閉じ込める（全画面を素通しすると先行範囲の結果と範囲外を上書きしてしまう）。
+          if (isReplacement) {
+            // 差し替え(全画面): contain（レターボックス）は座標がズレるため合成せず全画面採用（従来どおり）。
+            if (mode === 'contain') return fitted;
+            // 小さな範囲がバラけて全画面送信になった場合、対象は画面内に大きく描かれ得るので画面“全体”を採用し対象を
+            // 絶対に切らない（他範囲だけ保護矩形で base へ戻す）。範囲自体が大きい（画面の6割超）ときは対象≒範囲なので
+            // 広め矩形にとどめ、背景全体の作り替えを避ける。strictConfine=ON なのでモデルは対象以外を概ね保持する。
+            // トーン合わせ(harmonize)のクリップは合成のクリップと必ず一致させる（測るリングと貼る境界がズレると
+            // 境界にトーン段差が出る・他経路はすべて一致済み）。
+            const smallSpread = objCoverage < MIN_SKIP_BBOX_COVERAGE;
+            let out: string;
+            if (smallSpread) {
+              // 画面全体を採用（境界は他範囲の保護矩形のみ・そこは羽根ぼかしで馴染む）。トーンは対象リングで測る。
+              out = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
+            } else {
+              const keepFF: NormalizedRect[] = [bboxToRect(padBBox(objBBox, REPLACE_KEEP_PAD))];
+              const matched = await harmonizeEditToBase(base, fitted, keepFF, baseW, baseH);
+              out = await compositeMaskedEdit(base, matched, keepFF, baseW, baseH, feather);
+            }
+            if (otherProtect.length) out = await compositeMaskedEdit(out, base, otherProtect, baseW, baseH, feather);
+            return out;
+          }
+          // テキストのみ: 複数範囲は常に範囲マスクへ閉じ込め（全画面素通しは範囲外を壊す）。単一は被覆率で判定。
           if (multiRegion || shouldCompositeAreaEdit({ placementCount: o.placements.length, fitMode: mode, unionCoverage: objCoverage })) {
             const matched = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
-            // 単一範囲は従来どおり膨張ありで縁切れを防ぐ（外側＝元背景なので安全）。複数範囲は膨張0＝範囲外を厳密に base のまま保つ。
             return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, multiRegion ? 0 : dilate);
           }
           return fitted;
