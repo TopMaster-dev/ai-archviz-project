@@ -734,7 +734,11 @@ export function AiEditWorkspace({
       // 【遮蔽対象を先に処理（260715 クライアント提案）】奥に隠れた対象は、他の差し替えが入る前のきれいな土台に対して、
       // その対象だけに絞ったフォーカスクロップ（＝単独編集と同じ）で先に差し替えると正確（「単独なら正確に差し替わる」
       // の再現）。その後で遮蔽なしの対象を処理する。安定ソート（同順位は元の並び）で遮蔽=先頭へ。
-      const multiRegion = objectsScaled.length > 1;
+      // 「複数範囲」= 編集する“範囲（placement）”が2つ以上（オブジェクト数ではない）。1つのエリアに複数範囲を追加した
+      // 場合（例: 窓を2箇所）も含める＝各範囲へ厳密に閉じ込め（o.placements）、範囲外（窓と窓の間の壁等）は base の
+      // まま保つ。オブジェクト数で判定していたときは、1エリア複数範囲が“単一”扱いになり、全範囲を含む広いクロップ矩形
+      // ([cropRect]) を丸ごと再生成→範囲外まで作り替え＋クロップ端に継ぎ目（窓の左に縦線）が出ていた（260715 report）。
+      const multiRegion = objectsScaled.reduce((n, o) => n + o.placements.length, 0) > 1;
       const processOrder = [...objectsScaled].sort(
         (a, b) => (occludedMap[a.id] ? 0 : 1) - (occludedMap[b.id] ? 0 : 1)
       );
