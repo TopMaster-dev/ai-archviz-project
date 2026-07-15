@@ -643,29 +643,11 @@ export function AiEditWorkspace({
           //   ときは全画面ではなく sharedCropPx（全範囲クロップ）へフォールバック＝少なくとも従来（変更前）より広げない。
           // ・それ以外: 全範囲共有（sharedCropPx）＝部屋全体の文脈で送る（空きスペースへの配置等の誤判断を防ぐ）。
           const cropPx = isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
-          // 【差し替え対象は囲った範囲の中に収める（260715 report）】方針は「対象は範囲内に収める・範囲より大きい参照は
-          // 縮小して範囲内に収める」（プロンプト objectRefLine）。合成は、対象が範囲内に収まっている前提で、接地影や生成の
-          // 微小なズレで縁が切れないよう囲みを少し広げた矩形 thisKeep（padBBox）で採る。「thisKeep の内側＝今回の生成、
-          // 外側＝base（＝直前までの確定結果）」なので、他範囲は thisKeep の外側にある限り自動的に保持される（＝他範囲を
-          // 明示的に消し戻す“保護矩形”は使わない。使うと、密集配置では他範囲の保護矩形が今回の対象まで覆って生成結果ごと
-          // base に戻し「何も変わらない」を招くため／260714 実機report）。thisKeep が他範囲に重なる箇所だけは今回の対象を
-          // 優先＝範囲を大きく重ねない運用。単一範囲は送ったクロップ矩形そのものを採用（thisKeep 不要）。参照画像なし
-          // （テキストのみの局所編集）は対象を置かないので従来どおり範囲へ厳密に閉じ込める。
-          // 遮蔽対象は“可視部分が小さいだけ”で対象自体は大きく、はみ出す見えている縁を切らないよう pad を広めに保つ。
-          const isReplacement = !!o.imageDataUrl;
-          const REPLACE_KEEP_PAD = isOccluded ? 0.8 : 0.3;
-          const bboxToRect = (b: { x: number; y: number; w: number; h: number }): NormalizedRect => ({
-            x: b.x,
-            y: b.y,
-            width: b.w,
-            height: b.h,
-          });
-          // 差し替え×複数範囲で採用する合成マスク。1オブジェクトが複数 placement を持つ場合、union の外接矩形だと
-          // placement 同士の“間”（例: 椅子2脚の間のテーブル）まで採ってしまうため、placement ごとの小矩形（各々を少し
-          // 広げたもの）の配列にする＝間は base のまま保持（260715 監査で確定した閉じ込め漏れの修正）。
-          const thisKeep: NormalizedRect[] = o.placements.map((pl) =>
-            bboxToRect(padBBox(unionBBoxOfPlacements([pl]), REPLACE_KEEP_PAD))
-          );
+          // 【合成マスクは「描いた範囲そのもの（o.placements）」で統一（260715 report: 横一直線の継ぎ目）】
+          // 以前は差し替えで範囲を pad で上下左右へ広げた矩形(thisKeep)を採っていたが、背の高い家具では“上方向の pad”が
+          // 家具の上の壁・窓まで採り込み、その上端が横一直線の継ぎ目として見えていた（複数家具の上端が揃うと画面幅の横線）。
+          // 差し替え対象は「範囲内に収める」方針なので、描いた範囲そのもので過不足なく、壁・窓へ余分にはみ出さない。
+          // 多角形は形どおり・矩形はそのまま・複数 placement の“間”も base のまま（範囲外は変わらない）。
           // クロップ経路ではベース・配置座標・アスペクト比をクロップ空間に統一。渡す objects はこの1領域だけ（入れ替わり防止）。
           const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
           const postObjects = cropPx
@@ -695,14 +677,10 @@ export function AiEditWorkspace({
           if (cropPx) {
             const fittedCrop = await fitDataUrlToSize(data.url as string, cropPx.sw, cropPx.sh, 'cover');
             const full = await pasteCropIntoBase(base, fittedCrop, cropPx, baseW, baseH);
-            // 合成マスクは編集内容に合わせて、単一/複数を問わず「描いた範囲」へ寄せて閉じ込める（260715 監査対応:
-            // 単一範囲でクロップ矩形[cropRect]全体を採ると、余白に入り込んだ近くの似た家具まで再生成され得るため）。
-            // ・差し替え → thisKeep（範囲を少し広げた矩形・placement ごと＝対象を範囲内に収めつつ縁の接地に余裕）。
-            // ・テキストのみ／削除 → o.placements（描いた形へ厳密に閉じ込め＝範囲外の似た家具や壁を保護）。
-            // クロップは送っているので文脈は担保。マスク外は base（＝範囲外は変わらない）。
-            const clip: NormalizedRect[] = isReplacement ? thisKeep : o.placements;
-            const matched = await harmonizeEditToBase(base, full, clip, baseW, baseH);
-            return await compositeMaskedEdit(base, matched, clip, baseW, baseH, feather);
+            // 合成マスクは「描いた範囲(o.placements)」で閉じ込める（差し替え・テキスト・削除すべて共通）。クロップは
+            // 送っているので文脈は担保・マスク外は base（範囲外は変わらない＝近くの似た家具や壁も保護・上の壁への横線も出ない）。
+            const matched = await harmonizeEditToBase(base, full, o.placements, baseW, baseH);
+            return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather);
           }
           // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）: base 寸法へ整える。
           const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
@@ -711,15 +689,8 @@ export function AiEditWorkspace({
           const mode: 'cover' | 'contain' =
             !multiRegion && !isBounded && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
           const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
-          // 差し替え×複数範囲: contain（レターボックス）は座標がズレるため合成せず全画面採用（従来どおり）。
-          if (isReplacement && multiRegion && mode === 'contain') return fitted;
-          if (isReplacement && multiRegion) {
-            // thisKeep（囲みより広い矩形）で対象の全体を採り込み見切れ厳禁。外側は base のまま＝他範囲保持。
-            // harmonize と composite のクリップは一致（境界のトーン段差防止）。
-            const matched = await harmonizeEditToBase(base, fitted, thisKeep, baseW, baseH);
-            return await compositeMaskedEdit(base, matched, thisKeep, baseW, baseH, feather);
-          }
-          // テキストのみ／単一範囲: 複数範囲は常に範囲マスクへ閉じ込め（全画面素通しは範囲外を壊す）。単一は被覆率で判定。
+          // 全画面経路も合成マスクは o.placements（描いた範囲）で統一。複数範囲は常に閉じ込め、単一は被覆率で判定
+          // （contain は multiRegion では発生しない＝mode は multiRegion で cover 固定のため旧 contain 早期returnは不要）。
           if (multiRegion || shouldCompositeAreaEdit({ placementCount: o.placements.length, fitMode: mode, unionCoverage: objCoverage })) {
             const matched = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
             return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, multiRegion ? 0 : dilate);
