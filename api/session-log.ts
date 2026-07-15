@@ -43,9 +43,52 @@ export default async function handler(req: any, res: any) {
   try {
     const url = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
     const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+    const bodyKind = (req.body ?? {})?.kind;
     // 未設定環境では黙ってスキップ（記録なし・ログインは継続）。reason で原因を可視化（秘匿値は出さない）。
     if (!url || !serviceKey) {
+      // 端末チェック（#2）は未構成なら「ブロックしない」（フェイルオープン＝正当な登録を妨げない）。
+      if (bodyKind === 'check-device') return res.status(200).json({ blocked: false, reason: 'server-not-configured' });
       return res.status(200).json({ success: false, skipped: true, reason: 'server-not-configured' });
+    }
+
+    const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+
+    // --- #2（260715）: 登録前デバイスチェック（トークン不要）。同一PC（UA＋画面＋任意でIP）で
+    // 既に本登録済みのアカウントがあれば、公開の新規登録をブロックする（フリープラン farming 防止）。
+    // フラグ ENABLE_REREG_DEVICE_BLOCK=true のときのみ有効（共有PC/回線の誤検知があるため既定 OFF）。
+    // 判定失敗・情報不足は blocked:false（フェイルオープン）。
+    if (bodyKind === 'check-device') {
+      if (process.env.ENABLE_REREG_DEVICE_BLOCK !== 'true') {
+        return res.status(200).json({ blocked: false, reason: 'disabled' });
+      }
+      const cb = (req.body ?? {}) as { userAgent?: string; screen?: string };
+      const ua = str(cb.userAgent, 500);
+      const scr = str(cb.screen, 32);
+      if (!ua || !scr) return res.status(200).json({ blocked: false, reason: 'insufficient-fp' });
+      try {
+        const { data: evs, error: evErr } = await admin
+          .from('login_events')
+          .select('user_id')
+          .eq('user_agent', ua)
+          .eq('screen', scr)
+          .limit(500);
+        if (evErr) return res.status(200).json({ blocked: false, reason: 'query-failed' });
+        const ids = Array.from(new Set((evs ?? []).map((e: { user_id: string | null }) => e.user_id).filter(Boolean))) as string[];
+        if (ids.length === 0) return res.status(200).json({ blocked: false });
+        // 本登録済み（registered_at あり）のアカウントが1つでもあればブロック。
+        const { data: profs, error: pErr } = await admin
+          .from('profiles')
+          .select('id')
+          .in('id', ids)
+          .not('registered_at', 'is', null)
+          .limit(1);
+        if (pErr) return res.status(200).json({ blocked: false, reason: 'query-failed' });
+        const blocked = (profs ?? []).length > 0;
+        return res.status(200).json({ blocked });
+      } catch (e: any) {
+        console.error('check-device error:', e?.message || e);
+        return res.status(200).json({ blocked: false, reason: 'error' });
+      }
     }
 
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
@@ -54,7 +97,6 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ success: false, skipped: true, reason: 'no-token' });
     }
 
-    const admin = createClient(url, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
     // トークンを検証してユーザーを特定（クライアントが user_id を僭称できないようにする）。
     const { data: u, error: uErr } = await admin.auth.getUser(token);
     const userId = u?.user?.id;

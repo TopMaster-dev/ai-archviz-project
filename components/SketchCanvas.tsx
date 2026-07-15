@@ -222,6 +222,9 @@ interface SketchCanvasProps {
   /** 下絵（2D背景画像）。null で非挿入。 */
   underlay?: UnderlaySettings | null;
   onUnderlayChange?: (underlay: UnderlaySettings | null) => void;
+  /** グリッドの基準点（原点）。mm。null=ワールド原点(0,0)。#5（260715）。 */
+  gridOrigin?: { x: number; y: number } | null;
+  onGridOriginChange?: (origin: { x: number; y: number } | null) => void;
   /** 梁（パラメトリックな2D要素）。 */
   beams?: Beam[];
   onBeamsChange?: (beams: Beam[]) => void;
@@ -248,6 +251,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   angleSnap = 45,
   isAngleSnapEnabled = true,
   onGridSizeChange,
+  gridOrigin = null,
+  onGridOriginChange,
   onLengthSnapSizeChange,
   onLengthSnapToggle,
   onAngleSnapChange,
@@ -506,10 +511,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       try {
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         let dataUrl: string;
+        let paperMmPerPx: number | undefined;
         if (isPdf) {
-          // pdfjs を動的 import（PDF 選択時のみ読み込み）して1ページ目をラスタライズ。
-          const { pdfFirstPageToDataUrl } = await import('../utils/pdfToImage.js');
-          dataUrl = await pdfFirstPageToDataUrl(file);
+          // pdfjs を動的 import（PDF 選択時のみ読み込み）して1ページ目をラスタライズ＋用紙mm/px を取得。
+          const { pdfFirstPageToUnderlay } = await import('../utils/pdfToImage.js');
+          const raster = await pdfFirstPageToUnderlay(file);
+          dataUrl = raster.dataUrl;
+          paperMmPerPx = raster.paperMmPerPx;
         } else {
           dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
@@ -519,7 +527,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           });
         }
         if (!dataUrl) return;
-        onUnderlayChange?.({ dataUrl, opacity: 0.5, scaleMmPerPx: 10, offsetX: 0, offsetY: 0, visible: true });
+        // PDF は用紙mm/px が分かるので、既定の縮尺 1:100 で実寸 scaleMmPerPx を自動算出（後で縮尺を変更可）。
+        const DEFAULT_DENOM = 100;
+        const scaleMmPerPx = paperMmPerPx != null ? paperMmPerPx * DEFAULT_DENOM : 10;
+        onUnderlayChange?.({
+          dataUrl,
+          opacity: 0.5,
+          scaleMmPerPx,
+          offsetX: 0,
+          offsetY: 0,
+          visible: true,
+          ...(paperMmPerPx != null ? { paperMmPerPx, scaleDenominator: DEFAULT_DENOM } : {}),
+        });
       } catch (err) {
         console.error('[underlay] failed to load', err);
         showFurnitureHint('下絵の読み込みに失敗しました');
@@ -834,10 +853,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
     // Priority 3: Grid Snap (Absolute Coordinate Snap)
     // If Grid Snap is ON, strictly snap to grid intersections defined by gridSize.
+    // 基準点(gridOrigin)からの相対でスナップする（グリッド線と一致・#5 260715）。
     if (isGridSnapEnabled && gridSize > 0) {
+      const gox = gridOrigin?.x ?? 0;
+      const goy = gridOrigin?.y ?? 0;
       return {
-        x: snapValue(rawMm.x, gridSize),
-        y: snapValue(rawMm.y, gridSize)
+        x: gox + snapValue(rawMm.x - gox, gridSize),
+        y: goy + snapValue(rawMm.y - goy, gridSize)
       };
     }
 
@@ -1937,13 +1959,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         }
       }
 
-      // 1. Grid Lines
+      // 1. Grid Lines（基準点 gridOrigin に整列。null=ワールド原点(0,0)・#5 260715）
       ctx.save();
       ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
       ctx.lineWidth = 1;
       const visualGrid = gridSize > 50 ? gridSize : 500;
-      const startX = Math.floor(((rulerSize - currentOffset.x) / currentZoom) / visualGrid) * visualGrid;
-      const endX = Math.ceil(((canvasSize.width - currentOffset.x) / currentZoom) / visualGrid) * visualGrid;
+      const gox = gridOrigin?.x ?? 0;
+      const goy = gridOrigin?.y ?? 0;
+      const startX = gox + Math.floor((((rulerSize - currentOffset.x) / currentZoom) - gox) / visualGrid) * visualGrid;
+      const endX = gox + Math.ceil((((canvasSize.width - currentOffset.x) / currentZoom) - gox) / visualGrid) * visualGrid;
       if (Number.isFinite(startX) && Number.isFinite(endX) && endX >= startX && Number.isFinite(visualGrid) && visualGrid > 0) {
         let gx = 0;
         for (let x = startX; x <= endX && gx < MAX_VIEW_GRID_ITER; x += visualGrid) {
@@ -1952,8 +1976,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           ctx.beginPath(); ctx.moveTo(px, rulerSize); ctx.lineTo(px, canvasSize.height); ctx.stroke();
         }
       }
-      const startY = Math.floor(((rulerSize - currentOffset.y) / currentZoom) / visualGrid) * visualGrid;
-      const endY = Math.ceil(((canvasSize.height - currentOffset.y) / currentZoom) / visualGrid) * visualGrid;
+      const startY = goy + Math.floor((((rulerSize - currentOffset.y) / currentZoom) - goy) / visualGrid) * visualGrid;
+      const endY = goy + Math.ceil((((canvasSize.height - currentOffset.y) / currentZoom) - goy) / visualGrid) * visualGrid;
       if (Number.isFinite(startY) && Number.isFinite(endY) && endY >= startY && Number.isFinite(visualGrid) && visualGrid > 0) {
         let gy = 0;
         for (let y = startY; y <= endY && gy < MAX_VIEW_GRID_ITER; y += visualGrid) {
@@ -1963,6 +1987,20 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         }
       }
       ctx.restore();
+
+      // 基準点マーカー（設定時のみ・エメラルドの十字）。画面内にあるときだけ描く。
+      if (gridOrigin) {
+        const op = { x: gox * currentZoom + currentOffset.x, y: goy * currentZoom + currentOffset.y };
+        if (op.x >= rulerSize && op.y >= rulerSize && op.x <= canvasSize.width && op.y <= canvasSize.height) {
+          ctx.save();
+          ctx.strokeStyle = 'rgba(16, 185, 129, 0.9)';
+          ctx.fillStyle = 'rgba(16, 185, 129, 0.9)';
+          ctx.lineWidth = 1.5;
+          ctx.beginPath(); ctx.moveTo(op.x - 9, op.y); ctx.lineTo(op.x + 9, op.y); ctx.moveTo(op.x, op.y - 9); ctx.lineTo(op.x, op.y + 9); ctx.stroke();
+          ctx.beginPath(); ctx.arc(op.x, op.y, 2.5, 0, Math.PI * 2); ctx.fill();
+          ctx.restore();
+        }
+      }
 
       // スナップドットは描画しない（ズームアウト時の二重ループ負荷回避）。グリッドスナップは getSnappedMm 等で従来どおり有効。
 
@@ -2695,7 +2733,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
     requestRef.current = requestAnimationFrame(render);
     return () => { if (requestRef.current) cancelAnimationFrame(requestRef.current); };
-  }, [pointsMm, isDrawing, isClosed, gridSize, lengthSnapSize, isLengthSnapEnabled, angleSnap, isAngleSnapEnabled, draggingPointIndex, selectedPointIndex, selectedEdgeIndex, openings, selectedOpeningId, isGridSnapEnabled, activeFurnitureId, rotatingFurnitureId]);
+  }, [pointsMm, isDrawing, isClosed, gridSize, gridOrigin, lengthSnapSize, isLengthSnapEnabled, angleSnap, isAngleSnapEnabled, draggingPointIndex, selectedPointIndex, selectedEdgeIndex, openings, selectedOpeningId, isGridSnapEnabled, activeFurnitureId, rotatingFurnitureId]);
 
   // 元に戻す/やり直し（260623: 上部フローティングバーから作図ツールバーへ統合）。Ctrl+Z/Y と同じ temporal を駆動。
   const canUndo = useStore(useProjectStore.temporal, (t) => t.pastStates.length > 0);
@@ -3038,6 +3076,50 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
             </div>
           </div>
+          {/* グリッド基準点（原点）: 任意位置に設定・#5 260715。数値入力＋画面中心へ＋リセット。 */}
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-[10px] font-bold text-neutral-400">基準点</span>
+            <div className="flex items-center gap-1.5 shrink-0">
+              <label className="flex items-center gap-1 text-[10px] text-neutral-300">
+                X
+                <input
+                  type="number"
+                  value={Math.round(gridOrigin?.x ?? 0)}
+                  onChange={(e) => onGridOriginChange?.({ x: Number(e.target.value), y: gridOrigin?.y ?? 0 })}
+                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right text-emerald-400"
+                />
+              </label>
+              <label className="flex items-center gap-1 text-[10px] text-neutral-300">
+                Y
+                <input
+                  type="number"
+                  value={Math.round(gridOrigin?.y ?? 0)}
+                  onChange={(e) => onGridOriginChange?.({ x: gridOrigin?.x ?? 0, y: Number(e.target.value) })}
+                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right text-emerald-400"
+                />
+              </label>
+              <button
+                type="button"
+                title="画面中心を基準点にする"
+                onClick={() => {
+                  const c = screenToWorld({ x: (rulerSize + canvasSize.width) / 2, y: (rulerSize + canvasSize.height) / 2 });
+                  onGridOriginChange?.({ x: Math.round(c.x), y: Math.round(c.y) });
+                }}
+                className="px-2 h-7 rounded border border-white/10 text-[10px] text-neutral-200 transition hover:bg-white/10"
+              >
+                画面中心へ
+              </button>
+              <button
+                type="button"
+                title="基準点をワールド原点(0,0)に戻す"
+                onClick={() => onGridOriginChange?.(null)}
+                disabled={!gridOrigin}
+                className="px-2 h-7 rounded border border-white/10 text-[10px] text-neutral-300 transition hover:bg-white/10 disabled:opacity-40"
+              >
+                リセット
+              </button>
+            </div>
+          </div>
         </div>
         <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
           {!underlay ? (
@@ -3134,6 +3216,33 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   />
                 </label>
               </div>
+              {/* PDF図面の縮尺（用紙サイズ＋縮尺で実寸に合わせる・#5a 260715）。用紙mm/px×縮尺分母 = 実寸mm/px。
+                  表示分母は実際の scaleMmPerPx から逆算する（幅mm手入力や角ドラッグで scale を変えても縮尺表示が正しく追従する・260715検証で修正）。 */}
+              {underlay.paperMmPerPx != null && (() => {
+                const paper = underlay.paperMmPerPx!;
+                const effDenom = paper > 0 ? Math.round((underlay.scaleMmPerPx ?? paper * 100) / paper) : 100;
+                const STD = [10, 20, 30, 50, 100, 150, 200, 250, 300, 500];
+                const opts = STD.includes(effDenom) ? STD : [...STD, effDenom].sort((a, b) => a - b);
+                return (
+                  <label className="flex items-center gap-1 text-[10px] text-neutral-300">
+                    縮尺 1:
+                    <select
+                      value={effDenom}
+                      onChange={(e) => {
+                        const denom = Number(e.target.value);
+                        if (denom > 0) onUnderlayChange?.({ ...underlay, scaleDenominator: denom, scaleMmPerPx: paper * denom });
+                      }}
+                      className="rounded bg-black/40 border border-white/10 px-1 py-0.5 text-emerald-400"
+                      title="図面の縮尺。用紙サイズと縮尺から下絵を実寸に合わせます。幅(mm)で微調整すると実際の縮尺に追従します。"
+                    >
+                      {opts.map((d) => (
+                        <option key={d} value={d}>{d}</option>
+                      ))}
+                    </select>
+                    <span className="text-neutral-500">の図面</span>
+                  </label>
+                );
+              })()}
               {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）＋ サイズ変更のヒント */}
               <div className="flex items-center gap-2 text-[10px] text-neutral-400">
                 <button

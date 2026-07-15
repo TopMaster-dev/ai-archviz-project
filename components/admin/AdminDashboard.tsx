@@ -68,12 +68,172 @@ const KEY_ENGINE: Record<string, 'gemini' | 'replicate'> = {
 const yen = (usd: number) => `約¥${Math.round(usd * 150).toLocaleString('ja-JP')}`; // 150円/$の概算表示
 const usd = (v: number) => `$${v.toFixed(v < 1 ? 4 : 2)}`;
 
-async function adminFetch(action: string): Promise<Response> {
+async function adminFetch(action: string, method: 'GET' | 'POST' = 'GET'): Promise<Response> {
   const sb = getSupabase();
   const token = sb ? (await sb.auth.getSession()).data.session?.access_token : null;
   return fetch(`/api/admin/orphan-cleanup?action=${action}`, {
+    method,
     headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
+}
+
+interface UserStatus {
+  id: string;
+  email: string | null;
+  displayName: string | null;
+  role: string | null;
+  plan: string | null;
+  aiCreditsTotal: number;
+  aiCreditsUsed: number;
+  aiCreditsRemaining: number;
+  graceExpiresAt: string | null;
+  graceExpired: boolean;
+  lockedAt: string | null;
+  lockReason: string | null;
+  registeredAt: string | null;
+  createdAt: string | null;
+}
+
+const fmtDate = (iso: string | null): string =>
+  iso ? new Date(iso).toLocaleString('ja-JP', { dateStyle: 'medium', timeStyle: 'short' }) : '—';
+
+/** 運営がユーザーのフリープラン猶予期限（AIクレジット期限）を延長/失効する（#4・260715）。 */
+function GraceManagerCard() {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState<UserStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [resetCredits, setResetCredits] = useState(false);
+  const [customDate, setCustomDate] = useState('');
+
+  const lookup = async () => {
+    const q = email.trim();
+    if (!q) return;
+    setBusy(true);
+    setMsg(null);
+    setStatus(null);
+    try {
+      const r = await adminFetch(`user-status&email=${encodeURIComponent(q)}`);
+      const j = await r.json();
+      if (r.ok && j?.status) {
+        setStatus(j.status);
+      } else {
+        setMsg(j?.error === 'not-found' ? 'このメールのユーザーは見つかりませんでした。' : `取得に失敗しました（${j?.error ?? r.status}）。`);
+      }
+    } catch {
+      setMsg('通信エラーが発生しました。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const applyGrace = async (expiresAt: string | null) => {
+    if (!status) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const params = new URLSearchParams({ userId: status.id });
+      if (expiresAt) params.set('expiresAt', expiresAt);
+      if (resetCredits) params.set('resetCredits', '1');
+      const r = await adminFetch(`set-grace&${params.toString()}`, 'POST');
+      const j = await r.json();
+      if (r.ok && j?.status) {
+        setStatus(j.status);
+        setMsg('更新しました。');
+        setResetCredits(false);
+        setCustomDate('');
+      } else {
+        setMsg(`更新に失敗しました（${j?.error ?? r.status}）。`);
+      }
+    } catch {
+      setMsg('通信エラーが発生しました。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 延長の基準日時 = 現在の期限が未来ならそれ、過ぎている/未設定なら今。そこへ日数を足す。
+  const extendByDays = (days: number) => {
+    const base = status?.graceExpiresAt && !status.graceExpired ? new Date(status.graceExpiresAt).getTime() : Date.now();
+    void applyGrace(new Date(base + days * 24 * 60 * 60 * 1000).toISOString());
+  };
+  const expireNow = () => void applyGrace(new Date().toISOString());
+  const applyCustom = () => {
+    if (!customDate) return;
+    // 入力日の終わり（23:59:59）を期限にする。
+    void applyGrace(new Date(`${customDate}T23:59:59`).toISOString());
+  };
+
+  return (
+    <Card>
+      <h3 className="mb-1 text-sm font-bold text-emerald-300">フリープラン猶予期間の管理</h3>
+      <p className="mb-3 text-[11px] text-neutral-500">
+        対象ユーザーの「フリープランの猶予期限（AIクレジットの有効期限）」を延長・失効します。期限を延ばすとその日まで利用でき、
+        「今すぐ失効」で即時に期限切れ扱いになります（制限の発動はフリープラン制限が有効な場合）。
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          type="email"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') void lookup(); }}
+          placeholder="ユーザーのメールアドレス"
+          className="min-w-[220px] flex-1 rounded-lg border border-white/15 bg-black/40 px-3 py-2 text-sm text-white outline-none focus:border-emerald-500/60"
+        />
+        <button
+          type="button"
+          onClick={() => void lookup()}
+          disabled={busy || !email.trim()}
+          className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+        >
+          検索
+        </button>
+      </div>
+
+      {status && (
+        <div className="mt-3 rounded-lg border border-white/10 bg-black/30 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-white">{status.displayName || '(名称未設定)'}</div>
+              <div className="truncate text-[11px] text-neutral-400">{status.email}</div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className={`rounded px-2 py-0.5 text-[11px] font-bold ${status.plan === 'paid' ? 'bg-sky-500/15 text-sky-300' : 'bg-neutral-700/50 text-neutral-300'}`}>
+                {status.plan === 'paid' ? '有料' : 'フリー'}
+              </span>
+              {status.lockedAt && <span className="rounded bg-red-500/15 px-2 py-0.5 text-[11px] font-bold text-red-300">ロック中</span>}
+            </div>
+          </div>
+          <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+            <div className="flex justify-between"><dt className="text-neutral-400">AIクレジット</dt><dd className="font-mono text-neutral-200">残 {status.aiCreditsRemaining} / {status.aiCreditsTotal}</dd></div>
+            <div className="flex justify-between">
+              <dt className="text-neutral-400">猶予期限</dt>
+              <dd className={`font-mono ${status.graceExpired ? 'text-red-300' : 'text-emerald-300'}`}>{fmtDate(status.graceExpiresAt)}{status.graceExpired ? '（失効）' : ''}</dd>
+            </div>
+          </dl>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button type="button" onClick={() => extendByDays(30)} disabled={busy} className="rounded-md border border-white/10 bg-neutral-800 px-2.5 py-1 text-[11px] text-neutral-200 hover:border-emerald-400 disabled:opacity-40">＋30日延長</button>
+            <button type="button" onClick={() => extendByDays(90)} disabled={busy} className="rounded-md border border-white/10 bg-neutral-800 px-2.5 py-1 text-[11px] text-neutral-200 hover:border-emerald-400 disabled:opacity-40">＋90日延長</button>
+            <button type="button" onClick={expireNow} disabled={busy} className="rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11px] text-red-200 hover:border-red-400 disabled:opacity-40">今すぐ失効</button>
+            <span className="mx-1 h-4 w-px bg-white/10" />
+            <input
+              type="date"
+              value={customDate}
+              onChange={(e) => setCustomDate(e.target.value)}
+              className="rounded-md border border-white/15 bg-black/40 px-2 py-1 text-[11px] text-white outline-none focus:border-emerald-500/60"
+            />
+            <button type="button" onClick={applyCustom} disabled={busy || !customDate} className="rounded-md border border-white/10 bg-neutral-800 px-2.5 py-1 text-[11px] text-neutral-200 hover:border-emerald-400 disabled:opacity-40">この日まで延長</button>
+          </div>
+          <label className="mt-2 flex items-center gap-1.5 text-[11px] text-neutral-300">
+            <input type="checkbox" checked={resetCredits} onChange={(e) => setResetCredits(e.target.checked)} className="accent-emerald-500" />
+            延長時に AIクレジットも満タン（50）に戻す
+          </label>
+        </div>
+      )}
+      {msg && <p className="mt-2 text-[11px] text-neutral-400">{msg}</p>}
+    </Card>
+  );
 }
 
 function Card({ children }: { children: React.ReactNode }) {
@@ -289,6 +449,12 @@ export function AdminDashboard() {
               </p>
             </>
           )}
+        </section>
+
+        {/* 運営操作: ユーザーの猶予期間管理（#4） */}
+        <section className="space-y-2">
+          <h2 className="text-sm font-bold text-neutral-200">運営操作</h2>
+          <GraceManagerCard />
         </section>
 
         {/* インフラ状況（Cloudinary / Supabase / Vercel） */}

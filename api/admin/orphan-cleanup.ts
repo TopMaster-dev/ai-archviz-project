@@ -1,5 +1,12 @@
 import { runOrphanCleanup } from '../../lib/server/orphanCleanup.js';
-import { verifyAdmin, getKeyHealth, getUsageSummary, testKey } from '../../lib/server/adminDashboard.js';
+import {
+  verifyAdmin,
+  getKeyHealth,
+  getUsageSummary,
+  testKey,
+  findUserStatusByEmail,
+  setUserGrace,
+} from '../../lib/server/adminDashboard.js';
 import { getInfraStatus } from '../../lib/server/adminInfra.js';
 
 // 運用者向け管理エンドポイント。Vercel Hobby の関数数上限(12/12)のため、ここに以下を相乗りさせる（260711）:
@@ -25,15 +32,25 @@ function getEngineParam(req: any): string {
   }
 }
 
+function getQueryParam(req: any, name: string): string {
+  try {
+    return new URL(req.url || '', 'http://x').searchParams.get(name) || '';
+  } catch {
+    return '';
+  }
+}
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'GET' && req.method !== 'POST') {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // --- 管理ダッシュボード読取（メール許可リスト認証）---
+  // --- 管理ダッシュボード（メール許可リスト認証）---
+  // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
-  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'testkey', 'infra'];
-  if (DASHBOARD_ACTIONS.includes(action)) {
+  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'testkey', 'infra', 'user-status'];
+  const WRITE_ACTIONS = ['set-grace'];
+  if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
     const admin = await verifyAdmin(token);
@@ -45,12 +62,30 @@ export default async function handler(req: any, res: any) {
     if (action === 'keyhealth') return res.status(200).json({ success: true, keys: getKeyHealth() });
     if (action === 'usage') return res.status(200).json({ success: true, summary: await getUsageSummary() });
     if (action === 'infra') return res.status(200).json({ success: true, infra: await getInfraStatus() });
-    // action === 'testkey'
-    const engine = getEngineParam(req);
-    if (engine !== 'gemini' && engine !== 'replicate') {
-      return res.status(400).json({ error: "engine は 'gemini' か 'replicate'。" });
+    if (action === 'testkey') {
+      const engine = getEngineParam(req);
+      if (engine !== 'gemini' && engine !== 'replicate') {
+        return res.status(400).json({ error: "engine は 'gemini' か 'replicate'。" });
+      }
+      return res.status(200).json({ success: true, result: await testKey(engine) });
     }
-    return res.status(200).json({ success: true, result: await testKey(engine) });
+    // #4: メールでユーザーの状態（プラン・クレジット・猶予期限・ロック）を引く（管理者のみ・PII を含む）。
+    if (action === 'user-status') {
+      const result = await findUserStatusByEmail(getQueryParam(req, 'email'));
+      if (!result.ok) return res.status(result.reason === 'not-found' ? 404 : 400).json({ error: result.reason });
+      return res.status(200).json({ success: true, status: result.status });
+    }
+    // #4（WRITE）: 猶予期限（ai_credits_expires_at）を設定/失効。必ず POST。
+    if (action === 'set-grace') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'set-grace は POST。' });
+      const userId = getQueryParam(req, 'userId');
+      if (!userId) return res.status(400).json({ error: 'userId が必要です。' });
+      const expiresAt = getQueryParam(req, 'expiresAt'); // 空=null（失効させない）／過去日時=今すぐ失効
+      const resetCredits = getQueryParam(req, 'resetCredits') === '1';
+      const result = await setUserGrace({ userId, expiresAt: expiresAt || null, resetCredits });
+      if (!result.ok) return res.status(result.reason === 'not-found' ? 404 : 400).json({ error: result.reason });
+      return res.status(200).json({ success: true, status: result.status });
+    }
   }
 
   // --- 既定: 孤児掃除（CRON_SECRET 認証・従来どおり）---

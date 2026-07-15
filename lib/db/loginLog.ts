@@ -57,3 +57,22 @@ export async function recordLoginEvent(
     // 監査記録の失敗は無視（ログインを妨げない）。
   }
 }
+
+/**
+ * #2（260715）: 新規登録の前に、この端末（PC）で既に別アカウントが登録済みかをサーバへ問い合わせる。
+ * トークン不要（まだアカウントが無いため）。サーバ側フラグ ENABLE_REREG_DEVICE_BLOCK=true のときのみ判定し、
+ * それ以外・失敗・情報不足は blocked:false を返す（フェイルオープン＝正当な登録を妨げない）。
+ */
+export async function checkDeviceForReregistration(): Promise<{ blocked: boolean; reason?: string }> {
+  try {
+    const res = await fetch('/api/session-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'check-device', ...collectDeviceInfo() }),
+    });
+    const data = (await res.json().catch(() => null)) as { blocked?: boolean; reason?: string } | null;
+    return { blocked: !!data?.blocked, reason: data?.reason };
+  } catch {
+    return { blocked: false, reason: 'network-error' };
+  }
+}

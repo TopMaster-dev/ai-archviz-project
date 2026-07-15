@@ -301,6 +301,30 @@ export default defineConfig(({ mode }) => {
                             res.statusCode = 200;
                             return res.end(JSON.stringify({ success: false, skipped: true, reason: 'server-not-configured' }));
                         }
+                        // #2（260715）: 登録前デバイスチェック（トークン不要）。本番 api/session-log.ts と一致。
+                        const earlyKind = (() => { try { return (JSON.parse(body || '{}') as { kind?: string }).kind; } catch { return undefined; } })();
+                        if (earlyKind === 'check-device') {
+                            if (process.env.ENABLE_REREG_DEVICE_BLOCK !== 'true' && env.ENABLE_REREG_DEVICE_BLOCK !== 'true') {
+                                res.statusCode = 200; return res.end(JSON.stringify({ blocked: false, reason: 'disabled' }));
+                            }
+                            const cp = JSON.parse(body || '{}') as { userAgent?: string; screen?: string };
+                            const strv = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+                            const ua = strv(cp.userAgent, 500); const scr = strv(cp.screen, 32);
+                            if (!ua || !scr) { res.statusCode = 200; return res.end(JSON.stringify({ blocked: false, reason: 'insufficient-fp' })); }
+                            const { createClient } = await import('@supabase/supabase-js');
+                            const admin = createClient(sbUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+                            try {
+                                const { data: evs, error: evErr } = await admin.from('login_events').select('user_id').eq('user_agent', ua).eq('screen', scr).limit(500);
+                                if (evErr) { res.statusCode = 200; return res.end(JSON.stringify({ blocked: false, reason: 'query-failed' })); }
+                                const ids = Array.from(new Set((evs ?? []).map((e: { user_id: string | null }) => e.user_id).filter(Boolean)));
+                                if (ids.length === 0) { res.statusCode = 200; return res.end(JSON.stringify({ blocked: false })); }
+                                const { data: profs, error: pErr } = await admin.from('profiles').select('id').in('id', ids as string[]).not('registered_at', 'is', null).limit(1);
+                                if (pErr) { res.statusCode = 200; return res.end(JSON.stringify({ blocked: false, reason: 'query-failed' })); }
+                                res.statusCode = 200; return res.end(JSON.stringify({ blocked: (profs ?? []).length > 0 }));
+                            } catch {
+                                res.statusCode = 200; return res.end(JSON.stringify({ blocked: false, reason: 'error' }));
+                            }
+                        }
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
                         if (!token) {

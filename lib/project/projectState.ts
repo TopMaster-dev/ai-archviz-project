@@ -24,6 +24,10 @@ export interface UnderlaySettings {
   offsetX: number;
   offsetY: number;
   visible: boolean;
+  /** PDF の 1px あたりの用紙上のmm（縮尺1:1）。PDF挿入時に算出。縮尺(1:denom)適用時 scaleMmPerPx = paperMmPerPx×denom（#5a・260715）。 */
+  paperMmPerPx?: number;
+  /** PDF図面の縮尺の分母（1:denom）。未設定=手動幅指定。 */
+  scaleDenominator?: number;
 }
 
 /**
@@ -88,6 +92,8 @@ export interface ProjectState {
     underlayPlan: UnderlaySettings | null;
     /** 下絵（天伏図用）。 */
     underlayCeiling: UnderlaySettings | null;
+    /** グリッドの基準点（原点）。mm。未設定/null=ワールド原点(0,0)。#5（260715）: 任意位置に設定可。 */
+    gridOrigin?: { x: number; y: number } | null;
   };
   scene: {
     roomHeightMm: number;
@@ -120,7 +126,7 @@ export function createEmptyProjectState(): ProjectState {
   return {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     kind: 'full',
-    sketch: { points: [], openings: [], wallDivisions: {}, underlayPlan: null, underlayCeiling: null },
+    sketch: { points: [], openings: [], wallDivisions: {}, underlayPlan: null, underlayCeiling: null, gridOrigin: null },
     scene: { roomHeightMm: 2400, furniture: [], groups: [], beams: [] },
     materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },

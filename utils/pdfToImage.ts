@@ -26,3 +26,25 @@ export async function pdfFirstPageToDataUrl(file: File, scale = 2): Promise<stri
     await pdf.cleanup();
   }
 }
+
+/** 1pt = 25.4/72 mm（PDF のユーザー空間単位＝ポイント）。 */
+const MM_PER_PT = 25.4 / 72;
+
+export interface PdfPageRaster {
+  dataUrl: string;
+  /**
+   * ラスタライズ1pxあたりの「用紙上の」mm（縮尺1:1）。ページは pt 単位で、scale 倍で描画したので
+   * 1描画px = (1/scale)pt = MM_PER_PT/scale mm（用紙上・ページ寸法に依らない）。
+   * 図面の縮尺 1:denom を適用するときの実寸 mm/px は paperMmPerPx × denom（#5a・260715）。
+   */
+  paperMmPerPx: number;
+}
+
+/**
+ * PDFの1ページ目をラスタライズし、下絵の実寸合わせに必要な paperMmPerPx（用紙mm/px）も返す。
+ * これに図面の縮尺(1:denom)を掛ければ実寸 scaleMmPerPx が求まり、用紙サイズ＋縮尺で下絵を正しいサイズにできる。
+ */
+export async function pdfFirstPageToUnderlay(file: File, scale = 2): Promise<PdfPageRaster> {
+  const dataUrl = await pdfFirstPageToDataUrl(file, scale);
+  return { dataUrl, paperMmPerPx: MM_PER_PT / scale };
+}

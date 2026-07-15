@@ -39,6 +39,7 @@ export interface ProjectStoreState {
   setOpenings(openings: Opening[]): void;
   setWallDivisions(wallDivisions: ProjectState['sketch']['wallDivisions']): void;
   setUnderlay(layer: 'plan' | 'ceiling', underlay: UnderlaySettings | null): void;
+  setGridOrigin(origin: { x: number; y: number } | null): void;
 
   // scene / furniture
   setRoomHeight(mm: number): void;
@@ -111,6 +112,10 @@ export const useProjectStore = create<ProjectStoreState>()(
         set((s) => {
           if (layer === 'ceiling') s.sketch.underlayCeiling = underlay;
           else s.sketch.underlayPlan = underlay;
+        }),
+      setGridOrigin: (origin) =>
+        set((s) => {
+          s.sketch.gridOrigin = origin;
         }),
 
       setRoomHeight: (mm) =>
@@ -216,6 +221,7 @@ export const useProjectStore = create<ProjectStoreState>()(
             // 旧 `underlay` 単一フィールドは平面図スロットへ移行（後方互換）。
             underlayPlan: src.sketch?.underlayPlan ?? (src.sketch as { underlay?: UnderlaySettings | null } | undefined)?.underlay ?? d.sketch.underlayPlan,
             underlayCeiling: src.sketch?.underlayCeiling ?? d.sketch.underlayCeiling,
+            gridOrigin: src.sketch?.gridOrigin ?? d.sketch.gridOrigin,
           };
           // 梁は非有限値（NaN/undefined）を既定値で補完（NaN ジオメトリによる3Dクラッシュ防止）。
           const fin = (v: number, def: number, positive = false) =>

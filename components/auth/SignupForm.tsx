@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { useAuth } from '../../lib/auth/AuthContext.js';
 import type { UserRole } from '../../lib/db/types.js';
+import { checkDeviceForReregistration } from '../../lib/db/loginLog.js';
 import { Field, FormError, FormNotice, inputClass, submitClass } from './formKit.js';
 
 const ROLE_LABELS: Record<UserRole, string> = {
@@ -10,7 +11,7 @@ const ROLE_LABELS: Record<UserRole, string> = {
   owner: '一般',
 };
 
-export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
+export function SignupForm({ onRegistered, onGoToLogin }: { onRegistered?: () => void; onGoToLogin?: () => void }) {
   const { signUp } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -22,12 +23,21 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // #2（260715）: 同一PCで既に登録済みの場合のブロック表示。
+  const [deviceBlocked, setDeviceBlocked] = useState(false);
 
   async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setBusy(true);
     setError(null);
     setNotice(null);
+    // #2: 登録前に「このPCで既に別アカウントが登録済みか」を確認（サーバ側フラグ OFF 時は常に許可）。
+    const deviceCheck = await checkDeviceForReregistration();
+    if (deviceCheck.blocked) {
+      setDeviceBlocked(true);
+      setBusy(false);
+      return;
+    }
     const { error, needsConfirmation } = await signUp({
       email,
       password,
@@ -50,6 +60,28 @@ export function SignupForm({ onRegistered }: { onRegistered?: () => void }) {
       // セッション作成済み（メール確認オフ）。認証ゲートが自動でアプリへ遷移する。
       setNotice('登録が完了しました。アプリを読み込んでいます…');
     }
+  }
+
+  if (deviceBlocked) {
+    return (
+      <div className="space-y-4 text-center">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-relaxed text-amber-200">
+          このPCは、別のメールアドレスで既に登録されています。
+          <br />
+          お手数ですが、既存のアカウントでログインしてください。
+        </div>
+        <button type="button" onClick={() => onGoToLogin?.()} className={submitClass}>
+          ログインへ
+        </button>
+        <button
+          type="button"
+          onClick={() => setDeviceBlocked(false)}
+          className="block w-full text-center text-[11px] text-neutral-500 transition hover:text-neutral-300"
+        >
+          ← 入力に戻る
+        </button>
+      </div>
+    );
   }
 
   return (

@@ -219,3 +219,133 @@ export async function getUsageSummary(limit = 10000): Promise<UsageSummary> {
       'Gemini（BYOK）の費用は「回数×概算単価」の推定です。専用エンジン（Replicate）は概算単価×回数。実請求は各プロバイダが正。',
   };
 }
+
+// ---- ユーザーの猶予期間（フリープラン=AIクレジット期限）管理（#4・260715）----
+// 運営ダッシュボードから対象ユーザーの ai_credits_expires_at（＝フリープランの猶予期限）を延長/失効させる。
+// いずれも service_role でのみ実行（クライアントは api 経由・verifyAdmin 済みでのみ到達）。
+
+export interface UserStatus {
+  id: string;
+  email: string | null;
+  displayName: string | null;
+  role: string | null;
+  plan: string | null;
+  aiCreditsTotal: number;
+  aiCreditsUsed: number;
+  aiCreditsRemaining: number;
+  /** フリープラン猶予期限（AIクレジット失効時刻）。null=無期限/未設定。 */
+  graceExpiresAt: string | null;
+  /** 猶予期限が現在時刻を過ぎているか（＝フリープラン制限が発動する状態）。 */
+  graceExpired: boolean;
+  lockedAt: string | null;
+  lockReason: string | null;
+  registeredAt: string | null;
+  createdAt: string | null;
+}
+
+interface AdminUserStatusRow {
+  id: string;
+  email: string | null;
+  display_name: string | null;
+  role: string | null;
+  plan: string | null;
+  ai_credits_total: number | null;
+  ai_credits_used: number | null;
+  ai_credits_expires_at: string | null;
+  locked_at: string | null;
+  lock_reason: string | null;
+  registered_at: string | null;
+  created_at: string | null;
+}
+
+function toUserStatus(r: AdminUserStatusRow): UserStatus {
+  const total = Math.max(0, r.ai_credits_total ?? 0);
+  const used = Math.max(0, r.ai_credits_used ?? 0);
+  const exp = r.ai_credits_expires_at;
+  const graceExpired = !!exp && new Date(exp).getTime() <= Date.now();
+  return {
+    id: r.id,
+    email: r.email,
+    displayName: r.display_name,
+    role: r.role,
+    plan: r.plan,
+    aiCreditsTotal: total,
+    aiCreditsUsed: used,
+    aiCreditsRemaining: Math.max(0, total - used),
+    graceExpiresAt: exp,
+    graceExpired,
+    lockedAt: r.locked_at,
+    lockReason: r.lock_reason,
+    registeredAt: r.registered_at,
+    createdAt: r.created_at,
+  };
+}
+
+export type UserStatusResult =
+  | { ok: true; status: UserStatus }
+  | { ok: false; reason: string };
+
+const ADMIN_STATUS_COLS =
+  'id, email, display_name, role, plan, ai_credits_total, ai_credits_used, ai_credits_expires_at, locked_at, lock_reason, registered_at, created_at';
+
+/** メールでユーザーの状態（プラン・クレジット・猶予期限・ロック）を引く（大小文字を無視）。 */
+export async function findUserStatusByEmail(email: string): Promise<UserStatusResult> {
+  const trimmed = (email || '').trim();
+  if (!trimmed) return { ok: false, reason: 'email-required' };
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured' };
+  // ilike のワイルドカード（_ % \）をエスケープして完全一致（大小文字無視）にする。
+  // メールの local part に含まれ得る '_' を放置すると別ユーザーに誤ヒットし、誤ったアカウントを
+  // 更新してしまう（260715 検証で確定）。念のため取得後にも厳密一致を確認する。
+  const escaped = trimmed.replace(/([\\%_])/g, '\\$1');
+  const { data, error } = await sb
+    .from('admin_user_status')
+    .select(ADMIN_STATUS_COLS)
+    .ilike('email', escaped)
+    .limit(2);
+  if (error) return { ok: false, reason: error.message };
+  const rows = (data ?? []) as AdminUserStatusRow[];
+  const row = rows.find((r) => (r.email ?? '').trim().toLowerCase() === trimmed.toLowerCase());
+  if (!row) return { ok: false, reason: 'not-found' };
+  return { ok: true, status: toUserStatus(row) };
+}
+
+export interface SetGraceInput {
+  userId: string;
+  /** 新しい猶予期限（ISO8601）。null/空 = 失効させない場合はそのまま。「今すぐ失効」は過去日時（=now）を渡す。 */
+  expiresAt: string | null;
+  /** true のとき AIクレジットを満タンに戻す（used=0・total を最低50に）。 */
+  resetCredits?: boolean;
+}
+
+/** 対象ユーザーの猶予期限（ai_credits_expires_at）を設定し、任意でクレジットをリセットする。更新後の状態を返す。 */
+export async function setUserGrace(input: SetGraceInput): Promise<UserStatusResult> {
+  const userId = (input.userId || '').trim();
+  if (!userId) return { ok: false, reason: 'user-required' };
+  // expiresAt は妥当な日時のみ許可（不正な文字列で列を壊さない）。
+  let expiresIso: string | null = null;
+  if (input.expiresAt != null && String(input.expiresAt).trim() !== '') {
+    const t = new Date(String(input.expiresAt)).getTime();
+    if (!Number.isFinite(t)) return { ok: false, reason: 'invalid-date' };
+    expiresIso = new Date(t).toISOString();
+  }
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured' };
+  const patch: Record<string, unknown> = { ai_credits_expires_at: expiresIso };
+  if (input.resetCredits) {
+    patch.ai_credits_used = 0;
+    patch.ai_credits_total = 50;
+  }
+  const { error } = await sb.from('profiles').update(patch).eq('id', userId);
+  if (error) return { ok: false, reason: error.message };
+  // 更新後の状態を返す（id で引き直す）。
+  const { data, error: e2 } = await sb
+    .from('admin_user_status')
+    .select(ADMIN_STATUS_COLS)
+    .eq('id', userId)
+    .limit(1);
+  if (e2) return { ok: false, reason: e2.message };
+  const row = (data ?? [])[0] as AdminUserStatusRow | undefined;
+  if (!row) return { ok: false, reason: 'not-found' };
+  return { ok: true, status: toUserStatus(row) };
+}

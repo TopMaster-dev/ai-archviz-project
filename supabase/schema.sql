@@ -216,6 +216,17 @@ create or replace view admin_locked_accounts as
   where p.locked_at is not null;
 revoke all on admin_locked_accounts from anon, authenticated;
 
+-- 管理用: ユーザーのプラン/フリープラン猶予期間（AIクレジット期限）状態をメールで引くための一覧（260715 #4）。
+-- email を含むため service_role 限定。運営ダッシュボードの「猶予期間の管理」から、対象ユーザーの
+-- ai_credits_expires_at（＝フリープランの猶予期限）を延長/失効させる際の検索・表示に使う。
+create or replace view admin_user_status as
+  select p.id, u.email, p.display_name, p.role, p.plan,
+         p.ai_credits_total, p.ai_credits_used, p.ai_credits_expires_at,
+         p.locked_at, p.lock_reason, p.registered_at, p.created_at
+  from profiles p
+  join auth.users u on u.id = p.id;
+revoke all on admin_user_status from anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- 4) user_api_keys（BYOK）
 -- ---------------------------------------------------------------------------

@@ -847,6 +847,7 @@ const App: React.FC = () => {
   // 下絵（2D背景画像）もストア管理（永続化対象）。平面図/天伏図で別々の下絵を保持（3f）。
   const underlayPlan = useProjectStore((s) => s.sketch.underlayPlan);
   const underlayCeiling = useProjectStore((s) => s.sketch.underlayCeiling);
+  const gridOrigin = useProjectStore((s) => s.sketch.gridOrigin ?? null);
   // 梁（天井レイヤ）もストア管理（永続化・Undo対象）。
   const beams = useProjectStore((s) => s.scene.beams);
   // sketchPoints の真実源も統合ストア（Undo/Redo 対象）。setState 互換 API は維持。
@@ -3771,6 +3772,8 @@ const App: React.FC = () => {
                         onFurnitureSelect={handleFurnitureSelect}
                         underlay={isCeilingView ? underlayCeiling : underlayPlan}
                         onUnderlayChange={(u) => useProjectStore.getState().setUnderlay(isCeilingView ? 'ceiling' : 'plan', u)}
+                        gridOrigin={gridOrigin}
+                        onGridOriginChange={(o) => useProjectStore.getState().setGridOrigin(o)}
                         beams={beams}
                         onBeamsChange={(b) => useProjectStore.getState().setBeams(b)}
                         isCeilingView={isCeilingView}
