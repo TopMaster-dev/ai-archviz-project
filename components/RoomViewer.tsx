@@ -352,6 +352,22 @@ const Beam3DMesh: React.FC<{
     return () => window.removeEventListener('pointermove', onMove);
   }, [isSelected, isWallBeam, editable, intersectAtY, by, bx, bz, widthM]);
 
+  // 回転ギズモ（リング）にマウスオーバー中は grab、回転/移動ドラッグ中は grabbing カーソルにする（260715 クライアント要望
+  // 「梁の回転ギズモへマウスオーバー時のカーソルを grab に」）。自由梁・選択・編集可のときのみ（壁梁は回転不可）。マスク取得中は変えない。
+  useEffect(() => {
+    if (isWallBeam || !isSelected || !editable || captureStep === 'mask') return;
+    if (isDragging) {
+      document.body.style.cursor = 'grabbing';
+    } else if (ringHighlight) {
+      document.body.style.cursor = 'grab';
+    } else {
+      return; // リング外は他コンポーネント/既定に任せる（前回の cleanup で auto に戻る）
+    }
+    return () => {
+      document.body.style.cursor = 'auto';
+    };
+  }, [isWallBeam, isSelected, editable, captureStep, isDragging, ringHighlight]);
+
   // 壁梁のコーナー接合（2b の 3D 版）。2D と同じ getWallBeamBandCornersMm でマイターした
   // 室内側バンドの四隅を、天井(by+h/2)から下端(by-h/2)まで押し出した角柱として描く。
   // 梁端が隣の壁／壁梁に沿って切られ、入隅の隙間・出角の重なり・斜め角での突き出しが解消する。

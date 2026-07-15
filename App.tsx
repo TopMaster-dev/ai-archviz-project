@@ -1328,6 +1328,20 @@ const App: React.FC = () => {
   // 使わない（混入防止）。プロジェクト未選択（ゲスト等）のときのみ localStorage に退避する。
   const aiEditSession = useAiEditSession({ persistLocal: !projectSession?.projectId });
 
+  // ホームに戻らずにウィンドウ/タブを閉じる・リロードしようとしたとき、ブラウザ標準の確認ダイアログを出す
+  // （データ消失防止・260715 クライアント要望）。プロジェクトを開いている（＝編集中）ときだけ有効。ホームや
+  // プロジェクト未オープン時は出さない。「ホームに戻る」はアプリ内遷移なので beforeunload は発火せず、閉じる/
+  // リロード（＝実際のページ離脱）でのみ確認が出る。
+  useEffect(() => {
+    if (!projectSession?.projectId) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = ''; // Chrome 系は returnValue をセットすると標準の離脱確認ダイアログが出る
+    };
+    window.addEventListener('beforeunload', onBeforeUnload);
+    return () => window.removeEventListener('beforeunload', onBeforeUnload);
+  }, [projectSession?.projectId]);
+
   const {
     renderState,
     setRenderState,

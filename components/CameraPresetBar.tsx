@@ -51,7 +51,7 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
     <div className="glass px-2 py-1.5 rounded-2xl border border-white/10 flex flex-col gap-2 bg-black/45 backdrop-blur-md shadow-xl pointer-events-auto max-w-[min(92vw,560px)]">
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-[9px] font-black uppercase text-neutral-500 tracking-wider">画角</span>
+          <span className="text-[9px] font-black uppercase text-neutral-300 tracking-wider">画角</span>
           <input
             type="range"
             min={30}
@@ -67,7 +67,7 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
         <div className="w-px h-6 bg-white/15 shrink-0" aria-hidden />
         <div className="flex items-center gap-1.5 shrink-0">
           <RectangleHorizontal className="w-3.5 h-3.5 text-neutral-400 shrink-0" aria-hidden />
-          <span className="text-[9px] font-black uppercase text-neutral-500 tracking-wider">比率</span>
+          <span className="text-[9px] font-black uppercase text-neutral-300 tracking-wider">比率</span>
           <select
             value={renderAspectRatio}
             disabled={disabled}
@@ -110,7 +110,7 @@ export const CameraPresetBar: React.FC<CameraPresetBarProps> = ({
           <>
             <div className="w-px h-6 bg-white/15 shrink-0" aria-hidden />
             <div className="flex items-center gap-1.5 shrink-0">
-              <span className="text-[9px] font-black uppercase text-neutral-500 tracking-wider">目線</span>
+              <span className="text-[9px] font-black uppercase text-neutral-300 tracking-wider">目線</span>
               <NumericField
                 value={eyeHeightMm}
                 onChange={onEyeHeightMmChange}

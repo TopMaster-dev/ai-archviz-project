@@ -153,7 +153,7 @@ export function SharedProjectViewer({ token }: { token: string }) {
           </span>
         ) : (
           <div className="flex shrink-0 items-center gap-1 rounded-lg border border-white/10 bg-white/5 p-0.5">
-            {(['3d', '2d', 'ai'] as const).map((k) => (
+            {(['2d', '3d', 'ai'] as const).map((k) => (
               <button
                 key={k}
                 type="button"
