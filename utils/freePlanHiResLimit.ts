@@ -12,10 +12,11 @@
  *    ai_credits と同形）へ移行する想定（period/カウント仕様はそのまま流用できる）。
  *  - 未ログイン（ゲスト＝userId 無し）は対象外（無制限）。制限は実在の無料プラン「アカウント」に対して適用する。
  */
-// 260704: 機能確認・テストマーケティング期間中はクライアント要望により一旦オフ（無料プランの
-// 高解像度DL回数制限・透かしを無効化）。本格運用を再開する際は true に戻す。
-// （ENABLE_FREE_PLAN_AI_CREDITS / ENABLE_FREE_PLAN_OUTPUT_LIMITS と同様、テスト期間中は false 運用）。
-export const ENABLE_FREE_PLAN_HIRES_DL_LIMIT = false;
+// 260704: テストマーケ期間中は一旦オフにしていたが、260715 クライアント要望で本格運用として ON に戻す。
+// 無料プラン（ログイン済み）の高解像度DLは、月3回まで無透かし・4回目以降に「フリープラン サンプル」透かしを合成する。
+// ※ 生成画像全体への透かし/縮小（ENABLE_FREE_PLAN_OUTPUT_LIMITS）は別機能で、こちらは据置（false）。
+// ※ ゲスト（未ログイン）・有料プラン・プレビュー等倍保存は対象外（無透かし・無制限）。
+export const ENABLE_FREE_PLAN_HIRES_DL_LIMIT = true;
 
 /** 無料プランの月あたり高解像度DL無償回数。 */
 export const FREE_PLAN_HIRES_DL_PER_MONTH = 3;
