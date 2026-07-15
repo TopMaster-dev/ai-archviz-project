@@ -218,6 +218,8 @@ export function AiEditWorkspace({
   const [historyOpen, setHistoryOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // 一部の範囲だけ失敗したときの“警告”（結果は反映されるがエラーではない・260715 監査対応の無言失敗の可視化）。
+  const [submitWarning, setSubmitWarning] = useState<string | null>(null);
   // 継ぎ目なじませ（全体を1枚に均一化）パスの opt-in（既定OFF・260706 クライアント提案）。
   const [harmonizeSeams, setHarmonizeSeams] = useState(false);
   // 囲った範囲（マスク）オーバーレイの表示トグル（260708 クライアント要望「任意で表示・非表示」）。
@@ -533,6 +535,7 @@ export function AiEditWorkspace({
   const runEdit = useCallback(async () => {
     if (!activeVersion) return;
     setSubmitError(null);
+    setSubmitWarning(null);
     setIsSubmitting(true);
     try {
       // 土台（base）は従来どおり直近の画像＝連続編集のワークフローを維持する。
@@ -657,8 +660,12 @@ export function AiEditWorkspace({
             width: b.w,
             height: b.h,
           });
-          // 差し替え×複数範囲で採用する「囲みを広げた矩形」（枠外へはみ出す家具の全体を取り込む）。
-          const thisKeep: NormalizedRect[] = [bboxToRect(padBBox(objBBox, REPLACE_KEEP_PAD))];
+          // 差し替え×複数範囲で採用する合成マスク。1オブジェクトが複数 placement を持つ場合、union の外接矩形だと
+          // placement 同士の“間”（例: 椅子2脚の間のテーブル）まで採ってしまうため、placement ごとの小矩形（各々を少し
+          // 広げたもの）の配列にする＝間は base のまま保持（260715 監査で確定した閉じ込め漏れの修正）。
+          const thisKeep: NormalizedRect[] = o.placements.map((pl) =>
+            bboxToRect(padBBox(unionBBoxOfPlacements([pl]), REPLACE_KEEP_PAD))
+          );
           // クロップ経路ではベース・配置座標・アスペクト比をクロップ空間に統一。渡す objects はこの1領域だけ（入れ替わり防止）。
           const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
           const postObjects = cropPx
@@ -686,20 +693,14 @@ export function AiEditWorkspace({
           const feather = Math.round(Math.max(baseW, baseH) * 0.008);
           const dilate = Math.round(Math.max(baseW, baseH) * 0.01);
           if (cropPx) {
-            const cropRect: NormalizedRect = { x: cropPx.sx / baseW, y: cropPx.sy / baseH, width: cropPx.sw / baseW, height: cropPx.sh / baseH };
             const fittedCrop = await fitDataUrlToSize(data.url as string, cropPx.sw, cropPx.sh, 'cover');
             const full = await pasteCropIntoBase(base, fittedCrop, cropPx, baseW, baseH);
-            // 合成マスク:
-            // ・差し替え×複数範囲 → thisKeep（囲みより広い矩形＝対象の全体を採り込み見切れさせない）。外側は base のまま＝他範囲保持。
-            // ・差し替え×単一範囲 → クロップ矩形（対象は送った画布内に全体が描かれる・矩形外＝元画像・継ぎ目なし）。
-            // ・テキストのみ×複数 → 範囲マスク（厳密閉じ込め）／×単一 → クロップ矩形（従来どおり）。
-            const clip: NormalizedRect[] = isReplacement
-              ? multiRegion
-                ? thisKeep
-                : [cropRect]
-              : multiRegion
-                ? o.placements
-                : [cropRect];
+            // 合成マスクは編集内容に合わせて、単一/複数を問わず「描いた範囲」へ寄せて閉じ込める（260715 監査対応:
+            // 単一範囲でクロップ矩形[cropRect]全体を採ると、余白に入り込んだ近くの似た家具まで再生成され得るため）。
+            // ・差し替え → thisKeep（範囲を少し広げた矩形・placement ごと＝対象を範囲内に収めつつ縁の接地に余裕）。
+            // ・テキストのみ／削除 → o.placements（描いた形へ厳密に閉じ込め＝範囲外の似た家具や壁を保護）。
+            // クロップは送っているので文脈は担保。マスク外は base（＝範囲外は変わらない）。
+            const clip: NormalizedRect[] = isReplacement ? thisKeep : o.placements;
             const matched = await harmonizeEditToBase(base, full, clip, baseW, baseH);
             return await compositeMaskedEdit(base, matched, clip, baseW, baseH, feather);
           }
@@ -723,7 +724,9 @@ export function AiEditWorkspace({
             const matched = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
             return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, multiRegion ? 0 : dilate);
           }
-          return fitted;
+          // ここは「単一・実質全画面（被覆≥0.85）＝合成せず全画面採用」のケース。contain のままだと最終出力に黒帯
+          // （レターボックス）が残るため、黒帯を避けて cover で返す（端がわずかに切れるが黒帯より良い・260715 監査対応）。
+          return mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
         } catch {
           // この範囲の編集失敗は他範囲を巻き込まずスキップ（null）。
           return null;
@@ -746,6 +749,7 @@ export function AiEditWorkspace({
       let editedCount = 0;
       let editedRegions = 0; // 編集に成功した“範囲（placement）”の総数。最終仕上げの発火判定に使う（オブジェクト数ではなく範囲数）。
       let editedHasReplacement = false; // 実際に成功した編集の中に「差し替え（参照画像あり）」が含まれるか＝最終パスの種類選択に使う。
+      let failedCount = 0; // 失敗（null）したエリアの数。1件でも成功したうえで一部失敗したら警告を出す（無言失敗の可視化・260715 監査対応）。
       for (const o of processOrder) {
         const r = await editOneRegion(workingBase, o, multiRegion, !!occludedMap[o.id]);
         if (r) {
@@ -753,9 +757,17 @@ export function AiEditWorkspace({
           editedCount += 1;
           editedRegions += o.placements.length;
           if (o.imageDataUrl) editedHasReplacement = true;
+        } else {
+          failedCount += 1;
         }
       }
       if (editedCount === 0) throw new Error('編集に失敗しました。しばらくして再度お試しください。');
+      // 一部だけ成功したとき（全滅は上で throw 済み）は、結果は反映しつつ「どれだけ反映できなかったか」を警告表示。
+      if (failedCount > 0) {
+        setSubmitWarning(
+          `${objectsScaled.length}件中${failedCount}件のエリアは今回反映できませんでした（他は反映済み）。反映されなかったエリアはもう一度お試しください。`
+        );
+      }
       outUrl = workingBase;
 
       // 【最終の全体仕上げ（編集した“範囲”が2つ以上のとき）】各範囲を個別に編集して貼り合わせた1枚を、最後に Gemini で
@@ -1922,6 +1934,9 @@ export function AiEditWorkspace({
             {activeTool !== 'agent' && (
             <div className="z-40 shrink-0 border-t border-white/10 p-3 bg-[#050505] space-y-2">
               {submitError && <p className="text-xs text-red-400 break-words">{submitError}</p>}
+              {activeTool === 'area' && submitWarning && !submitError && (
+                <p className="text-xs text-amber-400 break-words">{submitWarning}</p>
+              )}
               {activeTool === 'area' && emptyCardCount > 0 && (
                 <p className="text-xs text-amber-300 font-bold">未入力{emptyCardCount}件</p>
               )}
