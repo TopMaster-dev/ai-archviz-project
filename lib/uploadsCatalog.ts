@@ -60,6 +60,7 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
   const metaName = str(meta.name);
   const metaBrand = str(meta.brand);
   const metaModelNumber = str(meta.modelNumber);
+  const metaProductUrl = str(meta.productUrl);
   return {
     id: `upload-${upload.id}`,
     type: UPLOAD_FURNITURE_TYPE,
@@ -71,10 +72,12 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
     // 計測済み(metadata)のみ採用。未計測は undefined（DEFAULT/実測効果へフォールバック）。
     footprint2d: widthMm !== undefined && depthMm !== undefined ? { widthMm, depthMm } : undefined,
     forwardYawDeg: finite(meta.forwardYawDeg) ?? 0,
-    // 見積もり連携メタ（配置時に handleAddFurniture が customBrand/modelNumber/customPrice へ流す）。
+    // 見積もり連携メタ（配置時に handleAddFurniture が customBrand/modelNumber/customPrice/productUrl へ流す）。
+    // 家具情報の編集（260715 #9）で updateUserUploadMetadata により台帳へ書き戻される。
     brand: metaBrand || undefined,
     modelNumber: metaModelNumber || undefined,
     price: finite(meta.price),
+    productUrl: metaProductUrl || undefined,
   };
 }
 

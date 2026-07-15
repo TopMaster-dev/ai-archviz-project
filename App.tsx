@@ -25,7 +25,8 @@ import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimat
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
 import { beamExposedAreaM2, wallBeamWallCoverAreaM2 } from './utils/beamArea.js';
-import { buildBaseboardRows, baseboardTotalCost, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
+import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
+import { toggleBeamSelection } from './utils/beamSelection.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl } from './utils/furnitureThumbnailUrl.js';
 import * as THREE from 'three';
 
@@ -49,7 +50,7 @@ import { useShellNav } from './lib/shell/shellNavContext.js';
 import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
-import { listUserUploads, uploadUserFile, checkStorageCapacity } from './lib/db/uploads.js';
+import { listUserUploads, uploadUserFile, checkStorageCapacity, updateUserUploadMetadata } from './lib/db/uploads.js';
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
@@ -456,6 +457,8 @@ type EstimatePanelDetailScrollProps = {
   furnitureItems: any[];
   activeFurnitureId: string | null;
   setFurnitureItems: React.Dispatch<React.SetStateAction<any[]>>;
+  /** アップロード家具の見積編集を台帳へ書き戻す（#9・任意）。 */
+  onPersistFurnitureUpload?: (id: string) => void;
   furnitureTotal: number;
   aiEstimateItems: AiEstimateItem[];
   aiEstimateTotal: number;
@@ -484,6 +487,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
   furnitureItems,
   activeFurnitureId,
   setFurnitureItems,
+  onPersistFurnitureUpload,
   furnitureTotal,
   aiEstimateItems,
   aiEstimateTotal,
@@ -656,6 +660,8 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
               return (
                 <div
                   key={`furn-${f.id}`}
+                  // #9（260715）: アップロード家具は見積の各欄を編集して blur したら台帳へ書き戻す（blur はバブリング）。
+                  onBlur={f.type === UPLOAD_FURNITURE_TYPE ? () => onPersistFurnitureUpload?.(f.id) : undefined}
                   className={`p-2.5 rounded-xl border flex flex-col justify-between transition-all ${
                     isHighlighted
                       ? 'bg-emerald-500/10 border-emerald-500/50 shadow-lg scale-[1.02]'
@@ -1341,6 +1347,44 @@ const App: React.FC = () => {
     window.addEventListener('beforeunload', onBeforeUnload);
     return () => window.removeEventListener('beforeunload', onBeforeUnload);
   }, [projectSession?.projectId]);
+
+  // #3（260715 クライアント選択）: ブラウザの「戻る」で編集画面を離脱しようとしたときは、ページ上の自作モーダルで
+  // データ消失を警告する（実際の×＝タブ/ウィンドウを閉じる・リロードはブラウザ仕様で自作モーダルを出せないため、上の
+  // beforeunload の標準ダイアログで対応）。編集中（projectId あり）のみ有効。
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const leavingBackRef = useRef(false);
+  useEffect(() => {
+    if (!projectSession?.projectId) return;
+    leavingBackRef.current = false;
+    let guardActive = true;
+    // 「戻る」を1回吸収するガード履歴を積む。戻る操作で popstate が発火したら、再度ガードを積んで現在ページに
+    // 留め、警告モーダルを出す（同一URLのSPAなので見た目の遷移は起きない）。
+    window.history.pushState({ areaLeaveGuard: true }, '');
+    const onPop = () => {
+      if (leavingBackRef.current || !guardActive) return; // モーダルの「このまま移動」や掃除中の戻りは素通し
+      window.history.pushState({ areaLeaveGuard: true }, '');
+      setShowLeaveModal(true);
+    };
+    window.addEventListener('popstate', onPop);
+    return () => {
+      window.removeEventListener('popstate', onPop);
+      // 「ホームに戻る」等でアンマウント/編集終了するときは、積んだガード履歴を1つ戻して掃除する（残すとホームで
+      // ブラウザ「戻る」が数回効かなくなる・260715 検証で確定）。listener 解除後なので掃除の戻りは onPop を呼ばず無害。
+      // 「このまま移動」（confirmLeaveBack）で離脱中は go(-2) 側が処理するので掃除しない。
+      if (guardActive && !leavingBackRef.current) {
+        guardActive = false;
+        window.history.back();
+      }
+    };
+  }, [projectSession?.projectId]);
+
+  const confirmLeaveBack = useCallback(() => {
+    leavingBackRef.current = true; // 次の popstate は素通しさせ、ガード＋現ページを戻って前のページへ離脱
+    setShowLeaveModal(false);
+    window.history.go(-2);
+    // 履歴が浅い等で go(-2) が離脱に至らなかった場合にガードを再武装する（離脱に成功すればアンマウントされ無害）。
+    window.setTimeout(() => { leavingBackRef.current = false; }, 400);
+  }, []);
 
   const {
     renderState,
@@ -2345,15 +2389,24 @@ const App: React.FC = () => {
 
   // 3Dで梁を選択（RoomViewer から通知）。素材割当のため activeMeshes に Beam_<id> を載せ、
   // カテゴリは天井材から選べるよう 'Ceiling' にする（4a）。
-  const handleBeam3DSelect = (id: string | null) => {
-    setSelectedBeam3DId(id);
-    if (id) {
-      setActiveMeshes([`Beam_${id}`]);
-      setActiveCategory('Ceiling');
-      setActiveFurnitureId(null);
-      setSelectedOpeningId(null);
-    } else {
+  // isMulti(Shift)=複数選択トグル（#7a・素材一括貼り）。壁と同様に activeMeshes へ複数の Beam_<id> を載せ、
+  // 既存の handleProductSelect ファンアウトで一括適用する。
+  const handleBeam3DSelect = (id: string | null, isMulti = false) => {
+    if (id === null) {
+      setSelectedBeam3DId(null);
       setActiveMeshes((prev) => prev.filter((m) => !m.startsWith('Beam_')));
+      return;
+    }
+    setActiveCategory('Ceiling');
+    setActiveFurnitureId(null);
+    setSelectedOpeningId(null);
+    if (isMulti) {
+      const { nextBeamMeshes, nextPrimary } = toggleBeamSelection(activeMeshes, id);
+      setActiveMeshes(nextBeamMeshes);
+      setSelectedBeam3DId(nextPrimary);
+    } else {
+      setActiveMeshes([`Beam_${id}`]);
+      setSelectedBeam3DId(id);
     }
   };
 
@@ -2601,6 +2654,72 @@ const App: React.FC = () => {
       setActiveMeshes([]);
       setActiveCategory(null);
   };
+
+  // #9（260715）: ユーザーアップロード由来の家具の情報（名前/メーカー/品番/価格/URL）を編集したら、
+  // アップロード台帳（user_uploads.metadata）自体へ書き戻す＝次回配置や別プロジェクトにも反映される。
+  // フィールドの blur で呼ぶ。台帳が見つからない/ゲスト/未構成はフェイルソフト（配置インスタンス側の
+  // customName 等は scene.furniture として別途永続化されるため、編集内容は失われない）。
+  const persistUploadFurnitureMeta = useCallback(async (itemId: string) => {
+    try {
+      const item = useProjectStore.getState().scene.furniture.find((f) => f.id === itemId);
+      if (!item || item.type !== UPLOAD_FURNITURE_TYPE) return; // アップロード家具のみ対象
+      const models = await listUserUploads('model');
+      const upload = models.find((u) => u.storageUrl === item.modelUrl);
+      if (!upload) return; // 対応する台帳なし（ゲスト/未同期）→ per-instance のみ
+      // 有効値（配置時にカタログ値を各フィールドへ複製済み。name のみ customName 未設定時は item.name）。
+      const effName = ((item.customName ?? item.name) || '').trim();
+      const effBrand = (item.customBrand ?? '').trim();
+      const effModelNumber = (item.modelNumber ?? '').trim();
+      const effProductUrl = (item.productUrl ?? '').trim();
+      const priceNum = Number.isFinite(item.customPrice) ? Math.round(item.customPrice as number) : undefined;
+      const merged: Record<string, unknown> = { ...(upload.metadata ?? {}) };
+      const setOrDel = (key: string, val: string | number | undefined) => {
+        if (val === undefined || val === '' || (typeof val === 'number' && !(val > 0))) delete merged[key];
+        else merged[key] = val;
+      };
+      setOrDel('name', effName);
+      setOrDel('brand', effBrand);
+      setOrDel('modelNumber', effModelNumber);
+      setOrDel('price', priceNum);
+      setOrDel('productUrl', effProductUrl);
+      await updateUserUploadMetadata(upload.id, merged);
+      // メモリ上のカタログにも即反映（リロード/再取得なしで次回配置に効く）。
+      setFurnitureCatalog((prev) =>
+        prev.map((c) =>
+          c.id === `upload-${upload.id}`
+            ? {
+                ...c,
+                name: effName || c.name,
+                brand: effBrand || undefined,
+                modelNumber: effModelNumber || undefined,
+                price: priceNum,
+                productUrl: effProductUrl || undefined,
+              }
+            : c,
+        ),
+      );
+    } catch (e) {
+      console.warn('アップロード家具メタの台帳保存に失敗（配置インスタンスには反映済み）:', e);
+    }
+  }, []);
+
+  // フィールド間の移動（連続 blur）で台帳保存が多発しないよう 600ms デバウンスで束ねる。
+  // 重要: item ごとにタイマーを持つ（単一タイマーだと A 編集直後に別の家具 B を編集すると A の保存が
+  // 取り消され台帳へ書き戻されない・260715 検証で確定）。
+  const persistUploadTimersRef = useRef<Map<string, number>>(new Map());
+  const schedulePersistUploadFurnitureMeta = useCallback(
+    (itemId: string) => {
+      const timers = persistUploadTimersRef.current;
+      const existing = timers.get(itemId);
+      if (existing) window.clearTimeout(existing);
+      const t = window.setTimeout(() => {
+        timers.delete(itemId);
+        void persistUploadFurnitureMeta(itemId);
+      }, 600);
+      timers.set(itemId, t);
+    },
+    [persistUploadFurnitureMeta],
+  );
 
   /** 2D キャンバスの点を sketchPoints（3D 用）へ反映。生成ボタン／3D トグルの両方から使う */
   const commitSketchPointsToRoomState = useCallback((points: SketchPoint[]) => {
@@ -2895,7 +3014,11 @@ const App: React.FC = () => {
       const settingsKey = prod ? prod.id : 'default_no_tex';
       const settings = materialSettings[settingsKey];
       if (!settings?.baseboardEnabled) continue;
-      const lengthM = Math.hypot(a.x - b.x, a.y - b.y) / 0.05 / 1000;
+      // 壁延長からドア/窓（床に達する開口）で途切れる分を差し引く（260715 #8）。
+      const fullLengthMm = Math.hypot(a.x - b.x, a.y - b.y) / 0.05;
+      const bbHeightMm = settings.baseboardHeight ?? 60;
+      const openingsOnWall = openings.filter((op) => op.wallIndex === i);
+      const lengthM = baseboardSegmentLengthM(fullLengthMm, openingsOnWall, bbHeightMm);
       segs.push({
         lengthM,
         productId: settingsKey,
@@ -2906,7 +3029,7 @@ const App: React.FC = () => {
       });
     }
     return buildBaseboardRows(segs);
-  }, [sketchPoints, wallDivisions, selections, materialSettings, baseboardUnitPriceOverrides]);
+  }, [sketchPoints, wallDivisions, selections, materialSettings, baseboardUnitPriceOverrides, openings]);
   const baseboardTotal = useMemo(() => baseboardTotalCost(baseboardBreakdown), [baseboardBreakdown]);
   const furnitureTotal = useMemo(
     () => furnitureItems.reduce((sum, item) => sum + (item.customPrice ?? 0), 0),
@@ -3182,6 +3305,7 @@ const App: React.FC = () => {
                 furnitureItems={furnitureItems}
                 activeFurnitureId={activeFurnitureId}
                 setFurnitureItems={setFurnitureItems}
+                onPersistFurnitureUpload={schedulePersistUploadFurnitureMeta}
                 furnitureTotal={furnitureTotal}
                 aiEstimateItems={aiEstimateItems}
                 aiEstimateTotal={aiEstimateTotal}
@@ -3219,6 +3343,7 @@ const App: React.FC = () => {
       missingInputCount,
       showCostPanel,
       setFurnitureItems,
+      schedulePersistUploadFurnitureMeta,
       estimateDownloadMenuOpen,
     ]
   );
@@ -3254,6 +3379,23 @@ const App: React.FC = () => {
 
       {/* 使い方ガイド（エディタ上部の「?」から見返せる・260623） */}
       <OnboardingGuide open={editorOnboardingOpen} onClose={() => setEditorOnboardingOpen(false)} />
+
+      {/* #3: ブラウザの「戻る」で離脱しようとしたときのデータ消失警告モーダル（クライアント要望・260715）。
+          ×（閉じる/リロード）はブラウザ仕様で自作モーダル不可のため beforeunload の標準ダイアログで対応。 */}
+      {showLeaveModal && (
+        <div className="fixed inset-0 z-[10050] flex items-center justify-center bg-black/60 p-4" role="dialog" aria-modal="true">
+          <div className="w-full max-w-sm rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl">
+            <h3 className="text-sm font-bold text-neutral-100">編集画面を離れますか？</h3>
+            <p className="mt-2 text-[12px] leading-relaxed text-neutral-400">
+              このまま移動すると、保存されていない変更が失われる可能性があります。編集を続ける場合は「編集に戻る」を選んでください。
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button type="button" onClick={() => setShowLeaveModal(false)} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">編集に戻る</button>
+              <button type="button" onClick={confirmLeaveBack} className="rounded-lg bg-rose-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-rose-500">このまま移動</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 視点の保存/リネーム名入力ダイアログ（260623・アプリUIに統一） */}
       {presetNameDialog && (
@@ -3823,11 +3965,14 @@ const App: React.FC = () => {
                                         </p>
                                     </div>
                                 )}
-                                {selectedBeam && (
+                                {selectedBeam && (() => {
+                                    const selectedBeamCount = activeMeshes.filter((m) => m.startsWith('Beam_')).length;
+                                    return (
                                     <div className={`${propertyCardBaseClass} px-4 py-3 flex flex-col gap-2`}>
                                         <div className="flex items-center justify-between">
                                             <p className="text-[11px] font-black uppercase tracking-widest text-amber-300">
                                                 梁 {selectedBeam.wallIndex !== undefined ? '（壁梁）' : '（自由梁）'}
+                                                {selectedBeamCount > 1 && <span className="ml-1.5 text-emerald-300 normal-case">・{selectedBeamCount}本選択中</span>}
                                             </p>
                                             <button
                                                 type="button"
@@ -3859,8 +4004,13 @@ const App: React.FC = () => {
                                             </span>
                                         </label>
                                         <p className="text-[9px] text-neutral-500">仕上げ材は下の素材パレットから選択できます（天井材から選択）。</p>
+                                        <p className="text-[9px] text-emerald-400/80">Shift＋クリックで複数の梁を選択して、素材をまとめて貼れます。</p>
+                                        {selectedBeamCount > 1 && (
+                                            <p className="text-[9px] text-neutral-500">幅・高さ・距離の編集は選択中の梁（最後に選んだ1本）に適用されます。</p>
+                                        )}
                                     </div>
-                                )}
+                                    );
+                                })()}
                                 {Array.from(groups.entries()).map(([prodId, g], index) => {
                                     const settings = materialSettings[prodId] || {} as any;
                                     const bbEnabled = settings.baseboardEnabled ?? false;
@@ -4034,6 +4184,16 @@ const App: React.FC = () => {
 
                                                 const isWainscotPart = g.meshes.some(m => m.match(/^Sketch_Wall_(\d+)_0$/) && wallDivisions[parseInt(m.match(/^Sketch_Wall_(\d+)/)![1])] === 2);
 
+                                                // 巾木の長さ（開口＝ドア/窓で途切れた分を除外・260715 #8）。選択中の壁の実延長を合計。
+                                                const bbLengthM = selectedWallBaseIndices.reduce((sum, idx) => {
+                                                    const a = sketchPoints[idx];
+                                                    const b = sketchPoints[(idx + 1) % sketchPoints.length];
+                                                    if (!a || !b) return sum;
+                                                    const fullLengthMm = Math.hypot(a.x - b.x, a.y - b.y) / 0.05;
+                                                    const openingsOnWall = openings.filter((op) => op.wallIndex === idx);
+                                                    return sum + baseboardSegmentLengthM(fullLengthMm, openingsOnWall, bbHeight);
+                                                }, 0);
+
                                                 return (
                                                     <div className="flex flex-col gap-3 w-full pt-3 border-t border-white/10">
                                                         {isSingleWallSelectedOverall && isSingleWallSurface && (
@@ -4125,6 +4285,13 @@ const App: React.FC = () => {
                                                                         </div>
                                                                     </div>
                                                                 )}
+                                                            </div>
+                                                        )}
+
+                                                        {hasBottomSurface && bbEnabled && (
+                                                            <div className="flex items-center justify-between gap-2 bg-black/20 border border-white/10 rounded-lg px-2.5 py-1.5" title="巾木の長さ（ドア・窓で途切れた分を除外した実延長・見積の巾木ラインと一致）">
+                                                                <span className="text-[9px] text-neutral-400 font-bold uppercase tracking-wider">巾木の長さ（開口除く）</span>
+                                                                <span className="text-[11px] font-mono font-bold text-emerald-300 tabular-nums">{bbLengthM.toFixed(2)} m</span>
                                                             </div>
                                                         )}
                                                     </div>
@@ -4407,8 +4574,14 @@ const App: React.FC = () => {
                                             })
                                         );
                                     };
+                                    const isUploadFurniture = activeItem.type === UPLOAD_FURNITURE_TYPE;
                                     return (
-                                        <div className={`${propertyCardBaseClass} px-4 py-2.5 flex flex-col gap-2`}>
+                                        <div
+                                            className={`${propertyCardBaseClass} px-4 py-2.5 flex flex-col gap-2`}
+                                            // #9（260715）: アップロード家具は、名前/メーカー/品番/価格/URL を編集して
+                                            // フォーカスが外れたら台帳（user_uploads）自体へ書き戻す（blur はバブリングする）。
+                                            onBlur={() => { if (isUploadFurniture) schedulePersistUploadFurnitureMeta(activeItem.id); }}
+                                        >
                                             <div className="flex items-start justify-between gap-2 w-full">
                                                 <div className="flex flex-col min-w-0 flex-1">
                                                     <span className="text-[10px] font-black uppercase text-emerald-400 tracking-widest truncate">
@@ -4531,8 +4704,52 @@ const App: React.FC = () => {
                                                             className="flex-1 min-w-0 bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
                                                         />
                                                     </div>
+                                                    <div className="flex items-center gap-2 w-full min-w-0">
+                                                        <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">品番</span>
+                                                        <input
+                                                            type="text"
+                                                            value={(activeItem as any).modelNumber ?? ''}
+                                                            placeholder="任意"
+                                                            onChange={(e) => {
+                                                                setFurnitureItems((prev) =>
+                                                                    prev.map((f) =>
+                                                                        f.id === activeFurnitureId
+                                                                            ? { ...f, modelNumber: e.target.value }
+                                                                            : f
+                                                                    )
+                                                                );
+                                                            }}
+                                                            className="flex-1 min-w-0 bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
+                                                        />
+                                                    </div>
+                                                    <div className="flex items-center gap-2 w-full min-w-0">
+                                                        <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-10">URL</span>
+                                                        <input
+                                                            type="text"
+                                                            value={(activeItem as any).productUrl ?? ''}
+                                                            placeholder="商品ページ（任意）"
+                                                            onChange={(e) => {
+                                                                setFurnitureItems((prev) =>
+                                                                    prev.map((f) =>
+                                                                        f.id === activeFurnitureId
+                                                                            ? { ...f, productUrl: e.target.value }
+                                                                            : f
+                                                                    )
+                                                                );
+                                                            }}
+                                                            className="flex-1 min-w-0 bg-black/40 border border-white/15 rounded-lg px-2 py-1 text-[10px] text-white focus:outline-none focus:border-emerald-500/50 transition-colors"
+                                                        />
+                                                        {(activeItem as any).productUrl && /^https?:\/\//i.test((activeItem as any).productUrl) ? (
+                                                            <a href={(activeItem as any).productUrl} target="_blank" rel="noopener noreferrer" title="商品ページを開く" className="shrink-0 rounded px-1 text-[11px] text-emerald-400 hover:bg-white/10">↗</a>
+                                                        ) : null}
+                                                    </div>
                                                 </div>
                                             </div>
+                                            {isUploadFurniture && (
+                                                <p className="text-[8px] text-neutral-500 leading-relaxed">
+                                                    アップロードした家具データの情報を編集すると、保存先のデータ自体にも反映されます（次回配置や他プロジェクトにも適用）。
+                                                </p>
+                                            )}
                                         </div>
                                     );
                                 })()}

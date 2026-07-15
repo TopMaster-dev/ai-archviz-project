@@ -6,6 +6,32 @@
  * 面積ベースの建材ラインとは単位（m）が異なるため、別ラインとして扱う。
  */
 
+import { getEffectiveOpeningWidthMm } from './sketchTransform.js';
+import type { Opening } from '../types.js';
+
+/**
+ * 壁セグメントの巾木延長（m）を、床に達する開口（ドア・掃き出し窓など）の幅を差し引いて算定する
+ * （260715 クライアント #8:「ドア/窓で途切れた分を除外」）。
+ *
+ * 巾木は床〜baseboardHeightMm の帯。開口の下端がこの帯より下にある（＝床に達する）場合のみ巾木が途切れると
+ * みなし、その開口の有効幅（ドアは枠込み）を差し引く。掃き出し窓（bottomOffset=0）は差し引くが、腰高の一般的な
+ * 窓（sill が巾木上端より高い）は巾木の下を通るため差し引かない＝物理的に正しい。
+ * 合計ギャップが壁長を超えた場合は 0 にクランプ。
+ */
+export function baseboardSegmentLengthM(
+  fullLengthMm: number,
+  openingsOnWall: Pick<Opening, 'type' | 'width' | 'bottomOffset'>[],
+  baseboardHeightMm: number
+): number {
+  let gapMm = 0;
+  for (const op of openingsOnWall) {
+    if (op.bottomOffset < baseboardHeightMm) {
+      gapMm += getEffectiveOpeningWidthMm(op);
+    }
+  }
+  return Math.max(0, (fullLengthMm - gapMm) / 1000);
+}
+
 export interface BaseboardWallSegment {
   /** 壁の延長（m） */
   lengthM: number;

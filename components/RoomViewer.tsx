@@ -54,6 +54,7 @@ import { effectiveTextureShortEdgeMeters, effectiveTextureTileMeters } from '../
 import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 import { applyFurniturePatch, resolveMoveMembers, applyGroupRotation, computeGroupCentroidXZ, type Vec2XZ } from '../utils/furnitureGroupMove.js';
 import { solidRectsForSegment } from '../utils/wallOpeningTiling.js';
+import { toggleBeamSelection } from '../utils/beamSelection.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -137,7 +138,7 @@ const Beam3DMesh: React.FC<{
   roomHeight: number;
   isSelected: boolean;
   editable: boolean;
-  onSelect: () => void;
+  onSelect: (isMulti?: boolean) => void;
   onPatch: (patch: Partial<Beam>) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
@@ -295,7 +296,8 @@ const Beam3DMesh: React.FC<{
     if (!editable || isSelfHidden()) return;
     e.stopPropagation();
     // 選択は外側ビュー（カットアウェイ中）でも可能＝家具と同様に最前面で選択する。
-    if (!isSelected) { onSelect(); return; }
+    // Shift クリックは常に複数選択トグル（移動せず・素材一括貼り用・壁と同様／260715 #7a）。
+    if (!isSelected || e.shiftKey) { onSelect(e.shiftKey); return; }
     // 壁梁は常に壁固定（row 155）。自由梁は室内・外側ビューのどちらでも移動可（row 143）。
     if (isWallBeam) return;
     const p = intersectAtY(e.clientX, e.clientY, by);
@@ -330,6 +332,8 @@ const Beam3DMesh: React.FC<{
   const [ringHoverDist, setRingHoverDist] = useState(false);
   const [ringMeshHover, setRingMeshHover] = useState(false);
   const ringHighlight = ringHoverDist || ringMeshHover;
+  // 梁本体（中心）にマウスが乗っているか。回転ギズモの grab カーソルを「梁の中心」でも出すため（260715 クライアント要望）。
+  const [bodyHover, setBodyHover] = useState(false);
 
   // リング帯上にポインタが乗っているかをウィンドウ全体の pointermove で追跡（家具と同仕様）。
   // ドラッグ中は判定しない。壁梁・非選択・非編集時はハイライトを消す。
@@ -352,21 +356,22 @@ const Beam3DMesh: React.FC<{
     return () => window.removeEventListener('pointermove', onMove);
   }, [isSelected, isWallBeam, editable, intersectAtY, by, bx, bz, widthM]);
 
-  // 回転ギズモ（リング）にマウスオーバー中は grab、回転/移動ドラッグ中は grabbing カーソルにする（260715 クライアント要望
-  // 「梁の回転ギズモへマウスオーバー時のカーソルを grab に」）。自由梁・選択・編集可のときのみ（壁梁は回転不可）。マスク取得中は変えない。
+  // 回転ギズモの grab カーソルを「梁の中心（本体）」に出す（260715 クライアント要望「回転ギズモカーソルを梁の中心に置く」）。
+  // 梁本体（中心）またはリングにマウスオーバー中は grab、回転/移動ドラッグ中は grabbing。自由梁・選択・編集可のときのみ
+  // （壁梁は回転不可）。マスク取得中は変えない。リング/本体の外へ出たら前回 cleanup で auto に戻す。
   useEffect(() => {
     if (isWallBeam || !isSelected || !editable || captureStep === 'mask') return;
     if (isDragging) {
       document.body.style.cursor = 'grabbing';
-    } else if (ringHighlight) {
+    } else if (ringHighlight || bodyHover) {
       document.body.style.cursor = 'grab';
     } else {
-      return; // リング外は他コンポーネント/既定に任せる（前回の cleanup で auto に戻る）
+      return; // 対象外は他コンポーネント/既定に任せる（前回の cleanup で auto に戻る）
     }
     return () => {
       document.body.style.cursor = 'auto';
     };
-  }, [isWallBeam, isSelected, editable, captureStep, isDragging, ringHighlight]);
+  }, [isWallBeam, isSelected, editable, captureStep, isDragging, ringHighlight, bodyHover]);
 
   // 壁梁のコーナー接合（2b の 3D 版）。2D と同じ getWallBeamBandCornersMm でマイターした
   // 室内側バンドの四隅を、天井(by+h/2)から下端(by-h/2)まで押し出した角柱として描く。
@@ -414,8 +419,8 @@ const Beam3DMesh: React.FC<{
         receiveShadow
         onPointerDown={startMove}
         onClick={(e) => { if (editable && !isSelfHidden()) e.stopPropagation(); }}
-        onPointerOver={(e) => { if (!isSelfHidden()) { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); } }}
-        onPointerOut={() => onHoverNameChange?.(null)}
+        onPointerOver={(e) => { if (!isSelfHidden()) { e.stopPropagation(); onHoverNameChange?.(`Beam_${beam.id}`); setBodyHover(true); } }}
+        onPointerOut={() => { onHoverNameChange?.(null); setBodyHover(false); }}
       >
         {!usePrism && <boxGeometry args={[lengthM, heightM, widthM]} />}
         {selections && selections[`Beam_${beam.id}`] ? (
@@ -472,7 +477,7 @@ function Beams3D({
   roomHeight: number;
   wallHiddenRef?: React.MutableRefObject<Record<number, boolean>>;
   selectedBeamId?: string | null;
-  onBeamSelect?: (id: string | null) => void;
+  onBeamSelect?: (id: string | null, isMulti?: boolean) => void;
   onBeamPatch?: (id: string, patch: Partial<Beam>) => void;
   editable?: boolean;
   onDragStart?: () => void;
@@ -504,7 +509,7 @@ function Beams3D({
           roomHeight={roomHeight}
           isSelected={selectedBeamId === b.id}
           editable={!!editable}
-          onSelect={() => onBeamSelect?.(b.id)}
+          onSelect={(isMulti) => onBeamSelect?.(b.id, isMulti)}
           onPatch={(patch) => onBeamPatch?.(b.id, patch)}
           onDragStart={onDragStart}
           onDragEnd={onDragEnd}
@@ -539,8 +544,8 @@ interface RoomViewerProps {
   skeletonUpperWallMm?: number;
   /** 3Dでの梁の直接操作（移動/回転）をストアへ反映する。 */
   onBeamPatch?: (id: string, patch: Partial<Beam>) => void;
-  /** 3Dで梁を選択/解除したことを App へ通知（右パネル表示・素材割当のため）（4a）。 */
-  onBeamSelect3D?: (id: string | null) => void;
+  /** 3Dで梁を選択/解除したことを App へ通知（右パネル表示・素材割当のため）（4a）。isMulti=Shift複数選択（#7a）。 */
+  onBeamSelect3D?: (id: string | null, isMulti?: boolean) => void;
   activeFurnitureId: string | null;
   onFurnitureSelect: (id: string | null, additive?: boolean) => void;
   hideFurniture?: boolean; // New Prop for empty room capture
@@ -3449,17 +3454,26 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
     [onOpeningSelect, onBeamSelect3D]
   );
 
-  // 梁を選択したら他の選択（家具・建具）を解除する。
+  // 梁を選択したら他の選択（家具・建具）を解除する。isMulti(Shift)=複数選択トグル（#7a・素材一括貼り）。
   const selectBeamClearOthers = useCallback(
-    (id: string | null) => {
+    (id: string | null, isMulti = false) => {
+      if (id && isMulti) {
+        // Shift: 梁の複数選択トグル。プライマリ（ギズモ対象）は App と同一ロジックで求める。
+        const { nextPrimary } = toggleBeamSelection(activeMeshes, id);
+        setSelectedBeam3DId(nextPrimary);
+        onBeamSelect3D?.(id, true);
+        onFurnitureSelect(null);
+        onOpeningSelect(null);
+        return;
+      }
       setSelectedBeam3DId(id);
-      onBeamSelect3D?.(id);
+      onBeamSelect3D?.(id, isMulti);
       if (id) {
         onFurnitureSelect(null);
         onOpeningSelect(null);
       }
     },
-    [onFurnitureSelect, onOpeningSelect, onBeamSelect3D]
+    [onFurnitureSelect, onOpeningSelect, onBeamSelect3D, activeMeshes]
   );
 
   const sketchFloorPolygon = useMemo(() => {
@@ -3534,8 +3548,11 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
           antialias: true,
           preserveDrawingBuffer: true,
           alpha: false,
-          toneMapping: THREE.ACESFilmicToneMapping,
-          toneMappingExposure: 0.85
+          // #7b（260715 クライアント要望「色が変わる→無彩色化して元画像に近い色味に」）:
+          // ACES Filmic は彩度の高い色を橙/白へ寄せる色相シフトがあるため、色を保存する Khronos PBR
+          // Neutral トーンマッピングへ変更（露出は標準の 1.0）。これで貼った素材の色が元画像に近づく。
+          toneMapping: THREE.NeutralToneMapping,
+          toneMappingExposure: 1.0
         }}
         onCreated={({ gl }) => {
           // AIレンダリングのスナップショットが、隠しサムネイル生成用キャンバス等ではなく
@@ -3638,8 +3655,15 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
                             <directionalLight position={[5, 5, 5]} intensity={0.5} castShadow={false} />
                             <directionalLight position={[-5, 5, -5]} intensity={0.3} castShadow={false} />
 
-                            {/* AIに「素材の質感（ツヤ・金属感）」を伝えるためのHDRI反射情報だけは残す */}
-                            <Environment files="https://dl.polyhaven.org/file/ph-assets/HDRIs/hdr/1k/sculpture_exhibition_1k.hdr" environmentIntensity={0.5} />
+                            {/* #7b: 反射/IBL は残しつつ「無彩色（ニュートラルグレー）」にする。従来の展示室HDRIは
+                                暖色に色づいており、貼った素材の色をずらしていた。均一グレーの環境なら色被りゼロで、
+                                ツヤ・金属感（反射の有無）は引き続き伝わる。外部HDRI依存も外れる（自己完結）。 */}
+                            <Environment resolution={128} environmentIntensity={0.6}>
+                                <mesh scale={[100, 100, 100]}>
+                                    <sphereGeometry args={[1, 24, 24]} />
+                                    <meshBasicMaterial color="#c8c8c8" side={THREE.BackSide} />
+                                </mesh>
+                            </Environment>
                         </>
                     )}
 
