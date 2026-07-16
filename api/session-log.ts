@@ -91,6 +91,65 @@ export default async function handler(req: any, res: any) {
       }
     }
 
+    // --- #2 再設計（260716・トークン不要）: 登録リクエスト。招待制を維持したまま利用希望者がメールのみで申請。
+    // 重複（同一メール or 同一PC）はここで判定して blocked を返す（PC/メールのどちらか一致でブロック）。
+    // 判定は既定ONで、各クエリのエラーはそのチェックのみスキップ（誤ブロックを避ける＝運営が最終確認）。
+    if (bodyKind === 'registration-request') {
+      const rb = (req.body ?? {}) as { email?: string; userAgent?: string; screen?: string };
+      // email は他の文字列と同様に長さ上限を課す（無制限だと数MBの巨大メールを保存できてしまう＝
+      // 未認証ストレージ増幅・260716 検証で確定）。RFC 5321 の上限 254 文字。
+      const email = (str(rb.email, 254) ?? '').trim().toLowerCase();
+      const ua = str(rb.userAgent, 500);
+      const scr = str(rb.screen, 32);
+      const ip = clientIp(req);
+      if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return res.status(200).json({ ok: false, reason: 'invalid-email' });
+      }
+      const escaped = email.replace(/([\\%_])/g, '\\$1');
+      // ブロック応答は理由を区別しない（'email-exists' 等を返すと未認証でアカウント有無を推測できる列挙オラクルに
+      // なるため・260716 検証）。詳細はサーバログのみ。クライアントは blocked のみで同一メッセージを表示する。
+      const blocked = (why: string) => {
+        console.info('[registration-request] blocked:', why);
+        return res.status(200).json({ blocked: true, reason: 'duplicate' });
+      };
+      try {
+        const dedupOn = process.env.ENABLE_REG_REQUEST_DEDUP !== 'false'; // 既定 ON（重複防止が本機能の目的）
+        // 端末(PC)重複だけは別フラグで無効化可能（共有PCの誤検知対策・既定 ON=ユーザー選択「PCまたはメール」）。
+        const deviceDedupOn = process.env.ENABLE_REG_REQUEST_DEVICE_DEDUP !== 'false';
+        if (dedupOn) {
+          // (1) メール重複: 既存アカウント（admin_user_status）or 未処理/承認済みリクエスト。
+          const { data: acct } = await admin.from('admin_user_status').select('id').ilike('email', escaped).limit(1);
+          if ((acct ?? []).length > 0) return blocked('email-exists');
+          const { data: reqE } = await admin
+            .from('registration_requests').select('id').ilike('email', escaped).in('status', ['pending', 'approved']).limit(1);
+          if ((reqE ?? []).length > 0) return blocked('email-requested');
+          // (2) PC重複: 同一端末(UA+画面)でログイン実績のある本登録済みアカウント or 未処理/承認済みリクエスト。
+          if (deviceDedupOn && ua && scr) {
+            const { data: evs } = await admin.from('login_events').select('user_id').eq('user_agent', ua).eq('screen', scr).limit(500);
+            const ids = Array.from(new Set((evs ?? []).map((e: { user_id: string | null }) => e.user_id).filter(Boolean))) as string[];
+            if (ids.length > 0) {
+              const { data: profs } = await admin.from('profiles').select('id').in('id', ids).not('registered_at', 'is', null).limit(1);
+              if ((profs ?? []).length > 0) return blocked('device-has-account');
+            }
+            const { data: reqD } = await admin
+              .from('registration_requests').select('id').eq('device_ua', ua).eq('device_screen', scr).in('status', ['pending', 'approved']).limit(1);
+            if ((reqD ?? []).length > 0) return blocked('device-requested');
+          }
+        }
+        const { error: insErr } = await admin.from('registration_requests').insert({
+          email, device_ua: ua, device_screen: scr, ip, status: 'pending',
+        });
+        if (insErr) {
+          console.error('registration-request insert failed:', insErr.message);
+          return res.status(200).json({ ok: false, reason: 'insert-failed' });
+        }
+        return res.status(200).json({ ok: true });
+      } catch (e: any) {
+        console.error('registration-request error:', e?.message || e);
+        return res.status(200).json({ ok: false, reason: 'error' });
+      }
+    }
+
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = typeof authHeader === 'string' && authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) {

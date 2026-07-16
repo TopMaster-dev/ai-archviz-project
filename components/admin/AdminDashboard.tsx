@@ -285,6 +285,124 @@ function GroupTable({ title, rows, note }: { title: string; rows: GroupAgg[]; no
   );
 }
 
+interface RegRequest {
+  id: string;
+  email: string;
+  status: string;
+  deviceUa: string | null;
+  deviceScreen: string | null;
+  ip: string | null;
+  createdAt: string | null;
+}
+
+/** 登録リクエスト（#2 再設計・260716）の一覧・承認（招待リンク送信）・却下。 */
+function RegistrationRequestsCard() {
+  const [requests, setRequests] = useState<RegRequest[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  // 一覧取得の失敗は msg と分けて持つ（エラー時に「未処理のリクエストはありません」と同時表示して誤解させないため・260716 検証）。
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const load = async () => {
+    setLoading(true);
+    setMsg(null);
+    setLoadError(null);
+    try {
+      const res = await adminFetch('list-requests&status=pending');
+      const r = await res.json().catch(() => null);
+      if (!res.ok || !Array.isArray(r?.requests)) {
+        // fetch は HTTP エラーで throw しないため res.ok を明示的に確認し、空表示で誤解させない。
+        setRequests([]);
+        setLoadError(`一覧の取得に失敗しました（${r?.error ?? res.status}）。`);
+      } else {
+        setRequests(r.requests);
+      }
+    } catch {
+      setRequests([]);
+      setLoadError('一覧の取得に失敗しました（通信エラー）。');
+    }
+    setLoading(false);
+  };
+  useEffect(() => {
+    void load();
+  }, []);
+
+  const decide = async (id: string, action: 'approve-request' | 'reject-request') => {
+    setBusyId(id);
+    setMsg(null);
+    try {
+      const r = await (await adminFetch(`${action}&id=${encodeURIComponent(id)}`, 'POST')).json();
+      if (r?.success) {
+        setRequests((prev) => prev.filter((x) => x.id !== id));
+        setMsg(action === 'approve-request' ? '承認して招待リンクを送信しました。' : '却下しました。');
+      } else {
+        setMsg(`操作に失敗しました（${r?.error ?? 'error'}）。`);
+      }
+    } catch {
+      setMsg('通信エラーが発生しました。');
+    }
+    setBusyId(null);
+  };
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-emerald-300">登録リクエスト（未処理）</h3>
+        <button type="button" onClick={() => void load()} className="text-[11px] text-neutral-400 transition hover:text-neutral-200">
+          更新
+        </button>
+      </div>
+      <p className="mb-3 mt-1 text-[11px] text-neutral-500">
+        承認すると、そのメールアドレス宛に招待リンクを送信します（本登録へ誘導）。却下は招待を送りません。
+      </p>
+      {loading ? (
+        <p className="text-xs text-neutral-400">読み込み中…</p>
+      ) : loadError ? (
+        <p className="text-xs text-amber-300">{loadError}</p>
+      ) : requests.length === 0 ? (
+        <p className="text-xs text-neutral-500">未処理のリクエストはありません。</p>
+      ) : (
+        <ul className="space-y-2">
+          {requests.map((r) => (
+            <li
+              key={r.id}
+              className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2"
+            >
+              <div className="min-w-0">
+                <div className="truncate text-sm text-white">{r.email}</div>
+                <div className="truncate text-[10px] text-neutral-500">
+                  {fmtDate(r.createdAt)}
+                  {r.ip ? ` ・ ${r.ip}` : ''}
+                </div>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => void decide(r.id, 'approve-request')}
+                  className="rounded-md bg-emerald-600 px-2.5 py-1 text-[11px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+                >
+                  承認
+                </button>
+                <button
+                  type="button"
+                  disabled={busyId === r.id}
+                  onClick={() => void decide(r.id, 'reject-request')}
+                  className="rounded-md border border-white/10 px-2.5 py-1 text-[11px] text-neutral-300 transition hover:bg-white/10 disabled:opacity-40"
+                >
+                  却下
+                </button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {msg && <p className="mt-2 text-[11px] text-neutral-400">{msg}</p>}
+    </Card>
+  );
+}
+
 export function AdminDashboard() {
   const [state, setState] = useState<'loading' | 'forbidden' | 'ready' | 'error'>('loading');
   const [email, setEmail] = useState<string | null>(null);
@@ -453,9 +571,10 @@ export function AdminDashboard() {
           )}
         </section>
 
-        {/* 運営操作: ユーザーの猶予期間管理（#4） */}
-        <section className="space-y-2">
+        {/* 運営操作: 登録リクエストの承認（#2）＋ユーザーの猶予期間管理（#4） */}
+        <section className="space-y-3">
           <h2 className="text-sm font-bold text-neutral-200">運営操作</h2>
+          <RegistrationRequestsCard />
           <GraceManagerCard />
         </section>
 

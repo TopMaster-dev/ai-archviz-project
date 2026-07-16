@@ -76,3 +76,24 @@ export async function checkDeviceForReregistration(): Promise<{ blocked: boolean
     return { blocked: false, reason: 'network-error' };
   }
 }
+
+/**
+ * #2 再設計（260716）: 登録リクエストを送信する（トークン不要）。メールのみ＋端末情報を送り、サーバ側で
+ * 重複（同一メール/同一PC）を判定する。blocked=重複でブロック、ok=リクエスト受付、それ以外は失敗（reason）。
+ */
+export async function submitRegistrationRequest(
+  email: string,
+): Promise<{ ok: boolean; blocked?: boolean; reason?: string }> {
+  try {
+    const res = await fetch('/api/session-log', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'registration-request', email, ...collectDeviceInfo() }),
+    });
+    const data = (await res.json().catch(() => null)) as { ok?: boolean; blocked?: boolean; reason?: string } | null;
+    if (data?.blocked) return { ok: false, blocked: true, reason: data.reason };
+    return { ok: !!data?.ok, reason: data?.reason };
+  } catch {
+    return { ok: false, reason: 'network-error' };
+  }
+}

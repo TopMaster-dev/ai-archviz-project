@@ -349,3 +349,114 @@ export async function setUserGrace(input: SetGraceInput): Promise<UserStatusResu
   if (!row) return { ok: false, reason: 'not-found' };
   return { ok: true, status: toUserStatus(row) };
 }
+
+// ---- 登録リクエストの運営管理（#2 再設計・260716）----
+// 招待制を維持したまま、利用希望者の「登録リクエスト」を一覧・承認（招待リンク送信）・却下する。
+
+export interface RegistrationRequestItem {
+  id: string;
+  email: string;
+  status: string;
+  deviceUa: string | null;
+  deviceScreen: string | null;
+  ip: string | null;
+  createdAt: string | null;
+}
+
+interface RegRequestRow {
+  id: string;
+  email: string;
+  status: string;
+  device_ua: string | null;
+  device_screen: string | null;
+  ip: string | null;
+  created_at: string | null;
+}
+
+/** 登録リクエスト一覧（既定は未処理 pending）。 */
+export async function listRegistrationRequests(
+  status = 'pending',
+): Promise<{ ok: boolean; requests?: RegistrationRequestItem[]; reason?: string }> {
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured' };
+  const st = ['pending', 'approved', 'rejected'].includes(status) ? status : 'pending';
+  const { data, error } = await sb
+    .from('registration_requests')
+    .select('id, email, status, device_ua, device_screen, ip, created_at')
+    .eq('status', st)
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) return { ok: false, reason: error.message };
+  const requests = ((data ?? []) as RegRequestRow[]).map((r) => ({
+    id: r.id,
+    email: r.email,
+    status: r.status,
+    deviceUa: r.device_ua,
+    deviceScreen: r.device_screen,
+    ip: r.ip,
+    createdAt: r.created_at,
+  }));
+  return { ok: true, requests };
+}
+
+/** リクエストを承認し、招待メール（リンク）を送信する。auth.users を作成し、本登録フローへ誘導する。 */
+export async function approveRegistrationRequest(
+  requestId: string,
+  adminUserId: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const id = (requestId || '').trim();
+  if (!id) return { ok: false, reason: 'id-required' };
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured' };
+  const { data: reqRow, error: rErr } = await sb
+    .from('registration_requests')
+    .select('id, email, status')
+    .eq('id', id)
+    .limit(1)
+    .maybeSingle();
+  if (rErr) return { ok: false, reason: rErr.message };
+  if (!reqRow) return { ok: false, reason: 'not-found' };
+  if (reqRow.status !== 'pending') return { ok: false, reason: 'already-decided' };
+  const email = (reqRow.email || '').trim();
+  if (!email) return { ok: false, reason: 'invalid-email' };
+  // 招待リンク送信（auth.users 作成＋メール送信）。redirectTo 未指定なら Supabase の Site URL が使われる。
+  const redirectTo = process.env.PUBLIC_APP_URL || process.env.APP_URL || '';
+  const { error: invErr } = await sb.auth.admin.inviteUserByEmail(
+    email,
+    redirectTo ? { redirectTo } : undefined,
+  );
+  if (invErr) {
+    // 既に招待/登録済みのメールは「招待は成立している」とみなして承認扱いにする（冪等）。
+    // 招待成功→ステータス更新失敗で pending が残った場合の再承認や、二重クリックで詰まらないようにする（260716 検証）。
+    const m = (invErr.message || '').toLowerCase();
+    const code = (invErr as { code?: string }).code || '';
+    const alreadyExists =
+      code === 'email_exists' || m.includes('already') || m.includes('registered') || m.includes('exists');
+    if (!alreadyExists) return { ok: false, reason: invErr.message };
+  }
+  const { error: upErr } = await sb
+    .from('registration_requests')
+    .update({ status: 'approved', decided_at: new Date().toISOString(), decided_by: adminUserId })
+    .eq('id', id);
+  if (upErr) return { ok: false, reason: upErr.message };
+  return { ok: true };
+}
+
+/** リクエストを却下する（招待は送らない）。 */
+export async function rejectRegistrationRequest(
+  requestId: string,
+  adminUserId: string,
+  note?: string,
+): Promise<{ ok: boolean; reason?: string }> {
+  const id = (requestId || '').trim();
+  if (!id) return { ok: false, reason: 'id-required' };
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured' };
+  const { error } = await sb
+    .from('registration_requests')
+    .update({ status: 'rejected', decided_at: new Date().toISOString(), decided_by: adminUserId, note: note ?? null })
+    .eq('id', id)
+    .eq('status', 'pending');
+  if (error) return { ok: false, reason: error.message };
+  return { ok: true };
+}

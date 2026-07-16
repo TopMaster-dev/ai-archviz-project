@@ -227,6 +227,28 @@ create or replace view admin_user_status as
   join auth.users u on u.id = p.id;
 revoke all on admin_user_status from anon, authenticated;
 
+-- 登録リクエスト（#2 再設計・260716）: 招待制を維持したまま、利用希望者がメールのみで「登録リクエスト」を送り、
+-- 運営が承認したら招待リンクを送る流れ。重複（同一PC/同一メール）はリクエスト時にサーバで判定する。
+-- 未ログインからの挿入・閲覧はサーバ(service_role)のみ＝RLS 有効かつポリシー無しで anon/authenticated を全拒否。
+create table if not exists registration_requests (
+  id            uuid primary key default gen_random_uuid(),
+  email         text not null,
+  device_ua     text,
+  device_screen text,
+  ip            text,
+  status        text not null default 'pending',   -- pending | approved | rejected
+  note          text,                              -- 却下理由など（任意）
+  created_at    timestamptz not null default now(),
+  decided_at    timestamptz,
+  decided_by    uuid                               -- 承認/却下した管理者の user_id
+);
+create index if not exists idx_reg_requests_status on registration_requests (status, created_at desc);
+create index if not exists idx_reg_requests_email  on registration_requests (lower(email));
+create index if not exists idx_reg_requests_device on registration_requests (device_ua, device_screen);
+alter table registration_requests enable row level security;
+-- ポリシーを作らない＝anon/authenticated は読めない/書けない（サーバの service_role のみが操作する）。
+revoke all on registration_requests from anon, authenticated;
+
 -- ---------------------------------------------------------------------------
 -- 4) user_api_keys（BYOK）
 -- ---------------------------------------------------------------------------

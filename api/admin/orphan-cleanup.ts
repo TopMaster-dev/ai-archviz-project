@@ -6,6 +6,9 @@ import {
   testKey,
   findUserStatusByEmail,
   setUserGrace,
+  listRegistrationRequests,
+  approveRegistrationRequest,
+  rejectRegistrationRequest,
 } from '../../lib/server/adminDashboard.js';
 import { getInfraStatus } from '../../lib/server/adminInfra.js';
 
@@ -48,8 +51,8 @@ export default async function handler(req: any, res: any) {
   // --- 管理ダッシュボード（メール許可リスト認証）---
   // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
-  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'testkey', 'infra', 'user-status'];
-  const WRITE_ACTIONS = ['set-grace'];
+  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'testkey', 'infra', 'user-status', 'list-requests'];
+  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request'];
   if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
@@ -85,6 +88,30 @@ export default async function handler(req: any, res: any) {
       const result = await setUserGrace({ userId, expiresAt: expiresAt || null, resetCredits });
       if (!result.ok) return res.status(result.reason === 'not-found' ? 404 : 400).json({ error: result.reason });
       return res.status(200).json({ success: true, status: result.status });
+    }
+    // #2 再設計（260716）: 登録リクエスト一覧（管理者のみ・PII を含む）。
+    if (action === 'list-requests') {
+      const status = getQueryParam(req, 'status') || 'pending';
+      const result = await listRegistrationRequests(status);
+      if (!result.ok) return res.status(400).json({ error: result.reason });
+      return res.status(200).json({ success: true, requests: result.requests });
+    }
+    // #2（WRITE）: リクエスト承認（招待リンク送信）／却下。必ず POST。
+    if (action === 'approve-request') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'approve-request は POST。' });
+      const id = getQueryParam(req, 'id');
+      if (!id) return res.status(400).json({ error: 'id が必要です。' });
+      const result = await approveRegistrationRequest(id, admin.userId);
+      if (!result.ok) return res.status(result.reason === 'not-found' ? 404 : 400).json({ error: result.reason });
+      return res.status(200).json({ success: true });
+    }
+    if (action === 'reject-request') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'reject-request は POST。' });
+      const id = getQueryParam(req, 'id');
+      if (!id) return res.status(400).json({ error: 'id が必要です。' });
+      const result = await rejectRegistrationRequest(id, admin.userId);
+      if (!result.ok) return res.status(result.reason === 'not-found' ? 404 : 400).json({ error: result.reason });
+      return res.status(200).json({ success: true });
     }
   }
 

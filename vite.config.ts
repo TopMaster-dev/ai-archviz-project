@@ -325,6 +325,45 @@ export default defineConfig(({ mode }) => {
                                 res.statusCode = 200; return res.end(JSON.stringify({ blocked: false, reason: 'error' }));
                             }
                         }
+                        // #2 再設計（260716）: 登録リクエスト（トークン不要）。本番 api/session-log.ts と一致。
+                        if (earlyKind === 'registration-request') {
+                            const rb = JSON.parse(body || '{}') as { email?: string; userAgent?: string; screen?: string };
+                            const strv = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
+                            const email = (strv(rb.email, 254) ?? '').trim().toLowerCase();
+                            const ua = strv(rb.userAgent, 500); const scr = strv(rb.screen, 32);
+                            const pickIp2 = (h: any): string | null => { const raw = Array.isArray(h) ? h[0] : h; return typeof raw === 'string' && raw.trim() ? raw.split(',')[0].trim() : null; };
+                            const ip = pickIp2(req.headers['x-real-ip']) || pickIp2(req.headers['x-forwarded-for']) || req.socket?.remoteAddress || null;
+                            if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { res.statusCode = 200; return res.end(JSON.stringify({ ok: false, reason: 'invalid-email' })); }
+                            const escaped = email.replace(/([\\%_])/g, '\\$1');
+                            const blocked = () => { res.statusCode = 200; return res.end(JSON.stringify({ blocked: true, reason: 'duplicate' })); };
+                            const { createClient } = await import('@supabase/supabase-js');
+                            const admin = createClient(sbUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+                            try {
+                                const dedupOn = process.env.ENABLE_REG_REQUEST_DEDUP !== 'false' && env.ENABLE_REG_REQUEST_DEDUP !== 'false';
+                                const deviceDedupOn = process.env.ENABLE_REG_REQUEST_DEVICE_DEDUP !== 'false' && env.ENABLE_REG_REQUEST_DEVICE_DEDUP !== 'false';
+                                if (dedupOn) {
+                                    const { data: acct } = await admin.from('admin_user_status').select('id').ilike('email', escaped).limit(1);
+                                    if ((acct ?? []).length > 0) return blocked();
+                                    const { data: reqE } = await admin.from('registration_requests').select('id').ilike('email', escaped).in('status', ['pending', 'approved']).limit(1);
+                                    if ((reqE ?? []).length > 0) return blocked();
+                                    if (deviceDedupOn && ua && scr) {
+                                        const { data: evs } = await admin.from('login_events').select('user_id').eq('user_agent', ua).eq('screen', scr).limit(500);
+                                        const ids = Array.from(new Set((evs ?? []).map((e: { user_id: string | null }) => e.user_id).filter(Boolean)));
+                                        if (ids.length > 0) {
+                                            const { data: profs } = await admin.from('profiles').select('id').in('id', ids as string[]).not('registered_at', 'is', null).limit(1);
+                                            if ((profs ?? []).length > 0) return blocked();
+                                        }
+                                        const { data: reqD } = await admin.from('registration_requests').select('id').eq('device_ua', ua).eq('device_screen', scr).in('status', ['pending', 'approved']).limit(1);
+                                        if ((reqD ?? []).length > 0) return blocked();
+                                    }
+                                }
+                                const { error: insErr } = await admin.from('registration_requests').insert({ email, device_ua: ua, device_screen: scr, ip, status: 'pending' });
+                                if (insErr) { res.statusCode = 200; return res.end(JSON.stringify({ ok: false, reason: 'insert-failed' })); }
+                                res.statusCode = 200; return res.end(JSON.stringify({ ok: true }));
+                            } catch {
+                                res.statusCode = 200; return res.end(JSON.stringify({ ok: false, reason: 'error' }));
+                            }
+                        }
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
                         if (!token) {
