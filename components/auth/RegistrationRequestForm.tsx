@@ -11,6 +11,7 @@ import { Field, FormError, inputClass, submitClass } from './formKit.js';
  */
 export function RegistrationRequestForm({ onGoToLogin }: { onGoToLogin?: () => void }) {
   const [email, setEmail] = useState('');
+  const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<'idle' | 'sent' | 'blocked'>('idle');
   const [error, setError] = useState<string | null>(null);
@@ -19,7 +20,7 @@ export function RegistrationRequestForm({ onGoToLogin }: { onGoToLogin?: () => v
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const r = await submitRegistrationRequest(email.trim());
+    const r = await submitRegistrationRequest(email.trim(), name.trim());
     setBusy(false);
     if (r.blocked) {
       setState('blocked');
@@ -77,9 +78,19 @@ export function RegistrationRequestForm({ onGoToLogin }: { onGoToLogin?: () => v
     <form onSubmit={onSubmit} className="space-y-4">
       <FormError message={error} />
       <p className="text-[12px] leading-relaxed text-neutral-400">
-        ご利用には運営の承認が必要です。メールアドレスを入力して登録をリクエストしてください。
+        ご利用には運営の承認が必要です。お名前とメールアドレスを入力して登録をリクエストしてください。
         承認後、ご入力のメールアドレスに招待リンクをお送りします。
       </p>
+      <Field label="お名前">
+        <input
+          type="text"
+          required
+          autoComplete="name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          className={inputClass}
+        />
+      </Field>
       <Field label="メールアドレス">
         <input
           type="email"
@@ -90,7 +101,7 @@ export function RegistrationRequestForm({ onGoToLogin }: { onGoToLogin?: () => v
           className={inputClass}
         />
       </Field>
-      <button type="submit" disabled={busy || !email.trim()} className={submitClass}>
+      <button type="submit" disabled={busy || !email.trim() || !name.trim()} className={submitClass}>
         {busy ? '送信中…' : '登録をリクエスト'}
       </button>
     </form>

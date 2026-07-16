@@ -41,7 +41,7 @@ export function AuthScreen() {
             onClick={() => setView(isRequest ? 'login' : 'request')}
             className="ml-1.5 font-bold text-emerald-400 transition hover:text-emerald-300"
           >
-            {isRequest ? 'ログイン' : '登録をリクエスト'}
+            {isRequest ? 'ログイン' : '新規登録'}
           </button>
         </p>
 

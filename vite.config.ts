@@ -327,9 +327,10 @@ export default defineConfig(({ mode }) => {
                         }
                         // #2 再設計（260716）: 登録リクエスト（トークン不要）。本番 api/session-log.ts と一致。
                         if (earlyKind === 'registration-request') {
-                            const rb = JSON.parse(body || '{}') as { email?: string; userAgent?: string; screen?: string };
+                            const rb = JSON.parse(body || '{}') as { email?: string; name?: string; userAgent?: string; screen?: string };
                             const strv = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
                             const email = (strv(rb.email, 254) ?? '').trim().toLowerCase();
+                            const name = strv(rb.name, 100);
                             const ua = strv(rb.userAgent, 500); const scr = strv(rb.screen, 32);
                             const pickIp2 = (h: any): string | null => { const raw = Array.isArray(h) ? h[0] : h; return typeof raw === 'string' && raw.trim() ? raw.split(',')[0].trim() : null; };
                             const ip = pickIp2(req.headers['x-real-ip']) || pickIp2(req.headers['x-forwarded-for']) || req.socket?.remoteAddress || null;
@@ -357,7 +358,7 @@ export default defineConfig(({ mode }) => {
                                         if ((reqD ?? []).length > 0) return blocked();
                                     }
                                 }
-                                const { error: insErr } = await admin.from('registration_requests').insert({ email, device_ua: ua, device_screen: scr, ip, status: 'pending' });
+                                const { error: insErr } = await admin.from('registration_requests').insert({ email, name, device_ua: ua, device_screen: scr, ip, status: 'pending' });
                                 if (insErr) { res.statusCode = 200; return res.end(JSON.stringify({ ok: false, reason: 'insert-failed' })); }
                                 res.statusCode = 200; return res.end(JSON.stringify({ ok: true }));
                             } catch {

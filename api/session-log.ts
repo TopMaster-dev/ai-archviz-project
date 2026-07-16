@@ -95,10 +95,11 @@ export default async function handler(req: any, res: any) {
     // 重複（同一メール or 同一PC）はここで判定して blocked を返す（PC/メールのどちらか一致でブロック）。
     // 判定は既定ONで、各クエリのエラーはそのチェックのみスキップ（誤ブロックを避ける＝運営が最終確認）。
     if (bodyKind === 'registration-request') {
-      const rb = (req.body ?? {}) as { email?: string; userAgent?: string; screen?: string };
+      const rb = (req.body ?? {}) as { email?: string; name?: string; userAgent?: string; screen?: string };
       // email は他の文字列と同様に長さ上限を課す（無制限だと数MBの巨大メールを保存できてしまう＝
       // 未認証ストレージ増幅・260716 検証で確定）。RFC 5321 の上限 254 文字。
       const email = (str(rb.email, 254) ?? '').trim().toLowerCase();
+      const name = str(rb.name, 100); // 申請者氏名（任意・上限100）
       const ua = str(rb.userAgent, 500);
       const scr = str(rb.screen, 32);
       const ip = clientIp(req);
@@ -137,7 +138,7 @@ export default async function handler(req: any, res: any) {
           }
         }
         const { error: insErr } = await admin.from('registration_requests').insert({
-          email, device_ua: ua, device_screen: scr, ip, status: 'pending',
+          email, name, device_ua: ua, device_screen: scr, ip, status: 'pending',
         });
         if (insErr) {
           console.error('registration-request insert failed:', insErr.message);

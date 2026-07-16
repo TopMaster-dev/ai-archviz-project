@@ -233,6 +233,7 @@ revoke all on admin_user_status from anon, authenticated;
 create table if not exists registration_requests (
   id            uuid primary key default gen_random_uuid(),
   email         text not null,
+  name          text,                              -- 申請者氏名（任意・運営が誰の申請か確認できるように・260716）
   device_ua     text,
   device_screen text,
   ip            text,
@@ -242,6 +243,8 @@ create table if not exists registration_requests (
   decided_at    timestamptz,
   decided_by    uuid                               -- 承認/却下した管理者の user_id
 );
+-- 既存テーブル（name 追加前）への安全網。
+alter table registration_requests add column if not exists name text;
 create index if not exists idx_reg_requests_status on registration_requests (status, created_at desc);
 create index if not exists idx_reg_requests_email  on registration_requests (lower(email));
 create index if not exists idx_reg_requests_device on registration_requests (device_ua, device_screen);

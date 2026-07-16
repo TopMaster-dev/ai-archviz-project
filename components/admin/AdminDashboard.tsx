@@ -288,6 +288,7 @@ function GroupTable({ title, rows, note }: { title: string; rows: GroupAgg[]; no
 interface RegRequest {
   id: string;
   email: string;
+  name: string | null;
   status: string;
   deviceUa: string | null;
   deviceScreen: string | null;
@@ -370,7 +371,10 @@ function RegistrationRequestsCard() {
               className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2"
             >
               <div className="min-w-0">
-                <div className="truncate text-sm text-white">{r.email}</div>
+                <div className="truncate text-sm text-white">
+                  {r.name ? <span className="font-bold">{r.name}</span> : <span className="text-neutral-500">（名前未入力）</span>}
+                  <span className="ml-2 text-[11px] text-neutral-400">{r.email}</span>
+                </div>
                 <div className="truncate text-[10px] text-neutral-500">
                   {fmtDate(r.createdAt)}
                   {r.ip ? ` ・ ${r.ip}` : ''}

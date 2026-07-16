@@ -356,6 +356,7 @@ export async function setUserGrace(input: SetGraceInput): Promise<UserStatusResu
 export interface RegistrationRequestItem {
   id: string;
   email: string;
+  name: string | null;
   status: string;
   deviceUa: string | null;
   deviceScreen: string | null;
@@ -366,6 +367,7 @@ export interface RegistrationRequestItem {
 interface RegRequestRow {
   id: string;
   email: string;
+  name: string | null;
   status: string;
   device_ua: string | null;
   device_screen: string | null;
@@ -382,7 +384,7 @@ export async function listRegistrationRequests(
   const st = ['pending', 'approved', 'rejected'].includes(status) ? status : 'pending';
   const { data, error } = await sb
     .from('registration_requests')
-    .select('id, email, status, device_ua, device_screen, ip, created_at')
+    .select('id, email, name, status, device_ua, device_screen, ip, created_at')
     .eq('status', st)
     .order('created_at', { ascending: false })
     .limit(200);
@@ -390,6 +392,7 @@ export async function listRegistrationRequests(
   const requests = ((data ?? []) as RegRequestRow[]).map((r) => ({
     id: r.id,
     email: r.email,
+    name: r.name,
     status: r.status,
     deviceUa: r.device_ua,
     deviceScreen: r.device_screen,

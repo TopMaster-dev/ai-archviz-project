@@ -83,12 +83,13 @@ export async function checkDeviceForReregistration(): Promise<{ blocked: boolean
  */
 export async function submitRegistrationRequest(
   email: string,
+  name?: string,
 ): Promise<{ ok: boolean; blocked?: boolean; reason?: string }> {
   try {
     const res = await fetch('/api/session-log', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ kind: 'registration-request', email, ...collectDeviceInfo() }),
+      body: JSON.stringify({ kind: 'registration-request', email, name, ...collectDeviceInfo() }),
     });
     const data = (await res.json().catch(() => null)) as { ok?: boolean; blocked?: boolean; reason?: string } | null;
     if (data?.blocked) return { ok: false, blocked: true, reason: data.reason };
