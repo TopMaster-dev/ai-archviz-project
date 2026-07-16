@@ -65,7 +65,7 @@ export function SignupForm({ onRegistered, onGoToLogin }: { onRegistered?: () =>
   if (deviceBlocked) {
     return (
       <div className="space-y-4 text-center">
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-4 text-sm leading-relaxed text-amber-200">
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-3 text-xs leading-relaxed text-amber-200">
           このPCは、別のメールアドレスで既に登録されています。
           <br />
           お手数ですが、既存のアカウントでログインしてください。
