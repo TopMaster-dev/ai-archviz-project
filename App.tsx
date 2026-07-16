@@ -756,7 +756,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
         {aiEstimateItems.length > 0 ? (
           <div className="grid grid-cols-1 gap-2">
             {aiEstimateItems.map((item) => {
-              const missing = !item.name.trim() || !item.brand.trim() || !(item.price && item.price > 0);
+              const missing = !item.name.trim() || !(item.price && item.price > 0); // 名称・金額のみ（ブランドは任意）
               return (
                 <div key={item.id} className={`rounded-xl border p-2 ${missing ? 'border-amber-500/40 bg-amber-500/5' : 'border-white/10 bg-white/5'}`}>
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
@@ -814,7 +814,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                       ) : null}
                     </div>
                   </div>
-                  {missing && <div className="mt-1 text-[10px] font-black text-amber-300">名称・ブランド・金額の入力で完了になります</div>}
+                  {missing && <div className="mt-1 text-[10px] font-black text-amber-300">名称・金額の入力で完了になります</div>}
                 </div>
               );
             })}
@@ -3050,8 +3050,9 @@ const App: React.FC = () => {
   );
   const aiEstimateMissingCount = useMemo(
     () =>
+      // 未入力判定は「名称・金額」のみ（ブランド/メーカーは任意・260716 クライアント要望）。
       aiEstimateItems.filter(
-        (item) => !item.name.trim() || !item.brand.trim() || !(item.price && item.price > 0)
+        (item) => !item.name.trim() || !(item.price && item.price > 0)
       ).length,
     [aiEstimateItems]
   );
@@ -5066,7 +5067,8 @@ const App: React.FC = () => {
       )}
 
       {estimateGuardOpen && (
-        <div className="fixed inset-0 z-[9998] flex items-center justify-center bg-black/70 p-4">
+        // AI画像編集ワークスペース(z-10000)やレンダリング/離脱オーバーレイ(z-10050)より前面に出す（260716・隠れる不具合の修正）。
+        <div className="fixed inset-0 z-[10060] flex items-center justify-center bg-black/70 p-4">
           <div className="w-full max-w-md rounded-2xl border border-amber-500/30 bg-[#121212] p-5 shadow-2xl">
             <h3 className="mb-2 text-sm font-black tracking-wide text-amber-300">未入力項目があります</h3>
             <p className="text-xs text-neutral-300">

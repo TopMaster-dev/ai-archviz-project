@@ -67,6 +67,8 @@ export interface MaterialBoardItem {
   partCode: string;
   displayName: string;
   brand: string;
+  /** 実際に貼られた面（3Dビューのメッシュ由来・床/壁/天井/梁）。面ごとに1スワッチ（260716）。 */
+  surface: SurfaceKey;
   usages: string[];
 }
 
@@ -286,20 +288,25 @@ export function buildEstimateExportPayload(
     ...baseboardExportRows,
   ];
 
+  // マテリアルボード: 実際に貼られた「面」ごとに1スワッチ（同じ素材でも面が違えば別スワッチ＝表と一致・260716）。
+  // キーは surface|productId。天井・梁も必ず含まれる（旧: productId のみで集約し最初の面だけ表示＝天井/梁が抜けていた）。
   const boardMap = new Map<string, MaterialBoardItem>();
   for (const item of costBreakdown) {
     const pid = aggregateKeyForProduct(item);
+    const surface = classifySurface(item.meshName);
     const label = usageLabelFromMesh(item.meshName, wallDivisions);
-    const existing = boardMap.get(pid);
+    const key = `${surface}|${pid}`;
+    const existing = boardMap.get(key);
     if (existing) {
       if (!existing.usages.includes(label)) existing.usages.push(label);
     } else {
-      boardMap.set(pid, {
+      boardMap.set(key, {
         productId: item.productId || pid,
         textureUrl: item.textureUrl ?? '',
         partCode: item.productId || pid,
         displayName: `${item.brand} ${item.prodName}`.trim(),
         brand: item.brand,
+        surface,
         usages: [label],
       });
     }
@@ -307,9 +314,12 @@ export function buildEstimateExportPayload(
   for (const b of boardMap.values()) {
     b.usages.sort((a, c) => a.localeCompare(c, 'ja'));
   }
-  const materialBoard = [...boardMap.values()].sort((a, b) =>
-    a.displayName.localeCompare(b.displayName, 'ja')
-  );
+  // 面の並び順は 床→壁→天井→梁（クライアント指定の「床・壁・天井・梁」）。同一面内は表示名順。
+  const SURFACE_ORDER: Record<SurfaceKey, number> = { floor: 0, wall: 1, ceiling: 2, beam: 3, baseboard: 4 };
+  const materialBoard = [...boardMap.values()].sort((a, b) => {
+    const so = (SURFACE_ORDER[a.surface] ?? 9) - (SURFACE_ORDER[b.surface] ?? 9);
+    return so !== 0 ? so : a.displayName.localeCompare(b.displayName, 'ja');
+  });
 
   const furniture: FurnitureExportRow[] = [];
   let fno = 1;
@@ -335,6 +345,8 @@ export function buildEstimateExportPayload(
   let ano = 1;
   for (const item of aiEstimateItems) {
     const price = item.price ?? 0;
+    // 入力状態は画面の未入力判定（名称＋金額）と揃える（ブランドは任意・260716）。名称か金額が欠ければ未入力。
+    const complete = !!(item.name ?? '').trim() && price > 0;
     aiItems.push({
       no: ano++,
       itemName: (item.name || 'AI追加項目').trim(),
@@ -347,7 +359,7 @@ export function buildEstimateExportPayload(
         .filter(Boolean)
         .join(' / '),
       sectionType: 'AI追加',
-      inputStatus: price > 0 ? '完了' : '未入力',
+      inputStatus: complete ? '完了' : '未入力',
     });
   }
 

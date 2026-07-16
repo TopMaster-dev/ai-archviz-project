@@ -251,29 +251,31 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   return root;
 }
 
-/** 使用箇所ラベルから面カテゴリを判定（壁（境界 N）/上部壁→wall・天井→ceiling・床→floor・梁→beam）。 */
-function surfaceCategory(usages: string[]): 'wall' | 'ceiling' | 'floor' | 'beam' {
-  for (const u of usages) {
-    if (u.startsWith('天井')) return 'ceiling';
-    if (u.startsWith('床')) return 'floor';
-    if (u.startsWith('梁')) return 'beam';
-  }
-  return 'wall';
+/** 面(SurfaceKey)→日本語ラベル。 */
+const SURFACE_JP: Record<string, string> = { floor: '床', wall: '壁', ceiling: '天井', beam: '梁', baseboard: '巾木' };
+
+/** マテリアルボード1スワッチ分（素材＋面ごとの通し番号ラベル）。 */
+interface BoardEntry {
+  it: MaterialBoardItem;
+  label: string;
 }
 
 /**
- * マテリアルボード（A3横向き・260623）。面別（壁/天井/床/梁）にグルーピングし、スウォッチは100mm角。
- * 幅 1188px ≒ A3横 420mm（無余白で配置するため、283px ≒ 100mm になる）。
- * ヘッダ＝プロジェクト名／日付、フッタ＝会社名（無ければユーザー名）。
+ * マテリアルボード（A3横向き）。1ページ＝横4×縦2＝最大8スワッチの固定グリッド（260716・クライアント要望）。
+ * 面（床/壁/天井/梁）は各スワッチのラベル（床1/壁1…）で示す。並びは 床→壁→天井→梁。9枚以上はページ分割（呼び出し側でチャンク）。
+ * 幅1188px:高さ840px ＝ A3横(420:297)の比率。renderBoardToA3Page が幅いっぱいに配置する。
+ * ヘッダ＝プロジェクト名／日付(＋ページ番号)、フッタ＝会社名（無ければユーザー名）。
  */
 function buildMaterialBoardPage(
-  items: MaterialBoardItem[],
+  entries: BoardEntry[],
   projectName: string,
   authorName: string,
-  dateLabel: string
+  dateLabel: string,
+  pageNo: number,
+  pageCount: number
 ): HTMLElement {
   const root = document.createElement('div');
-  root.style.cssText = `box-sizing:border-box;width:1188px;background:#fff;color:#111;font-family:${FONT_STACK};display:flex;flex-direction:column;`;
+  root.style.cssText = `box-sizing:border-box;width:1188px;height:840px;background:#fff;color:#111;font-family:${FONT_STACK};display:flex;flex-direction:column;`;
 
   const header = document.createElement('div');
   header.style.cssText =
@@ -281,66 +283,42 @@ function buildMaterialBoardPage(
   const pn = document.createElement('span');
   pn.textContent = projectName || 'プロジェクト名';
   const dt = document.createElement('span');
-  dt.textContent = `日付：${dateLabel}`;
+  dt.textContent = `日付：${dateLabel}${pageCount > 1 ? `　（${pageNo}/${pageCount}）` : ''}`;
   header.appendChild(pn);
   header.appendChild(dt);
   root.appendChild(header);
 
   const body = document.createElement('div');
   body.style.cssText = 'flex:1;padding:16px 18px;';
-
-  const groups: { key: 'wall' | 'ceiling' | 'floor' | 'beam'; title: string; jp: string; items: MaterialBoardItem[] }[] = [
-    { key: 'wall', title: '■壁', jp: '壁', items: [] },
-    { key: 'ceiling', title: '■天井', jp: '天井', items: [] },
-    { key: 'floor', title: '■床', jp: '床', items: [] },
-    { key: 'beam', title: '■梁', jp: '梁', items: [] },
-  ];
-  for (const it of items) {
-    const cat = surfaceCategory(it.usages);
-    (groups.find((g) => g.key === cat) ?? groups[0]).items.push(it);
+  const grid = document.createElement('div');
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:14px 16px;align-content:start;';
+  for (const { it, label } of entries) {
+    const card = document.createElement('div');
+    const imgWrap = document.createElement('div');
+    imgWrap.style.cssText =
+      'width:100%;height:270px;border:1px solid #ccc;overflow:hidden;background:#ececec;display:flex;align-items:center;justify-content:center;';
+    if (it.textureUrl) {
+      const img = document.createElement('img');
+      img.crossOrigin = 'anonymous';
+      img.src = it.textureUrl;
+      img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
+      img.alt = '';
+      imgWrap.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.textContent = '—';
+      ph.style.cssText = 'font-size:14px;color:#999;';
+      imgWrap.appendChild(ph);
+    }
+    const cap = document.createElement('div');
+    cap.textContent = `${label}：${it.partCode}【${it.brand || 'メーカー名'}】`;
+    cap.style.cssText =
+      'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;word-break:break-all;';
+    card.appendChild(imgWrap);
+    card.appendChild(cap);
+    grid.appendChild(card);
   }
-
-  for (const g of groups) {
-    if (g.items.length === 0) continue;
-    const sec = document.createElement('div');
-    sec.style.cssText = 'margin-bottom:16px;';
-    const st = document.createElement('div');
-    st.textContent = g.title;
-    st.style.cssText = 'color:#cc0000;font-size:14px;font-weight:800;margin-bottom:6px;';
-    sec.appendChild(st);
-
-    const grid = document.createElement('div');
-    grid.style.cssText = 'display:flex;flex-wrap:wrap;gap:12px 16px;';
-    g.items.forEach((it, idx) => {
-      const card = document.createElement('div');
-      card.style.cssText = 'width:283px;';
-      const imgWrap = document.createElement('div');
-      imgWrap.style.cssText =
-        'width:283px;height:283px;border:1px solid #ccc;overflow:hidden;background:#ececec;display:flex;align-items:center;justify-content:center;';
-      if (it.textureUrl) {
-        const img = document.createElement('img');
-        img.crossOrigin = 'anonymous';
-        img.src = it.textureUrl;
-        img.style.cssText = 'width:100%;height:100%;object-fit:cover;';
-        img.alt = '';
-        imgWrap.appendChild(img);
-      } else {
-        const ph = document.createElement('div');
-        ph.textContent = '—';
-        ph.style.cssText = 'font-size:14px;color:#999;';
-        imgWrap.appendChild(ph);
-      }
-      const cap = document.createElement('div');
-      cap.textContent = `${g.jp}${idx + 1}：${it.partCode}【${it.brand || 'メーカー名'}】`;
-      cap.style.cssText =
-        'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;word-break:break-all;';
-      card.appendChild(imgWrap);
-      card.appendChild(cap);
-      grid.appendChild(card);
-    });
-    sec.appendChild(grid);
-    body.appendChild(sec);
-  }
+  body.appendChild(grid);
   root.appendChild(body);
 
   const footer = document.createElement('div');
@@ -441,8 +419,20 @@ export async function downloadEstimatePdf(payload: EstimateExportPayload): Promi
   if (board.length > 0) {
     await preloadTextureUrls(board.map((b) => b.textureUrl).filter(Boolean));
     const dateLabel = new Date(payload.generatedAtIso).toLocaleDateString('ja-JP');
-    const boardEl = buildMaterialBoardPage(board, payload.projectName, payload.authorName, dateLabel);
-    await renderBoardToA3Page(pdf, boardEl);
+    // 面ごとの通し番号（床1/床2/壁1…）。board は面順（床→壁→天井→梁）にソート済み。
+    const counters: Record<string, number> = {};
+    const entries: BoardEntry[] = board.map((it) => {
+      const n = (counters[it.surface] = (counters[it.surface] ?? 0) + 1);
+      return { it, label: `${SURFACE_JP[it.surface] ?? ''}${n}` };
+    });
+    // 横4×縦2＝1ページ8枚。9枚以上はページを増やす（260716）。
+    const PER_PAGE = 8;
+    const pageCount = Math.ceil(entries.length / PER_PAGE);
+    for (let i = 0, page = 0; i < entries.length; i += PER_PAGE, page += 1) {
+      const chunk = entries.slice(i, i + PER_PAGE);
+      const boardEl = buildMaterialBoardPage(chunk, payload.projectName, payload.authorName, dateLabel, page + 1, pageCount);
+      await renderBoardToA3Page(pdf, boardEl);
+    }
   }
 
   const out = pdf.output('blob');
