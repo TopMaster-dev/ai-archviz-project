@@ -328,11 +328,11 @@ export function AdminDashboard() {
   };
 
   if (state === 'loading') {
-    return <div className="min-h-screen bg-neutral-950 p-8 text-neutral-300">読み込み中…</div>;
+    return <div className="h-screen overflow-y-auto bg-neutral-950 p-8 text-neutral-300">読み込み中…</div>;
   }
   if (state === 'forbidden') {
     return (
-      <div className="min-h-screen bg-neutral-950 p-8 text-neutral-300">
+      <div className="h-screen overflow-y-auto bg-neutral-950 p-8 text-neutral-300">
         <h1 className="text-lg font-bold text-white">運営ダッシュボード</h1>
         <p className="mt-2 text-sm">
           アクセス権がありません（管理者のみ）。ログイン中のアカウントのメールを、環境変数 <code>ADMIN_EMAILS</code>
@@ -349,11 +349,13 @@ export function AdminDashboard() {
     );
   }
   if (state === 'error') {
-    return <div className="min-h-screen bg-neutral-950 p-8 text-red-300">読み込みに失敗しました。</div>;
+    return <div className="h-screen overflow-y-auto bg-neutral-950 p-8 text-red-300">読み込みに失敗しました。</div>;
   }
 
   return (
-    <div className="min-h-screen bg-neutral-950 p-6 text-white">
+    // #root は overflow:hidden で高さ固定のため、ダッシュボードは自前の縦スクロール領域にする
+    // （min-h-screen だと内容がはみ出してスクロールできない・260716 修正）。
+    <div className="h-screen overflow-y-auto scroll-dark bg-neutral-950 p-6 text-white">
       <div className="mx-auto max-w-5xl space-y-6">
         <header className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
