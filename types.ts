@@ -20,6 +20,8 @@ export interface FurnitureItem {
   scale: [number, number, number];
   /** GLTF 計測のスケール1時の床面相当サイズ（mm）。未設定時は名前ヒューリスティクス */
   modelFootprintBaseMm?: { width: number; depth: number };
+  /** GLTF 計測のスケール1時の高さ（mm・Y）。寸法編集の高さ基準に使う（260717）。未設定は背景計測で補完。 */
+  modelBaseHeightMm?: number;
   /** 2D軽量表示専用の足跡（mm）。実行時計測を避けるための優先値 */
   footprint2d?: { width: number; depth: number };
   /** モデルが正面を向く基準ヨー角（度）。2D/3D初期向きの共通基準 */

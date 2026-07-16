@@ -2915,8 +2915,17 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             })));
             const scalePct = Math.round((f.scale[0] || 1) * 100);
             const setScalePct = (pct: number) => {
-              const s = Math.max(10, Math.round(pct)) / 100;
-              onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, scale: [s, s, s] as [number, number, number] })));
+              const targetSx = Math.max(10, Math.round(pct)) / 100;
+              onFurnitureUpdate((prev) => prev.map((it) => {
+                if (it.id !== f.id) return it;
+                // 幅(scale[0])を基準に全体を比例スケール。3Dで幅/奥行/高さを個別編集した非等倍でも
+                // 幅:奥行:高さ の比率を保ったまま拡縮する（[s,s,s] 上書きは比率を壊し編集を消すため不可・260717）。
+                const cur0 = Number.isFinite(it.scale[0]) && it.scale[0] > 0 ? it.scale[0] : 1;
+                const factor = targetSx / cur0;
+                const sy = (Number.isFinite(it.scale[1]) ? it.scale[1] : cur0) * factor;
+                const sz = (Number.isFinite(it.scale[2]) ? it.scale[2] : cur0) * factor;
+                return { ...it, scale: [targetSx, sy, sz] as [number, number, number] };
+              }));
             };
             const priceVal = Number.isFinite(f.customPrice as number) ? (f.customPrice as number) : 0;
             const setPrice = (v: number) => onFurnitureUpdate((prev) => prev.map((it) => (it.id !== f.id ? it : { ...it, customPrice: v })));

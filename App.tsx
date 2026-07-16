@@ -2252,10 +2252,16 @@ const App: React.FC = () => {
     let cancelled = false;
     const cleanupTasks: Array<() => void> = [];
     const pending = furnitureItemsRef.current.filter((item) => {
-      // API/Cloudinaryでfootprint2dがあるものは実測不要（重いBox3計測を回避）
-      if (item.footprint2d || item.modelFootprintBaseMm || !item.modelUrl) return false;
+      if (!item.modelUrl) return false;
+      // footprint2d/modelFootprintBaseMm があれば足跡計測は不要。ただし寸法編集の高さ基準
+      // modelBaseHeightMm が無ければ（アップロード家具は footprint2d を持つが高さ未計測）計測対象にする（260717）。
+      const needsFootprint = !item.footprint2d && !item.modelFootprintBaseMm;
+      const needsHeight = item.modelBaseHeightMm == null;
+      if (!needsFootprint && !needsHeight) return false;
+      // 実測完了/恒久失敗した項目のみ除外する。ここで eager に add してしまうと、viewMode 切替や
+      // 足跡完了による scanKey 変化で本 effect が再実行された際、まだ処理していない項目まで attempted 扱いになり
+      // 永久にスキップされて 高さ が「計測中…」のまま固まる（260717 検証で検出）。add は完了時（下の then/catch）に行う。
       if (furnitureFootprintAttemptedRef.current.has(item.id)) return false;
-      furnitureFootprintAttemptedRef.current.add(item.id);
       return true;
     });
     const runNext = () => {
@@ -2269,11 +2275,26 @@ const App: React.FC = () => {
         computeGltfFootprintBaseMm(modelUrl)
           .then((dims) => {
             if (cancelled) return;
+            // 完了した項目だけを attempted に記録（キャンセル時は未記録＝次回再実行で再計測される）。
+            furnitureFootprintAttemptedRef.current.add(item.id);
             setFurnitureItems((prev) =>
-              prev.map((f) => (f.id === item.id ? { ...f, modelFootprintBaseMm: dims } : f))
+              prev.map((f) => {
+                if (f.id !== item.id) return f;
+                const needFp = !f.footprint2d && !f.modelFootprintBaseMm;
+                const needH = f.modelBaseHeightMm == null;
+                if (!needFp && !needH) return f;
+                return {
+                  ...f,
+                  ...(needFp ? { modelFootprintBaseMm: { width: dims.width, depth: dims.depth } } : {}),
+                  ...(needH ? { modelBaseHeightMm: dims.height } : {})
+                };
+              })
             );
           })
-          .catch(() => {})
+          .catch(() => {
+            // 恒久失敗（モデル不正/CORS）は再試行しても無駄なので attempted に記録。キャンセル時は記録しない。
+            if (!cancelled) furnitureFootprintAttemptedRef.current.add(item.id);
+          })
           .finally(() => {
             const elapsed = performance.now() - t0;
             if (PERF_TRACE && elapsed > PERF_THRESH_MS.footprint) {
@@ -4586,6 +4607,51 @@ const App: React.FC = () => {
                                             })
                                         );
                                     };
+                                    // 寸法編集（幅・奥行・高さ mm ＋ 全体倍率・260717 クライアント要望）。
+                                    // footprint2d / modelFootprintBaseMm / modelBaseHeightMm はスケール1の自然サイズ（実寸）。
+                                    // 表示寸法 = 自然サイズ × scale（幅=scale[0]／奥行=scale[2]／高さ=scale[1]）。
+                                    const baseWmm = activeItem.footprint2d?.width ?? activeItem.modelFootprintBaseMm?.width ?? 0;
+                                    const baseDmm = activeItem.footprint2d?.depth ?? activeItem.modelFootprintBaseMm?.depth ?? 0;
+                                    const baseHmm = activeItem.modelBaseHeightMm ?? 0; // 背景計測で補完。未計測時は 0（計測中表示）。
+                                    const sc = activeItem.scale;
+                                    const dispWmm = baseWmm > 0 ? Math.round(baseWmm * sc[0]) : 0;
+                                    const dispDmm = baseDmm > 0 ? Math.round(baseDmm * sc[2]) : 0;
+                                    const dispHmm = baseHmm > 0 ? Math.round(baseHmm * sc[1]) : 0;
+                                    const scalePct = Math.round(((sc[0] + sc[1] + sc[2]) / 3) * 100);
+                                    const SCALE_MIN = 0.02;
+                                    const SCALE_MAX = 50;
+                                    const clampScale = (v: number) =>
+                                        Math.min(SCALE_MAX, Math.max(SCALE_MIN, Number.isFinite(v) && v > 0 ? v : SCALE_MIN));
+                                    const setAxisScale = (axis: 0 | 1 | 2, nextScale: number) => {
+                                        const s = clampScale(nextScale);
+                                        setFurnitureItems((prev) =>
+                                            prev.map((f) => {
+                                                if (f.id !== activeFurnitureId) return f;
+                                                const next = [f.scale[0], f.scale[1], f.scale[2]] as [number, number, number];
+                                                next[axis] = s;
+                                                return { ...f, scale: next };
+                                            })
+                                        );
+                                    };
+                                    const setDimMm = (axis: 0 | 1 | 2, base: number, mm: number) => {
+                                        if (!(base > 0)) return;
+                                        setAxisScale(axis, (Number.isFinite(mm) ? mm : 0) / base);
+                                    };
+                                    const setUniformScalePct = (pct: number) => {
+                                        const s = clampScale((Number.isFinite(pct) ? pct : 100) / 100);
+                                        setFurnitureItems((prev) =>
+                                            prev.map((f) =>
+                                                f.id === activeFurnitureId ? { ...f, scale: [s, s, s] as [number, number, number] } : f
+                                            )
+                                        );
+                                    };
+                                    const resetDimsToActual = () => {
+                                        setFurnitureItems((prev) =>
+                                            prev.map((f) =>
+                                                f.id === activeFurnitureId ? { ...f, scale: [1, 1, 1] as [number, number, number] } : f
+                                            )
+                                        );
+                                    };
                                     const isUploadFurniture = activeItem.type === UPLOAD_FURNITURE_TYPE;
                                     return (
                                         <div
@@ -4673,6 +4739,81 @@ const App: React.FC = () => {
                                                     mm
                                                 </span>
                                             </label>
+
+                                            {/* 寸法編集（幅・奥行・高さ ＋ 全体倍率・260717 クライアント要望）。実寸=スケール1。 */}
+                                            {activeItem.modelUrl && (
+                                                <div className="flex flex-col gap-1.5 pt-2 border-t border-white/10">
+                                                    <div className="flex items-center justify-between gap-2">
+                                                        <span className="text-[10px] font-bold text-neutral-300">寸法</span>
+                                                        <button
+                                                            type="button"
+                                                            onClick={resetDimsToActual}
+                                                            className="text-[9px] text-neutral-500 hover:text-emerald-400 transition-colors"
+                                                        >
+                                                            実寸に戻す
+                                                        </button>
+                                                    </div>
+                                                    {baseWmm > 0 && (
+                                                        <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-neutral-300">
+                                                            幅
+                                                            <span className="flex items-center gap-1 text-neutral-400">
+                                                                <NumericField
+                                                                    value={dispWmm}
+                                                                    onChange={(v) => setDimMm(0, baseWmm, v)}
+                                                                    dragSensitivity={2}
+                                                                    className="w-16"
+                                                                />
+                                                                mm
+                                                            </span>
+                                                        </label>
+                                                    )}
+                                                    {baseDmm > 0 && (
+                                                        <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-neutral-300">
+                                                            奥行
+                                                            <span className="flex items-center gap-1 text-neutral-400">
+                                                                <NumericField
+                                                                    value={dispDmm}
+                                                                    onChange={(v) => setDimMm(2, baseDmm, v)}
+                                                                    dragSensitivity={2}
+                                                                    className="w-16"
+                                                                />
+                                                                mm
+                                                            </span>
+                                                        </label>
+                                                    )}
+                                                    {baseHmm > 0 ? (
+                                                        <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-neutral-300">
+                                                            高さ
+                                                            <span className="flex items-center gap-1 text-neutral-400">
+                                                                <NumericField
+                                                                    value={dispHmm}
+                                                                    onChange={(v) => setDimMm(1, baseHmm, v)}
+                                                                    dragSensitivity={2}
+                                                                    className="w-16"
+                                                                />
+                                                                mm
+                                                            </span>
+                                                        </label>
+                                                    ) : (
+                                                        <div className="flex items-center justify-between gap-2 text-[10px] font-bold text-neutral-500">
+                                                            高さ
+                                                            <span className="text-[9px] text-neutral-500">計測中…</span>
+                                                        </div>
+                                                    )}
+                                                    <label className="flex items-center justify-between gap-2 text-[10px] font-bold text-neutral-300">
+                                                        全体倍率
+                                                        <span className="flex items-center gap-1 text-neutral-400">
+                                                            <NumericField
+                                                                value={scalePct}
+                                                                onChange={setUniformScalePct}
+                                                                dragSensitivity={1}
+                                                                className="w-16"
+                                                            />
+                                                            %
+                                                        </span>
+                                                    </label>
+                                                </div>
+                                            )}
 
                                             <div className="flex items-start gap-3 w-full pt-2 border-t border-white/10">
                                                 <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/10 shrink-0 bg-neutral-800">
