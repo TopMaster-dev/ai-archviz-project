@@ -261,9 +261,9 @@ interface BoardEntry {
 }
 
 /**
- * マテリアルボード（A3横向き）。1ページ＝横4×縦2＝最大8スワッチの固定グリッド（260716・クライアント要望）。
- * 面（床/壁/天井/梁）は各スワッチのラベル（床1/壁1…）で示す。並びは 床→壁→天井→梁。9枚以上はページ分割（呼び出し側でチャンク）。
- * 幅1188px:高さ840px ＝ A3横(420:297)の比率。renderBoardToA3Page が幅いっぱいに配置する。
+ * マテリアルボード（A3横向き）。参考ボードに合わせ、1ページ＝横4×縦2＝最大8スワッチ＋中央の縦仕切り線の2面構成（260716）。
+ * 面（床/壁/天井/梁）ごとに赤い「■壁」等の見出しを初出のスワッチ上に表示し、キャプションは「■壁1：品番【メーカー名】」形式。
+ * 並びは 床→壁→天井→梁。9枚以上はページ分割（呼び出し側でチャンク）。幅1188px:高さ840px ＝ A3横(420:297)の比率。
  * ヘッダ＝プロジェクト名／日付(＋ページ番号)、フッタ＝会社名（無ければユーザー名）。
  */
 function buildMaterialBoardPage(
@@ -288,15 +288,35 @@ function buildMaterialBoardPage(
   header.appendChild(dt);
   root.appendChild(header);
 
+  // body は position:relative（中央の縦仕切り線を絶対配置するため・参考ボードと同じ2面構成）。
   const body = document.createElement('div');
-  body.style.cssText = 'flex:1;padding:16px 18px;';
+  body.style.cssText = 'flex:1;padding:16px 18px;position:relative;';
+  const divider = document.createElement('div');
+  divider.style.cssText = 'position:absolute;top:16px;bottom:16px;left:50%;width:1px;background:#bbb;';
+  body.appendChild(divider);
+
   const grid = document.createElement('div');
-  grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:14px 16px;align-content:start;';
+  grid.style.cssText = 'display:grid;grid-template-columns:repeat(4,1fr);gap:14px 16px;align-content:start;position:relative;';
+  // 各カテゴリ（面）の最初のスワッチの上に赤い「■壁」等の見出しを1回だけ出す（ページ内で初出のとき）。
+  // 見出しスロットは常に固定高さにして、見出しの有無でスワッチの高さがズレないようにする。
+  const seenSurface = new Set<string>();
   for (const { it, label } of entries) {
     const card = document.createElement('div');
+    card.style.cssText = 'display:flex;flex-direction:column;';
+
+    const catSlot = document.createElement('div');
+    if (!seenSurface.has(it.surface)) {
+      seenSurface.add(it.surface);
+      catSlot.textContent = `■${SURFACE_JP[it.surface] ?? ''}`;
+      catSlot.style.cssText = 'height:20px;line-height:20px;color:#cc0000;font-size:14px;font-weight:800;margin-bottom:2px;';
+    } else {
+      catSlot.style.cssText = 'height:20px;margin-bottom:2px;';
+    }
+    card.appendChild(catSlot);
+
     const imgWrap = document.createElement('div');
     imgWrap.style.cssText =
-      'width:100%;height:270px;border:1px solid #ccc;overflow:hidden;background:#ececec;display:flex;align-items:center;justify-content:center;';
+      'width:100%;height:264px;border:1px solid #ccc;overflow:hidden;background:#ececec;display:flex;align-items:center;justify-content:center;';
     if (it.textureUrl) {
       const img = document.createElement('img');
       img.crossOrigin = 'anonymous';
@@ -311,9 +331,14 @@ function buildMaterialBoardPage(
       imgWrap.appendChild(ph);
     }
     const cap = document.createElement('div');
-    cap.textContent = `${label}：${it.partCode}【${it.brand || 'メーカー名'}】`;
     cap.style.cssText =
       'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;word-break:break-all;';
+    const mark = document.createElement('span');
+    mark.textContent = '■';
+    mark.style.cssText = 'color:#cc0000;margin-right:2px;';
+    cap.appendChild(mark);
+    cap.appendChild(document.createTextNode(`${label}：${it.partCode}【${it.brand || 'メーカー名'}】`));
+
     card.appendChild(imgWrap);
     card.appendChild(cap);
     grid.appendChild(card);
