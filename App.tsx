@@ -50,7 +50,7 @@ import { useShellNav } from './lib/shell/shellNavContext.js';
 import { makeThumbnailDataUrl } from './utils/makeThumbnail.js';
 import { useEditorShortcuts } from './hooks/useEditorShortcuts.js';
 import type { MaterialSettingsValue, Beam } from './lib/project/projectState.js';
-import { listUserUploads, uploadUserFile, checkStorageCapacity, updateUserUploadMetadata } from './lib/db/uploads.js';
+import { listUserUploads, uploadUserFile, checkStorageCapacity, updateUserUploadMetadata, fileSizeWarning, FILE_SIZE_WARN_BYTES } from './lib/db/uploads.js';
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
@@ -2018,6 +2018,9 @@ const App: React.FC = () => {
   const handleModelFileUpload = useCallback((file: File | undefined) => {
     if (modelUploadInputRef.current) modelUploadInputRef.current.value = '';
     if (!file) return;
+    // 3Dモデルは縮小できないため、5MB以上は確認（続行/中止）を出す（260716）。
+    const warn = fileSizeWarning(file, 'model');
+    if (warn && !window.confirm(`${warn}\n\nこのままアップロードしますか？`)) return;
     setPendingModelFile(file);
     setPendingModelName(deriveUploadName(file.name));
     setPendingModelBrand('');
@@ -3488,6 +3491,11 @@ const App: React.FC = () => {
                 ))}
               </div>
             </div>
+            {pendingMaterialFiles.some((f) => f.size >= FILE_SIZE_WARN_BYTES) && (
+              <p className="mt-3 text-[11px] leading-relaxed text-amber-300">
+                5MB以上の大きな画像が含まれています。自動的に縮小してアップロードします。
+              </p>
+            )}
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={closeMaterialPopup} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">キャンセル</button>
               <button type="button" onClick={commitMaterialUpload} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500">選択したカテゴリに追加</button>

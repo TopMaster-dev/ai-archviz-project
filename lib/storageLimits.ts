@@ -15,3 +15,7 @@ export const STORAGE_WARN_FRACTION = 0.7;
 
 /** 容量警告（接近表示・メール）を発するしきい値（バイト）。既定 = 上限の70% = 70MB。 */
 export const STORAGE_WARN_THRESHOLD_BYTES = Math.round(STORAGE_SOFT_LIMIT_BYTES * STORAGE_WARN_FRACTION);
+
+/** 1ファイルあたりの「大きめ」警告しきい値（バイト）。5MB 以上で警告（260716 クライアント要望）。
+ *  テクスチャは自動縮小するので情報表示、3Dモデルは縮小できないため確認（続行/中止）に使う。 */
+export const FILE_SIZE_WARN_BYTES = 5 * 1024 * 1024; // 5MB

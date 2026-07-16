@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabase, getSupabaseConfig } from './supabaseClient.js';
-import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION, STORAGE_WARN_THRESHOLD_BYTES } from '../storageLimits.js';
+import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION, STORAGE_WARN_THRESHOLD_BYTES, FILE_SIZE_WARN_BYTES } from '../storageLimits.js';
+import { downsizeImageFile } from '../../utils/downsizeImageFile.js';
 
 // ユーザーアップロード資産（3Dモデル / テクスチャ）の保存・一覧・削除。
 //
@@ -96,7 +97,19 @@ export function validateUpload(file: File, kind: UploadKind): string | null {
 
 // 容量上限（管理表 row 31）は lib/storageLimits.ts を単一の真実源とし、ここから再エクスポートする
 // （既存の import 互換: UploadPanel などは uploads.ts から取り込む）。
-export { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION, STORAGE_WARN_THRESHOLD_BYTES };
+export { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_FRACTION, STORAGE_WARN_THRESHOLD_BYTES, FILE_SIZE_WARN_BYTES };
+
+/**
+ * 1ファイルが「大きめ」（既定 5MB 以上）のとき警告文を返す（無ければ null）。260716。
+ * テクスチャは自動縮小するので情報表示、3Dモデルは縮小できないため注意喚起（続行/中止の確認に使う）。
+ */
+export function fileSizeWarning(file: File, kind: UploadKind): string | null {
+  if (!file || file.size < FILE_SIZE_WARN_BYTES) return null;
+  const mb = (file.size / (1024 * 1024)).toFixed(1);
+  return kind === 'texture'
+    ? `画像サイズが大きめです（${mb}MB）。自動的に縮小してアップロードします。`
+    : `ファイルサイズが大きめです（${mb}MB）。3Dの表示や動作が重くなる場合があります。可能なら最適化（メッシュ削減・テクスチャ圧縮）してからアップロードしてください。`;
+}
 
 /**
  * 容量がしきい値（70MB）を超えた本人へ、警告メールを「即時」送るようサーバへ依頼する（ベストエフォート）。
@@ -288,7 +301,17 @@ export async function uploadUserFile(
     onProgress?: (fraction: number) => void;
   } = {},
 ): Promise<UserUpload> {
-  const invalid = validateUpload(file, kind);
+  // テクスチャは大きすぎる画像を自動縮小（長辺2048/WebP）してから検証・保存する（260716）。
+  // 縮小前提のため、元が上限(12MB)超でも縮小後に収まれば通る。失敗時は原本のまま検証に回る。
+  let uploadFile = file;
+  if (kind === 'texture') {
+    try {
+      uploadFile = (await downsizeImageFile(file)).file;
+    } catch {
+      uploadFile = file;
+    }
+  }
+  const invalid = validateUpload(uploadFile, kind);
   if (invalid) throw new Error(invalid);
 
   const sb = getSupabase();
@@ -298,9 +321,10 @@ export async function uploadUserFile(
   if (!userId) throw new Error('未ログインのため、アップロードできません。');
 
   const ts = options.timestamp ?? Date.now();
-  const path = buildStoragePath(userId, kind, file.name, ts);
+  // 保存パス/拡張子は実際に保存する（縮小後）ファイルに合わせる（.webp 等・content-type と一致させる）。
+  const path = buildStoragePath(userId, kind, uploadFile.name, ts);
 
-  await uploadFileToBucket(sb, BUCKET, path, file, options.onProgress);
+  await uploadFileToBucket(sb, BUCKET, path, uploadFile, options.onProgress);
 
   const { data: pub } = sb.storage.from(BUCKET).getPublicUrl(path);
   const storageUrl = pub.publicUrl;
@@ -313,8 +337,8 @@ export async function uploadUserFile(
       storage_provider: 'supabase',
       storage_url: storageUrl,
       public_id: path,
-      original_name: file.name,
-      bytes: file.size,
+      original_name: file.name, // 表示は元のファイル名を保持（実体は縮小後の webp）
+      bytes: uploadFile.size, // 実際に保存した（縮小後の）サイズを計上
       project_id: options.projectId ?? null,
       metadata: options.metadata ?? {},
     })

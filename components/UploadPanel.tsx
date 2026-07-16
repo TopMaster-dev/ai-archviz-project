@@ -4,6 +4,8 @@ import { useAuth } from '../lib/auth/AuthContext.js';
 import {
   ACCEPTED_EXT,
   checkStorageCapacity,
+  fileSizeWarning,
+  FILE_SIZE_WARN_BYTES,
   deleteUserUpload,
   getStorageUsageSelf,
   listUserUploads,
@@ -240,6 +242,9 @@ export function UploadPanel({
   const onModelPicked = (file: File | undefined) => {
     if (modelInputRef.current) modelInputRef.current.value = '';
     if (!file || !passesCapacityPrecheck(file)) return;
+    // 3Dモデルは縮小できないため、5MB以上は確認（続行/中止）を出す（260716）。
+    const warn = fileSizeWarning(file, 'model');
+    if (warn && !window.confirm(`${warn}\n\nこのままアップロードしますか？`)) return;
     setMsg(null);
     setPmName(file.name.replace(/\.[^./\\]+$/, '').trim());
     setPmBrand('');
@@ -269,6 +274,7 @@ export function UploadPanel({
   const onTexturePicked = (file: File | undefined) => {
     if (textureInputRef.current) textureInputRef.current.value = '';
     if (!file || !passesCapacityPrecheck(file)) return;
+    // 5MB以上の案内はポップアップ内にアンバーで表示する（msg は赤=エラー表示なので流用しない・260716）。
     setMsg(null);
     setPendingCategory(null); // 既定=共通
     setPtName(file.name.replace(/\.[^./\\]+$/, '').trim()); // データ名称はファイル名で初期化（3Dモデルと同様）
@@ -657,6 +663,11 @@ export function UploadPanel({
                 ))}
               </div>
             </div>
+            {pendingTexture.file.size >= FILE_SIZE_WARN_BYTES && (
+              <p className="mt-3 text-[11px] leading-relaxed text-amber-300">
+                5MB以上の大きな画像です。自動的に縮小してアップロードします。
+              </p>
+            )}
             {busy ? (
               <p className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-emerald-300"><Loader2 className="h-3.5 w-3.5 animate-spin" />アップロード中…</p>
             ) : msg ? (
