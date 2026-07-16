@@ -55,6 +55,7 @@ import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 import { applyFurniturePatch, resolveMoveMembers, applyGroupRotation, computeGroupCentroidXZ, type Vec2XZ } from '../utils/furnitureGroupMove.js';
 import { solidRectsForSegment } from '../utils/wallOpeningTiling.js';
 import { toggleBeamSelection } from '../utils/beamSelection.js';
+import { UPLOAD_FURNITURE_TYPE } from '../lib/uploadsCatalog.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -1040,7 +1041,8 @@ const ClayModel = ({
     maskMode,
     isSelected,
     captureStep,
-    alignTop
+    alignTop,
+    colored
 }: {
     object: THREE.Object3D;
     /** 読み込み形式。FBX/OBJ は単位が一定でないため描画前にサイズ正規化する。 */
@@ -1050,6 +1052,8 @@ const ClayModel = ({
     captureStep?: 'idle' | 'pt-base' | 'mask';
     /** true のとき、モデルの「最上端」をグループ原点に合わせる（天井から吊り下げる天井オブジェクト用）。 */
     alignTop?: boolean;
+    /** true のとき通常表示でモデル本来の色/マテリアルを維持する（アップロード品を色付きで配置・260717）。 */
+    colored?: boolean;
 }) => {
     // クローンと座標補正は「最初の1回」だけ行う（ここで計算を確定させる）
     const clonedScene = useMemo(() => {
@@ -1068,6 +1072,12 @@ const ClayModel = ({
         // 通常は最下端を原点（床置き）。天井オブジェクトは最上端を原点に合わせて天井から吊り下げる。
         clone.position.y = alignTop ? -box.max.y : -box.min.y;
         clone.position.z = -center.z;
+        // 色付き表示に戻せるよう、置換前に元マテリアルを控える（clone() はマテリアルを共有参照するので消えない）。
+        clone.traverse((child: any) => {
+            if (child.isMesh && child.material && !child.userData.__origMat) {
+                child.userData.__origMat = child.material;
+            }
+        });
         return clone;
     }, [object, alignTop, format]);
 
@@ -1083,20 +1093,24 @@ const ClayModel = ({
                     child.material = new THREE.MeshBasicMaterial({
                         color: isSelected ? 0xffffff : 0x000000
                     });
+                } else if (maskMode) {
+                    child.material = new THREE.MeshBasicMaterial({ color: 0xffffff });
+                } else if (colored && child.userData.__origMat) {
+                    // 通常表示：モデル本来の色/テクスチャに戻す（アップロード品を色付きで配置・260717）。
+                    child.material = child.userData.__origMat;
                 } else {
-                    child.material = maskMode
-                        ? new THREE.MeshBasicMaterial({ color: 0xffffff })
-                        : new THREE.MeshStandardMaterial({
-                            color: 0xe0e0e0, // 暗いグレー(0x888888)から明るい白に変更し、光を拾わせる
-                            roughness: 0.9,
-                            metalness: 0.0,
-                            map: null,
-                            normalMap: null
-                        });
+                    // 従来のクレイ（白粘土）。カタログ品や元マテリアル欠落時。
+                    child.material = new THREE.MeshStandardMaterial({
+                        color: 0xe0e0e0,
+                        roughness: 0.9,
+                        metalness: 0.0,
+                        map: null,
+                        normalMap: null
+                    });
                 }
             }
         });
-    }, [clonedScene, maskMode, captureStep, isSelected]);
+    }, [clonedScene, maskMode, captureStep, isSelected, colored]);
 
     return <primitive object={clonedScene} />;
 };
@@ -1109,7 +1123,8 @@ const GLTFCore = ({
     isSelected,
     snapshotMode: _snapshotMode,
     captureStep,
-    alignTop
+    alignTop,
+    colored
 }: {
     modelUrl: string;
     maskMode?: boolean;
@@ -1118,6 +1133,8 @@ const GLTFCore = ({
     captureStep?: 'idle' | 'pt-base' | 'mask';
     /** true のとき、モデルの「最上端」をグループ原点に合わせる（天井から吊り下げる天井オブジェクト用）。 */
     alignTop?: boolean;
+    /** true のとき通常表示でモデル本来の色/マテリアルを維持する（260717）。 */
+    colored?: boolean;
 }) => {
     return (
         <ModelRoot url={modelUrl}>
@@ -1129,6 +1146,7 @@ const GLTFCore = ({
                     isSelected={isSelected}
                     captureStep={captureStep}
                     alignTop={alignTop}
+                    colored={colored}
                 />
             )}
         </ModelRoot>
@@ -1980,6 +1998,7 @@ const GLTFFurniture: React.FC<{
                                 isSelected={isSelected}
                                 captureStep={captureStep}
                                 alignTop={item.ceilingMount}
+                                colored={item.type === UPLOAD_FURNITURE_TYPE}
                             />
                         </Suspense>
                     </CanvasErrorBoundary>
