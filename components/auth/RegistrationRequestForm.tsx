@@ -33,7 +33,9 @@ export function RegistrationRequestForm({ onGoToLogin }: { onGoToLogin?: () => v
     setError(
       r.reason === 'invalid-email'
         ? 'メールアドレスの形式が正しくありません。'
-        : '送信に失敗しました。時間をおいて再度お試しください。',
+        : r.reason === 'name-required'
+          ? 'お名前を入力してください。'
+          : '送信に失敗しました。時間をおいて再度お試しください。',
     );
   }
 

@@ -99,12 +99,15 @@ export default async function handler(req: any, res: any) {
       // email は他の文字列と同様に長さ上限を課す（無制限だと数MBの巨大メールを保存できてしまう＝
       // 未認証ストレージ増幅・260716 検証で確定）。RFC 5321 の上限 254 文字。
       const email = (str(rb.email, 254) ?? '').trim().toLowerCase();
-      const name = str(rb.name, 100); // 申請者氏名（任意・上限100）
+      const name = (str(rb.name, 100) ?? '').trim(); // 申請者氏名（必須・上限100・誰の申請か運営が確認するため）
       const ua = str(rb.userAgent, 500);
       const scr = str(rb.screen, 32);
       const ip = clientIp(req);
       if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
         return res.status(200).json({ ok: false, reason: 'invalid-email' });
+      }
+      if (!name) {
+        return res.status(200).json({ ok: false, reason: 'name-required' });
       }
       const escaped = email.replace(/([\\%_])/g, '\\$1');
       // ブロック応答は理由を区別しない（'email-exists' 等を返すと未認証でアカウント有無を推測できる列挙オラクルに

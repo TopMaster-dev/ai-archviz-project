@@ -330,11 +330,12 @@ export default defineConfig(({ mode }) => {
                             const rb = JSON.parse(body || '{}') as { email?: string; name?: string; userAgent?: string; screen?: string };
                             const strv = (v: unknown, max: number) => (typeof v === 'string' && v.trim() ? v.slice(0, max) : null);
                             const email = (strv(rb.email, 254) ?? '').trim().toLowerCase();
-                            const name = strv(rb.name, 100);
+                            const name = (strv(rb.name, 100) ?? '').trim();
                             const ua = strv(rb.userAgent, 500); const scr = strv(rb.screen, 32);
                             const pickIp2 = (h: any): string | null => { const raw = Array.isArray(h) ? h[0] : h; return typeof raw === 'string' && raw.trim() ? raw.split(',')[0].trim() : null; };
                             const ip = pickIp2(req.headers['x-real-ip']) || pickIp2(req.headers['x-forwarded-for']) || req.socket?.remoteAddress || null;
                             if (!email || email.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) { res.statusCode = 200; return res.end(JSON.stringify({ ok: false, reason: 'invalid-email' })); }
+                            if (!name) { res.statusCode = 200; return res.end(JSON.stringify({ ok: false, reason: 'name-required' })); }
                             const escaped = email.replace(/([\\%_])/g, '\\$1');
                             const blocked = () => { res.statusCode = 200; return res.end(JSON.stringify({ blocked: true, reason: 'duplicate' })); };
                             const { createClient } = await import('@supabase/supabase-js');
