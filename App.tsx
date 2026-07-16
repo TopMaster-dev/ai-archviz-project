@@ -3667,7 +3667,7 @@ const App: React.FC = () => {
                     {!renderState.isRendering && viewMode === '3D' && (
                       <div className="pointer-events-none flex flex-col items-center gap-1.5 shrink-0">
                         <button
-                          onClick={handleInstantRender}
+                          onClick={() => handleInstantRender(outsideBackgroundPreset)}
                           disabled={renderState.isRendering || !!projectSession?.aiCredits.blocked}
                           title={creditBlockMessage(projectSession?.aiCredits ?? null) ?? undefined}
                           className="pointer-events-auto flex items-center justify-center gap-2 px-8 py-3 rounded-2xl bg-purple-900/75 border border-purple-500/30 text-purple-100 shadow-[0_8px_24px_rgba(76,29,149,0.35)] hover:bg-purple-800/80 transition-all disabled:opacity-60 disabled:cursor-not-allowed"

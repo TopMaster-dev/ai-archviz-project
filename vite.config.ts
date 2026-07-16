@@ -158,8 +158,9 @@ export default defineConfig(({ mode }) => {
                             prompt?: string;
                             aspectRatio?: string;
                             imageSize?: string;
+                            timeOfDay?: string;
                         };
-                        const { image, prompt, aspectRatio, imageSize } = parsed;
+                        const { image, prompt, aspectRatio, imageSize, timeOfDay } = parsed;
                         if (!image) {
                             res.statusCode = 400;
                             res.setHeader('Content-Type', 'application/json');
@@ -176,9 +177,11 @@ export default defineConfig(({ mode }) => {
                                 ? imageSize.trim()
                                 : undefined;
 
+                        const tod = timeOfDay === 'day' || timeOfDay === 'evening' || timeOfDay === 'night' ? timeOfDay : undefined;
                         const { url: dataUrl, usage } = await generateGeminiImage(apiKey, baseImageBase64, prompt ?? '', {
                             aspectRatio: ar,
                             imageSize: isz,
+                            timeOfDay: tod,
                         });
 
                         res.statusCode = 200;

@@ -28,11 +28,12 @@ export default async function handler(req: any, res: any) {
             return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });
         }
 
-        const { image, prompt, aspectRatio, imageSize } = req.body as {
+        const { image, prompt, aspectRatio, imageSize, timeOfDay } = req.body as {
             image?: string;
             prompt?: string;
             aspectRatio?: string;
             imageSize?: string;
+            timeOfDay?: string;
         };
         if (!image) {
             return res.status(400).json({ success: false, error: '画像データが必要です。' });
@@ -41,9 +42,12 @@ export default async function handler(req: any, res: any) {
         const baseImageBase64 = image.replace(/^data:image\/\w+;base64,/, '');
         const ar = typeof aspectRatio === 'string' && aspectRatio.trim() ? aspectRatio.trim() : undefined;
         const isz = typeof imageSize === 'string' && imageSize.trim() ? imageSize.trim() : undefined;
+        // ユーザーが設定した時間帯（昼/夕方/夜）。既知の値のみ通す（260717）。
+        const tod = timeOfDay === 'day' || timeOfDay === 'evening' || timeOfDay === 'night' ? timeOfDay : undefined;
         const { url: dataUrl, usage } = await generateGeminiImage(apiKey, baseImageBase64, prompt ?? '', {
             aspectRatio: ar,
             imageSize: isz,
+            timeOfDay: tod,
         });
 
         return res.status(200).json({ success: true, url: dataUrl, usage, model: GEMINI_IMAGE_MODEL });

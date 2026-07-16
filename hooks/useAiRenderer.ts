@@ -31,7 +31,7 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
   // 多重起動ガード（ボタンの disabled に依存せず、レンダー＝クレジットの二重消費を防ぐ・row 49/50）。
   const inFlightRef = useRef(false);
 
-  const handleInstantRender = async () => {
+  const handleInstantRender = async (timeOfDay?: 'day' | 'evening' | 'night') => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     setRenderState(prev => ({ ...prev, isRendering: true, generationLog: ["AIレンダリングを開始中..."] }));
@@ -70,6 +70,7 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
           prompt: 'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。',
           aspectRatio,
           imageSize: PREVIEW_GEMINI_IMAGE_SIZE,
+          timeOfDay, // ユーザーが設定した時間帯（昼/夕方/夜）をレンダープロンプトへ反映（260717）
         }),
       });
 

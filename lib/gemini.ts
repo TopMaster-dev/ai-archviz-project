@@ -481,9 +481,20 @@ export async function generateGeminiImageEdit(
   return { url: extractGeneratedImage(result), usage: readUsage(result) };
 }
 
+export type RenderTimeOfDay = 'day' | 'evening' | 'night';
+
 export type GeminiClayRenderOptions = {
   aspectRatio?: string;
   imageSize?: string;
+  /** ユーザーが設定した時間帯（昼/夕方/夜）。窓がアングル外でも室内全体の光に反映する（260717）。 */
+  timeOfDay?: RenderTimeOfDay;
+};
+
+// 時間帯の明示指定。窓の色からの推論より優先し、窓がアングル内に無くても室内全体の光へ反映する（260717 クライアント要望）。
+const RENDER_TIME_OF_DAY_INSTRUCTION: Record<RenderTimeOfDay, string> = {
+  day: '【時間帯の指定：昼】この指定を最優先とし、窓ガラスの色からの推論より優先してください。窓がアングル内に無くても、室内全体を明るい自然光（昼光・ニュートラル〜やや涼しい色温度、はっきりした明るさ）で照らしてください。窓が見える場合のみ、青空や明るい屋外を、室内露出に合わせてやや白飛び気味に描写してください。',
+  evening: '【時間帯の指定：夕方】この指定を最優先とし、窓ガラスの色からの推論より優先してください。窓がアングル内に無くても、室内全体を夕方の暖色光（オレンジ〜ゴールドの低い色温度、長く柔らかい影、落ち着いた明るさ）で照らしてください。窓が見える場合のみ、夕焼けやマジックアワーの空を描写してください。',
+  night: '【時間帯の指定：夜】この指定を最優先とし、窓ガラスの色からの推論より優先してください。窓がアングル内に無くても、室内照明を主光源とした夜の雰囲気（暗めの環境光、暖色の室内灯、強めのコントラスト）で描いてください。窓が見える場合のみ、暗い夜空や遠くの街明かり、窓ガラスへの室内灯の反射を描写してください。',
 };
 
 export async function generateGeminiImage(
@@ -492,6 +503,8 @@ export async function generateGeminiImage(
   userInstruction: string = '',
   options?: GeminiClayRenderOptions
 ): Promise<{ url: string; usage: TokenUsage | null }> {
+  // 時間帯が明示指定されていれば、窓の色推論より優先する一文を差し込む（未指定は従来の推論のみ）。
+  const timeOfDayInstruction = options?.timeOfDay ? `${RENDER_TIME_OF_DAY_INSTRUCTION[options.timeOfDay]}\n` : '';
   const proVisualizerPrompt = `
 1. 役割と専門性
 あなたは、建築ビジュアライゼーション（Architectural Visualization）に特化した、世界最高峰のAIレタッチ・エンジニアです。
@@ -516,7 +529,7 @@ export async function generateGeminiImage(
 反射: 床や金属面への映り込み（レイトレーシング反射）をより鮮明に、かつリアルに表現してください。
 
 5. 窓と屋外風景（時間帯）の表現
-元の画像における「窓ガラス」の越しの背景色を基準に、屋外の時間帯と風景を推論して描き込んでください。
+${timeOfDayInstruction}元の画像における「窓ガラス」の越しの背景色を基準に、屋外の時間帯と風景を推論して描き込んでください。
 - 窓が「白や明るい色」の場合：自然光があふれる昼の風景（青空、樹木など）。室内に露出を合わせたカメラの性質を再現し、やや白飛び気味（オーバーエクスポージャー）で柔らかく表現してください。
 - 窓が「黒や暗い色」の場合：夜の風景（暗い空、遠くの街明かりなど）。室内照明が窓ガラスに反射する様子や、夜特有の落ち着いた空気感を描写してください。
 - 窓が「オレンジや暖色系」の場合：夕景やマジックアワーの風景（美しい夕焼け空など）。暖かみのある夕日が室内に差し込む様子を表現してください。
