@@ -247,6 +247,13 @@ export function AiEditWorkspace({
   // 最初のレンダリング画像を「画質・素材・質感の見本」として毎回一緒に渡す。形・位置・これまでの変更は直近画像に従い、
   // 見本は画質の参照だけに使う（＝編集を巻き戻さない）。既定OFF・非永続（毎回の明示選択）。
   const [keepQuality, setKeepQuality] = useState(false);
+  // 複数候補から選ぶ（Option 1・260717 クライアント要望）。同一入力で candidateCount 回生成し最良の1枚を選ぶ
+  // ＝AI生成のばらつきを味方につける（③④の“当たり外れ”対策）。既定 1（従来どおり＝コスト据え置き）。
+  const [candidateCount, setCandidateCount] = useState(1);
+  // 生成した複数候補と、採用時に版を作るための親情報。null のときピッカー非表示。
+  const [candidatePick, setCandidatePick] = useState<
+    { parentId: string; baseImageDataUrl: string; candidates: string[] } | null
+  >(null);
   // AI編集キャンバスの閲覧ズーム（260708 クライアント要望）: マウスホイールで拡大縮小し細部を確認できる
   // （DL→Photoshop/プロパティで確認する手間の削減）。表示専用＝拡大中は作図を無効化しドラッグはパン（移動）、
   // 等倍(1)で作図に戻る。imgLayout は wrapper 実寸から算出＝変形に依存しないので、画像＋オーバーレイをまとめて
@@ -534,6 +541,39 @@ export function AiEditWorkspace({
   // 押せてしまう＝機能が混線している問題の是正）。範囲(placement)が1つ以上・空カードなし・指示ありが条件。
   const canRunAreaEdit = hasAreaEditInput && areaPlacementCount > 0 && emptyCardCount === 0;
 
+  // 確定した1枚を版として登録する（単一候補＝即確定／複数候補＝ピッカーで選んだ1枚）。
+  // 比較スライダー・暗黙フィードバック・onEditSuccess をまとめて行う（複数候補でも1回だけ版を作る）。
+  const commitEditResult = useCallback(
+    (parentId: string, baseImageDataUrl: string, finalUrl: string) => {
+      setCompareA(baseImageDataUrl);
+      setCompareB(finalUrl);
+      setCompareSlider(50);
+      // 一つ前に戻って再生成した扱い＝直前の既存子を暗黙 bad として記録（ベストエフォート）。
+      const priorChildren = versions.filter((v) => v.parentId === parentId);
+      if (priorChildren.length > 0) {
+        const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
+        void recordImplicitFeedback('regenerate', {
+          verdict: 'bad',
+          imageRef: abandoned.id,
+          styleMemo: abandoned.styleMemo,
+        }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
+      }
+      onEditSuccess({
+        parentId,
+        baseImageDataUrl,
+        outputImageDataUrl: finalUrl,
+        styleRefDataUrls: [],
+        styleMemo: '',
+        objects: draftObjects.map((o) => ({
+          ...o,
+          placements: o.placements.map((p) => ({ ...p })),
+          placementMemos: [...(o.placementMemos ?? [])],
+        })),
+      });
+    },
+    [versions, onEditSuccess, draftObjects]
+  );
+
   const runEdit = useCallback(async () => {
     if (!activeVersion) return;
     setSubmitError(null);
@@ -568,6 +608,8 @@ export function AiEditWorkspace({
       // スタイル/プロンプト（styleImage/styleMemo）は一切読み込まない。マスク領域＋余白をクロップして拡大送信し
       // （重なった家具の分離＝精度向上）、編集後は必ずベースへ貼り戻して多角形/矩形でクリップする。これにより
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
+      // 生成結果を1つ作る内部関数（同一入力で複数回呼べば別候補になる・Option 1 複数候補・260717）。
+      const produceOne = async (): Promise<string> => {
       // 生成結果（エリア編集は Gemini のみ・範囲ごとにクロップ＋範囲外の閉じ込め）。
       let outUrl: string | null = null;
 
@@ -827,44 +869,45 @@ export function AiEditWorkspace({
       }
       // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
       outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
+      return outUrl;
+      }; // === produceOne ここまで ===
 
-      const prevOut = activeVersion.outputImageDataUrl;
-      setCompareA(prevOut);
-      setCompareB(outUrl);
-      setCompareSlider(50);
-
-      // 暗黙的フィードバック（管理表 row 210/216・クライアント6/3の例）: いま編集している版に既存の子があれば
-      // ＝「一つ前に戻って再生成した」とみなし、直前の生成結果（最新の既存子）を暗黙の bad として記録する。
-      // prompt_context で明示評価と区別する。ベストエフォート（失敗してもUIは妨げない）。
-      const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
-      if (priorChildren.length > 0) {
-        const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
-        void recordImplicitFeedback('regenerate', {
-          verdict: 'bad',
-          imageRef: abandoned.id,
-          styleMemo: abandoned.styleMemo,
-        }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
+      // 【複数候補から選ぶ（Option 1・260717 クライアント要望）】candidateCount>1 のとき同一入力で複数回生成し、
+      // ユーザーが最良の1枚を選ぶ（AI生成のばらつきを味方につける＝③④の“当たり外れ”対策）。1のときは従来どおり即確定。
+      const count = Math.min(3, Math.max(1, Math.round(candidateCount)));
+      if (count <= 1) {
+        commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, await produceOne());
+      } else {
+        const results: string[] = [];
+        let lastErr: unknown = null;
+        for (let i = 0; i < count; i++) {
+          try {
+            results.push(await produceOne());
+          } catch (e) {
+            lastErr = e; // 一部候補の失敗は許容（他が出れば選べる）。全滅なら下で throw。
+          }
+        }
+        if (results.length === 0) {
+          throw lastErr instanceof Error ? lastErr : new Error('編集に失敗しました。しばらくして再度お試しください。');
+        }
+        if (results.length === 1) {
+          // 1つしか生成できなかった＝選ぶまでもなく確定。
+          commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, results[0]);
+        } else {
+          // 候補ピッカーを開く。採用（選択）時に commitEditResult で版を1つだけ作る（それまで版は作らない）。
+          setCandidatePick({
+            parentId: activeVersion.id,
+            baseImageDataUrl: activeVersion.outputImageDataUrl,
+            candidates: results,
+          });
+        }
       }
-
-      onEditSuccess({
-        parentId: activeVersion.id,
-        baseImageDataUrl: activeVersion.outputImageDataUrl,
-        outputImageDataUrl: outUrl,
-        // エリア編集はコーディネートのスタイルを保持しない（独立機能）。
-        styleRefDataUrls: [],
-        styleMemo: '',
-        objects: draftObjects.map((o) => ({
-          ...o,
-          placements: o.placements.map((p) => ({ ...p })),
-          placementMemos: [...(o.placementMemos ?? [])],
-        })),
-      });
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : 'エラー');
     } finally {
       setIsSubmitting(false);
     }
-  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality, candidateCount, commitEditResult]);
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -1976,6 +2019,32 @@ export function AiEditWorkspace({
                   </span>
                 </label>
               )}
+              {/* 複数候補から選ぶ（Option 1・260717）: 生成枚数を選び、実行後に最良の1枚を選ぶ。既定 1。 */}
+              {activeTool === 'area' && (
+                <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2">
+                  <span className="text-[11px] font-bold text-neutral-100">候補数</span>
+                  <div className="flex gap-1">
+                    {[1, 2, 3].map((n) => (
+                      <button
+                        key={n}
+                        type="button"
+                        disabled={isSubmitting}
+                        onClick={() => setCandidateCount(n)}
+                        className={`h-7 w-8 rounded-md border text-[12px] font-bold transition-colors ${
+                          candidateCount === n
+                            ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-200'
+                            : 'border-white/10 bg-black/30 text-neutral-300 hover:border-white/30'
+                        }`}
+                      >
+                        {n}
+                      </button>
+                    ))}
+                  </div>
+                  <span className="text-[10px] leading-tight text-neutral-500">
+                    2枚以上にすると複数生成し、いちばん良い1枚を選べます（枚数分だけ生成に時間・回数がかかります）。
+                  </span>
+                </div>
+              )}
               {projectSession?.aiCredits.active && (
                 <p className={`text-[11px] font-bold ${projectSession.aiCredits.blocked ? 'text-amber-300' : 'text-neutral-400'}`}>
                   無料クレジット 残り {projectSession.aiCredits.remaining} / {projectSession.aiCredits.total} 回
@@ -1987,6 +2056,7 @@ export function AiEditWorkspace({
                 disabled={
                   !activeVersion ||
                   isSubmitting ||
+                  candidatePick != null ||
                   !!projectSession?.aiCredits.blocked ||
                   (activeTool === 'area' && !canRunAreaEdit)
                 }
@@ -2010,6 +2080,53 @@ export function AiEditWorkspace({
           </div>
         </aside>
       </div>
+
+      {/* 複数候補ピッカー（Option 1・260717）: 生成した候補から最良の1枚を選ぶ。選ぶまで版は作らない／キャンセルで破棄。 */}
+      {candidatePick && (
+        <div
+          className="fixed inset-0 z-[9500] flex items-center justify-center bg-black/80 p-4"
+          role="dialog"
+          aria-modal="true"
+        >
+          <div className="flex max-h-[92vh] w-full max-w-6xl flex-col rounded-2xl border border-white/10 bg-[#0c0c0c] p-4 shadow-2xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h3 className="text-sm font-bold text-neutral-100">
+                良い候補を1つ選んでください（{candidatePick.candidates.length}案）
+              </h3>
+              <button
+                type="button"
+                onClick={() => setCandidatePick(null)}
+                className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-neutral-300 transition hover:bg-white/5"
+              >
+                キャンセル（採用しない）
+              </button>
+            </div>
+            <div className="grid grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
+              <div className="overflow-hidden rounded-lg border border-white/10">
+                <img src={candidatePick.baseImageDataUrl} alt="編集前" className="block h-auto w-full" />
+                <div className="bg-black/40 px-2 py-1.5 text-[11px] text-neutral-400">編集前（元画像）</div>
+              </div>
+              {candidatePick.candidates.map((url, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => {
+                    commitEditResult(candidatePick.parentId, candidatePick.baseImageDataUrl, url);
+                    setCandidatePick(null);
+                  }}
+                  className="group overflow-hidden rounded-lg border-2 border-white/10 text-left transition-colors hover:border-emerald-500"
+                >
+                  <img src={url} alt={`候補${i + 1}`} className="block h-auto w-full" />
+                  <div className="flex items-center justify-between bg-black/40 px-2 py-1.5 text-[11px] font-bold text-neutral-200 group-hover:bg-emerald-600/30">
+                    <span>候補 {i + 1}</span>
+                    <span className="text-emerald-300 opacity-0 group-hover:opacity-100">この案を採用 →</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       <HighResExportDialog
         open={highResExportOpen}
