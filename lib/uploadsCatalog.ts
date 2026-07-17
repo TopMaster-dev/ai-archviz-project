@@ -2,6 +2,7 @@ import type { FurnitureCatalogItem, Product, MaterialCategory } from '../types.j
 import type { UserUpload } from './db/uploads.js';
 import { updateUserUploadMetadata } from './db/uploads.js';
 import { normalizeModelUnit, unitGeometryScale, sanitizeGeometryScale } from '../utils/modelUnit.js';
+import { normalizeUprightXDeg } from '../utils/modelOrientation.js';
 
 // ユーザーアップロード資産（user_uploads）を、エディタが扱うカタログ型へ写像する純関数群。
 //  - model   → FurnitureCatalogItem（家具カタログへ追加 → 2D/3Dで配置可能）
@@ -75,6 +76,8 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
     forwardYawDeg: finite(meta.forwardYawDeg) ?? 0,
     // 取り込み単位(③・260717)の幾何プリスケール f_U（明示単位のみ・確定時に metadata へ保存済み）。
     modelUnitScale: sanitizeGeometryScale(finite(meta.modelUnitScale)) ?? undefined,
+    // 取り込み向きの上下補正(①・260717・X軸 0/90/180/270°)。
+    modelUprightXDeg: normalizeUprightXDeg(meta.modelUprightXDeg) || undefined,
     // 見積もり連携メタ（配置時に handleAddFurniture が customBrand/modelNumber/customPrice/productUrl へ流す）。
     // 家具情報の編集（260715 #9）で updateUserUploadMetadata により台帳へ書き戻される。
     brand: metaBrand || undefined,
@@ -96,11 +99,12 @@ export async function ensureUploadFootprint(upload: UserUpload): Promise<Furnitu
   const item = uploadToFurnitureItem(upload);
   if (item.footprint2d) return item; // 計測済み（永続値）
   const meta = (upload.metadata ?? {}) as Record<string, unknown>;
-  // 取り込み単位(③・260717)の幾何プリスケール。明示単位なら描画と同一のスケールで実寸計測する。
+  // 取り込み単位(③・260717)の幾何プリスケールと上下補正(①)。描画 ClayModel と同一適用で実寸計測する。
   const geomScale = unitGeometryScale(normalizeModelUnit(meta.modelUnit));
+  const uprightXDeg = normalizeUprightXDeg(meta.modelUprightXDeg);
   try {
     const { computeGltfFootprintBaseMm } = await import('../utils/furnitureModelFootprint.js');
-    const dims = await computeGltfFootprintBaseMm(upload.storageUrl, geomScale);
+    const dims = await computeGltfFootprintBaseMm(upload.storageUrl, geomScale, uprightXDeg);
     item.footprint2d = { widthMm: dims.width, depthMm: dims.depth };
     try {
       await updateUserUploadMetadata(upload.id, {

@@ -21,6 +21,7 @@ import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpen
 import { lookDirection } from './utils/walkthrough.js';
 import { computeGltfFootprintBaseMm } from './utils/furnitureModelFootprint.js';
 import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from './utils/modelUnit.js';
+import { normalizeUprightXDeg, normalizeYawDeg } from './utils/modelOrientation.js';
 import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
@@ -2010,6 +2011,18 @@ const App: React.FC = () => {
   const [pendingModelPrice, setPendingModelPrice] = useState('');
   // 取り込み単位（③・260717）。'auto' は従来挙動（ヒューリスティクスのまま）。
   const [pendingModelUnit, setPendingModelUnit] = useState<ModelUnit>('auto');
+  // 取り込み向き（①・260717）。上下=X軸0/90/180/270°（ジオメトリ焼込）、前後=ヨー（配置rotation[1]）。
+  const [pendingModelUprightXDeg, setPendingModelUprightXDeg] = useState(0);
+  const [pendingModelYawDeg, setPendingModelYawDeg] = useState(0);
+  // 自動推定したヨーを一度だけ初期採用したか（手動変更後は自動で上書きしない）。
+  const pendingYawTouchedRef = useRef(false);
+  const latestSuggestedYawRef = useRef(0);
+  // プレビューが壁側面(背面)を向けるヨーを推定したら、手動未変更なら追従、常に最新値を保持（自動ボタン用）。
+  const handleSuggestYaw = useCallback((deg: number) => {
+    const y = normalizeYawDeg(deg);
+    latestSuggestedYawRef.current = y;
+    if (!pendingYawTouchedRef.current) setPendingModelYawDeg(y);
+  }, []);
   const closeModelPopup = () => {
     setPendingModelFile(null);
     setPendingModelName('');
@@ -2017,6 +2030,10 @@ const App: React.FC = () => {
     setPendingModelModelNumber('');
     setPendingModelPrice('');
     setPendingModelUnit('auto');
+    setPendingModelUprightXDeg(0);
+    setPendingModelYawDeg(0);
+    pendingYawTouchedRef.current = false;
+    latestSuggestedYawRef.current = 0;
   };
   // ファイル選択時はアップロードせず、情報入力ポップアップを開く（データ名称はファイル名で初期化）。
   const handleModelFileUpload = useCallback((file: File | undefined) => {
@@ -2031,6 +2048,10 @@ const App: React.FC = () => {
     setPendingModelModelNumber('');
     setPendingModelPrice('');
     setPendingModelUnit('auto');
+    setPendingModelUprightXDeg(0);
+    setPendingModelYawDeg(0);
+    pendingYawTouchedRef.current = false;
+    latestSuggestedYawRef.current = 0;
   }, []);
   // 確認後に実アップロード。入力値を metadata に保存（uploadToFurnitureItem が name/brand/modelNumber/price を読む）。
   const commitModelUpload = useCallback(async () => {
@@ -2064,6 +2085,11 @@ const App: React.FC = () => {
         const gscale = unitGeometryScale(pendingModelUnit);
         if (gscale != null) metadata.modelUnitScale = gscale;
       }
+      // 取り込み向き（①・260717）。上下=ジオメトリ焼込(modelUprightXDeg)、前後=配置ヨー(forwardYawDeg)。
+      const upright = normalizeUprightXDeg(pendingModelUprightXDeg);
+      if (upright !== 0) metadata.modelUprightXDeg = upright;
+      const yaw = normalizeYawDeg(pendingModelYawDeg);
+      if (yaw !== 0) metadata.forwardYawDeg = yaw;
       const row = await uploadUserFile(file, 'model', { metadata });
       const initialItem = uploadToFurnitureItem(row);
       // 即座にカタログへ追加（この時点では footprint2d 未計測＝undefined のことがある）。
@@ -2087,7 +2113,7 @@ const App: React.FC = () => {
       useLoadingStore.getState().hide('model-upload');
       modelUploadBusyRef.current = false;
     }
-  }, [pendingModelFile, pendingModelName, pendingModelBrand, pendingModelModelNumber, pendingModelPrice, pendingModelUnit]);
+  }, [pendingModelFile, pendingModelName, pendingModelBrand, pendingModelModelNumber, pendingModelPrice, pendingModelUnit, pendingModelUprightXDeg, pendingModelYawDeg]);
 
   // Fetch Furniture dynamically from API（本番=Cloudinary）。
   // Cloudinary 未構成/空/失敗時は、同梱の静的カタログ public/models/catalog.json に
@@ -2281,12 +2307,13 @@ const App: React.FC = () => {
       const item = pending.shift();
       if (!item || !item.modelUrl) return;
       const modelUrl = item.modelUrl;
-      // 取り込み単位(③・260717)の幾何プリスケール込みで計測＝描画と同じ実寸の footprint2d/高さになる。
+      // 取り込み単位(③)の幾何プリスケール＋上下補正(①)込みで計測＝描画と同じ実寸の footprint2d/高さになる。
       const itemUnitScale = item.modelUnitScale;
+      const itemUprightXDeg = item.modelUprightXDeg;
       const cancelTask = scheduleIdleTask(() => {
         if (cancelled) return;
         const t0 = performance.now();
-        computeGltfFootprintBaseMm(modelUrl, itemUnitScale)
+        computeGltfFootprintBaseMm(modelUrl, itemUnitScale, itemUprightXDeg)
           .then((dims) => {
             if (cancelled) return;
             // 完了した項目だけを attempted に記録（キャンセル時は未記録＝次回再実行で再計測される）。
@@ -2671,6 +2698,8 @@ const App: React.FC = () => {
           scale: [defaultScale, defaultScale, defaultScale],
           // 取り込み単位(③・260717)の幾何プリスケール f_U。描画/計測を実寸化する（scale とは独立）。
           modelUnitScale: catalogItem.modelUnitScale,
+          // 取り込み向きの上下補正(①・260717)。ジオメトリに焼き込む（前後ヨーは modelForwardYawDeg）。
+          modelUprightXDeg: catalogItem.modelUprightXDeg,
           // アップロード家具を寸法未計測(fallback)のまま配置した場合は footprint2d を付けない＝
           // 下の実測効果が modelFootprintBaseMm を計測して 2D/3D に正しい寸法を反映する（配置レース対策・260625）。
           footprint2d:
@@ -3548,7 +3577,14 @@ const App: React.FC = () => {
             <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
             <div className="mt-4 flex gap-4">
-              <ModelFilePreview file={pendingModelFile} unit={pendingModelUnit} className="h-28 w-28 shrink-0 rounded-lg border border-white/10" />
+              <ModelFilePreview
+                file={pendingModelFile}
+                unit={pendingModelUnit}
+                uprightXDeg={pendingModelUprightXDeg}
+                yawDeg={pendingModelYawDeg}
+                onSuggestYaw={handleSuggestYaw}
+                className="h-28 w-28 shrink-0 rounded-lg border border-white/10"
+              />
               <div className="grid flex-1 grid-cols-1 gap-2.5 self-center">
                 <div>
                   <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
@@ -3613,6 +3649,40 @@ const App: React.FC = () => {
             </div>
             <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
               ※モデルが実寸と違うサイズで表示される場合は、元データの単位（㎜/㎝/m など）を選ぶと正しい寸法で取り込めます。左のプレビューに選択単位での寸法が表示されます。取り込み後もサイズは編集できます。
+            </p>
+            {/* 取り込み向き（①・260717）。上下=ジオメトリ焼込、前後=配置ヨー、自動=最大縦面を壁側(奥)へ。 */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-neutral-400">向き</span>
+              <button
+                type="button"
+                onClick={() => setPendingModelUprightXDeg((d) => normalizeUprightXDeg(d + 90))}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:border-emerald-500 hover:text-white"
+              >
+                上下を回転（{normalizeUprightXDeg(pendingModelUprightXDeg)}°）
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  pendingYawTouchedRef.current = true;
+                  setPendingModelYawDeg((d) => normalizeYawDeg(d + 90));
+                }}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:border-emerald-500 hover:text-white"
+              >
+                前後を回転（{normalizeYawDeg(pendingModelYawDeg)}°）
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  pendingYawTouchedRef.current = false;
+                  setPendingModelYawDeg(normalizeYawDeg(latestSuggestedYawRef.current));
+                }}
+                className="rounded-lg border border-emerald-600/60 bg-emerald-600/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-600/25"
+              >
+                壁向きを自動
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-neutral-500">
+              ※「上下を回転」で寝ている/上下逆のモデルを立て、「前後を回転」で正面の向きを調整できます。「壁向きを自動」で最も広い面を壁側（奥）へ向けます。取り込み後も回転できます。
             </p>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={closeModelPopup} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">キャンセル</button>

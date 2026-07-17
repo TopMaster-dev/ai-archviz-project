@@ -4,6 +4,7 @@ import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { modelFormatOf, exoticNormalizeScale } from './modelFormat.js';
 import { sanitizeGeometryScale } from './modelUnit.js';
+import { normalizeUprightXDeg } from './modelOrientation.js';
 
 /** 計測結果（mm）。height は寸法編集の高さ基準（260717）。 */
 export interface GltfBaseDimsMm {
@@ -54,18 +55,22 @@ function sanitizeDimsMmFromMeters(x: number, z: number, y: number): GltfBaseDims
  */
 export function computeGltfFootprintBaseMm(
   modelUrl: string,
-  unitScale?: number | null
+  unitScale?: number | null,
+  uprightXDeg?: number
 ): Promise<GltfBaseDimsMm> {
   const geomScale = sanitizeGeometryScale(unitScale);
-  const cacheKey = `${modelUrl}|${geomScale ?? 'auto'}`;
+  const upright = normalizeUprightXDeg(uprightXDeg);
+  const cacheKey = `${modelUrl}|${geomScale ?? 'auto'}|${upright}`;
   const existing = urlPromises.get(cacheKey);
   if (existing) return existing;
 
   const p = new Promise<GltfBaseDimsMm>((resolve, reject) => {
     // normalize=true（FBX/OBJ）のときは描画側 ClayModel と同じサイズ正規化を施してから計測し、
     // 2D フットプリントと 3D 描画のサイズを一致させる。unitScale 指定時は幾何プリスケールを優先適用する。
+    // uprightXDeg は上下補正(①)を焼き込んでから計測する（ClayModel と同一適用＝footprint/描画一致）。
     const measureRoot = (root: THREE.Object3D, normalize: boolean) => {
       const clone = root.clone();
+      if (upright !== 0) clone.rotation.x = (upright * Math.PI) / 180;
       if (geomScale != null) {
         clone.scale.multiplyScalar(geomScale);
       } else if (normalize) {

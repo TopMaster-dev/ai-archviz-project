@@ -28,6 +28,11 @@ export interface FurnitureItem {
    * これにより footprint2d/描画が実寸で一致し FurnitureItem.scale は 1 のまま扱える。未設定は既定挙動。
    */
   modelUnitScale?: number;
+  /**
+   * 取り込み向きの上下補正(①・260717)。X軸まわり 0/90/180/270°。ジオメトリに焼き込む（描画/計測で同一適用）。
+   * 前後(ヨー)は modelForwardYawDeg（配置時の rotation[1]）で扱う。
+   */
+  modelUprightXDeg?: number;
   /** 2D軽量表示専用の足跡（mm）。実行時計測を避けるための優先値 */
   footprint2d?: { width: number; depth: number };
   /** モデルが正面を向く基準ヨー角（度）。2D/3D初期向きの共通基準 */
@@ -56,6 +61,8 @@ export interface FurnitureCatalogItem {
   forwardYawDeg?: number;
   /** 取り込み単位(③・260717)の幾何プリスケール f_U。配置時に FurnitureItem.modelUnitScale へ引き継ぐ。 */
   modelUnitScale?: number;
+  /** 取り込み向きの上下補正(①・260717・X軸 0/90/180/270°)。配置時に FurnitureItem.modelUprightXDeg へ引き継ぐ。 */
+  modelUprightXDeg?: number;
   /** 見積もり連携用の商品メタ（任意・260620 Tier1）。未設定時は配置時に furnitureProductMeta から補完する。 */
   brand?: string;
   /** 品番/型番。 */

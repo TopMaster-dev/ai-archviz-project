@@ -8,6 +8,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/cont
 import { ModelRoot } from './ModelRoot.js';
 import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
 import { sanitizeGeometryScale } from '../utils/modelUnit.js';
+import { normalizeUprightXDeg } from '../utils/modelOrientation.js';
 import { useStore } from 'zustand';
 import { useProjectStore } from '../lib/store/projectStore.js';
 import { useLoadingStore } from '../lib/store/loadingStore.js';
@@ -1044,7 +1045,8 @@ const ClayModel = ({
     captureStep,
     alignTop,
     colored,
-    unitScale
+    unitScale,
+    uprightXDeg
 }: {
     object: THREE.Object3D;
     /** 読み込み形式。FBX/OBJ は単位が一定でないため描画前にサイズ正規化する。 */
@@ -1058,10 +1060,15 @@ const ClayModel = ({
     colored?: boolean;
     /** 取り込み単位(③・260717)の幾何プリスケール f_U。設定時は正規化ヒューリスティクスの代わりに実寸化する。 */
     unitScale?: number;
+    /** 取り込み向きの上下補正(①・260717)。X軸 0/90/180/270°をジオメトリへ焼き込む（計測と同一適用）。 */
+    uprightXDeg?: number;
 }) => {
     // クローンと座標補正は「最初の1回」だけ行う（ここで計算を確定させる）
     const clonedScene = useMemo(() => {
         const clone = object.clone();
+        // 上下補正(①)を先に焼き込む（計測 computeGltfFootprintBaseMm と同一順）。90°刻みなので最大辺は不変。
+        const upright = normalizeUprightXDeg(uprightXDeg);
+        if (upright !== 0) clone.rotation.x = (upright * Math.PI) / 180;
         // 取り込み単位(③)が指定されていれば、その幾何プリスケールで実寸化する（正規化ヒューリスティクスは使わない）。
         // 未指定時は従来どおり：FBX/OBJ は単位がまちまち（cm 慣習で約100倍）なので常識的な家具サイズへ正規化、
         // glTF はカタログが 1単位=1m 前提のため正規化しない。計測 computeGltfFootprintBaseMm と同一ロジック。
@@ -1087,7 +1094,7 @@ const ClayModel = ({
             }
         });
         return clone;
-    }, [object, alignTop, format, unitScale]);
+    }, [object, alignTop, format, unitScale, uprightXDeg]);
 
     // maskMode が変わった時は「マテリアル（色）」だけを変える（座標は絶対にいじらない）
     useEffect(() => {
@@ -1133,7 +1140,8 @@ const GLTFCore = ({
     captureStep,
     alignTop,
     colored,
-    unitScale
+    unitScale,
+    uprightXDeg
 }: {
     modelUrl: string;
     maskMode?: boolean;
@@ -1146,6 +1154,8 @@ const GLTFCore = ({
     colored?: boolean;
     /** 取り込み単位(③・260717)の幾何プリスケール f_U。 */
     unitScale?: number;
+    /** 取り込み向きの上下補正(①・260717)。 */
+    uprightXDeg?: number;
 }) => {
     return (
         <ModelRoot url={modelUrl}>
@@ -1159,6 +1169,7 @@ const GLTFCore = ({
                     alignTop={alignTop}
                     colored={colored}
                     unitScale={unitScale}
+                    uprightXDeg={uprightXDeg}
                 />
             )}
         </ModelRoot>
@@ -2012,6 +2023,7 @@ const GLTFFurniture: React.FC<{
                                 alignTop={item.ceilingMount}
                                 colored={item.type === UPLOAD_FURNITURE_TYPE}
                                 unitScale={item.modelUnitScale}
+                                uprightXDeg={item.modelUprightXDeg}
                             />
                         </Suspense>
                     </CanvasErrorBoundary>
