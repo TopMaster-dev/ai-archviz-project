@@ -84,6 +84,29 @@ describe('baseboardSegmentLengthM (260715 #8: 開口で途切れた分を除外)
     expect(len).toBe(0);
   });
 
+  it('ドアは bottomOffset 未設定でも常に差し引く（旧データ堅牢化・260717）', () => {
+    // bottomOffset undefined のドア（旧/取込データ）でも枠込み幅を差し引く。
+    const len = baseboardSegmentLengthM(4000, [
+      { type: 'door_single', width: 800 } as any,
+    ], bbH);
+    expect(len).toBeCloseTo(3.12, 5);
+  });
+
+  it('ドアは baseboardHeight が 0 でも常に差し引く（堅牢化・260717）', () => {
+    // baseboardHeight=0（異常/旧設定）でも 0<0 判定に頼らずドアを除外する。
+    const len = baseboardSegmentLengthM(4000, [
+      { type: 'door_single', width: 800, bottomOffset: 0 },
+    ], 0);
+    expect(len).toBeCloseTo(3.12, 5);
+  });
+
+  it('窓は bottomOffset 未設定なら差し引かない（過剰控除を避ける）', () => {
+    const len = baseboardSegmentLengthM(4000, [
+      { type: 'window_fix', width: 1200 } as any,
+    ], bbH);
+    expect(len).toBeCloseTo(4, 5);
+  });
+
   it('uses the baseboard height as the interruption threshold (window bottom just under top counts)', () => {
     // bottomOffset 59 < 巾木高 60 → 差し引く。
     const subtracted = baseboardSegmentLengthM(3000, [

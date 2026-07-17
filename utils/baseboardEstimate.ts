@@ -11,21 +11,27 @@ import type { Opening } from '../types.js';
 
 /**
  * 壁セグメントの巾木延長（m）を、床に達する開口（ドア・掃き出し窓など）の幅を差し引いて算定する
- * （260715 クライアント #8:「ドア/窓で途切れた分を除外」）。
+ * （260715 クライアント #8:「ドア/窓で途切れた分を除外」／260717 追補: ドアは常に除外）。
  *
- * 巾木は床〜baseboardHeightMm の帯。開口の下端がこの帯より下にある（＝床に達する）場合のみ巾木が途切れると
- * みなし、その開口の有効幅（ドアは枠込み）を差し引く。掃き出し窓（bottomOffset=0）は差し引くが、腰高の一般的な
- * 窓（sill が巾木上端より高い）は巾木の下を通るため差し引かない＝物理的に正しい。
- * 合計ギャップが壁長を超えた場合は 0 にクランプ。
+ * 巾木は床〜baseboardHeightMm の帯。
+ *  - ドア（type が 'door' で始まる）は定義上必ず床に達するので**常に**差し引く。これにより
+ *    bottomOffset 未設定（旧データ/取込）や baseboardHeight が 0 でも確実にドア分を除外できる
+ *    （旧実装は bottomOffset < baseboardHeight の代理判定のみで、これらの異常値でドアが残ってしまった）。
+ *  - 窓は下端がこの帯より下（＝床に達する・掃き出し窓など）のときのみ差し引く。腰高窓は巾木の下を通るため
+ *    差し引かない＝物理的に正しい。
+ * 有効幅はドアのみ枠込み。合計ギャップが壁長を超えた場合は 0 にクランプ。
  */
 export function baseboardSegmentLengthM(
   fullLengthMm: number,
   openingsOnWall: Pick<Opening, 'type' | 'width' | 'bottomOffset'>[],
   baseboardHeightMm: number
 ): number {
+  const bbH = Number.isFinite(baseboardHeightMm) && baseboardHeightMm > 0 ? baseboardHeightMm : 60;
   let gapMm = 0;
   for (const op of openingsOnWall) {
-    if (op.bottomOffset < baseboardHeightMm) {
+    const isDoor = typeof op.type === 'string' && op.type.startsWith('door');
+    const reachesFloor = Number.isFinite(op.bottomOffset) && op.bottomOffset < bbH;
+    if (isDoor || reachesFloor) {
       gapMm += getEffectiveOpeningWidthMm(op);
     }
   }

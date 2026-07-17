@@ -27,6 +27,7 @@ import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimat
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
 import { beamExposedAreaM2, wallBeamWallCoverAreaM2 } from './utils/beamArea.js';
+import { beamOverlapDeductionByIdM2 } from './utils/beamOverlap.js';
 import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl } from './utils/furnitureThumbnailUrl.js';
@@ -2931,6 +2932,12 @@ const App: React.FC = () => {
     };
   }, [sketchPoints]);
 
+  // 梁同士が重なる部分は上面/下面が二重計上されるため、梁ごとの控除面積(m²)を先に求めておく（260717 クライアント要望）。
+  const beamOverlapDeductionById = useMemo(
+    () => beamOverlapDeductionByIdM2(beams, roomHeight),
+    [beams, roomHeight]
+  );
+
   // メッシュ名から幾何学的な面積(m²)を返す（素材割当の有無に依存しない）。見積計算と選択パネルで
   // 共有し、未割当（未設定）の面でも面積が0にならないようにする（260612: 未設定壁の面積0バグ修正）。
   const areaForMeshM2 = useCallback((meshName: string): number => {
@@ -3007,10 +3014,13 @@ const App: React.FC = () => {
     }
     if (meshName.startsWith('Beam_')) {
       const bx = beams.find((x) => `Beam_${x.id}` === meshName);
-      return bx ? beamExposedAreaM2(bx, roomHeight) : 0;
+      if (!bx) return 0;
+      // 露出面積から、他の梁と重なる水平面の二重計上分を控除する（260717）。
+      const deduction = beamOverlapDeductionById.get(bx.id) ?? 0;
+      return Math.max(0, beamExposedAreaM2(bx, roomHeight) - deduction);
     }
     return 0;
-  }, [sketchPoints, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams]);
+  }, [sketchPoints, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams, beamOverlapDeductionById]);
 
   const costBreakdown = useMemo(() => {
     const results: any[] = [];
