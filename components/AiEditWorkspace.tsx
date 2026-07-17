@@ -44,7 +44,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
-import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE } from '../lib/aiEditPrompt.js';
+import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE, isSurfacePlaneFinish } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -644,7 +644,11 @@ export function AiEditWorkspace({
           //   ＝クロップが対象に絞られているから・260715 report）。対象が小さすぎ/大きすぎてフォーカスクロップを作れない
           //   ときは全画面ではなく sharedCropPx（全範囲クロップ）へフォールバック＝少なくとも従来（変更前）より広げない。
           // ・それ以外: 全範囲共有（sharedCropPx）＝部屋全体の文脈で送る（空きスペースへの配置等の誤判断を防ぐ）。
-          const cropPx = isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
+          // 【面仕上げ（壁面緑化/タイル/塗装/天井造作 等）はクロップしない（Path A・260717）】クロップ→拡大→再生成すると
+          // 面の形・エッジが崩れ、境界で床色が変わる（④）。全画面のまま生成すれば面の形状が部屋全体の遠近で固定され、
+          // 面全体を見て塗り残しなく仕上げやすい（③）。家具の生地張り替えや差し替えは従来どおりクロップで寄る。
+          const isSurface = isSurfacePlaneFinish(o);
+          const cropPx = isSurface ? null : isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
           // 【合成マスクは「描いた範囲そのもの（o.placements）」で統一（260715 report: 横一直線の継ぎ目）】
           // 以前は差し替えで範囲を pad で上下左右へ広げた矩形(thisKeep)を採っていたが、背の高い家具では“上方向の pad”が
           // 家具の上の壁・窓まで採り込み、その上端が横一直線の継ぎ目として見えていた（複数家具の上端が揃うと画面幅の横線）。
