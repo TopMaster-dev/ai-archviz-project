@@ -100,9 +100,11 @@ function clientToNormalized(
 ): { nx: number; ny: number } | null {
   const r = el.getBoundingClientRect();
   const { ox, oy, dw, dh } = getContainedRect(r.width, r.height, naturalW, naturalH);
-  const lx = clientX - r.left - ox;
-  const ly = clientY - r.top - oy;
-  if (lx < 0 || ly < 0 || lx > dw || ly > dh) return null;
+  if (dw <= 0 || dh <= 0) return null;
+  // 用紙(画像)範囲外（レターボックス）でクリックしても、最も近い画像の端に丸めて頂点にする＝
+  // 用紙いっぱいまで（端まで）きれいに範囲指定できる（260717 クライアント要望⑤）。従来は範囲外を無視していた。
+  const lx = Math.min(dw, Math.max(0, clientX - r.left - ox));
+  const ly = Math.min(dh, Math.max(0, clientY - r.top - oy));
   return { nx: lx / dw, ny: ly / dh };
 }
 
@@ -628,7 +630,7 @@ export function AiEditWorkspace({
         o: (typeof objectsScaled)[number],
         multiRegion: boolean,
         isOccluded: boolean
-      ): Promise<string | null> => {
+      ): Promise<{ url: string; composited: boolean } | null> => {
         // この範囲の編集で throw が起きても（ネットワーク/JSON/canvas 等）他範囲を巻き込まずスキップできるよう
         // 本体全体を try で囲み、失敗は null を返す（呼び出し側のループは null を飛ばして次の範囲へ進む）。
         try {
@@ -680,7 +682,9 @@ export function AiEditWorkspace({
             // 合成マスクは「描いた範囲(o.placements)」で閉じ込める（差し替え・テキスト・削除すべて共通）。クロップは
             // 送っているので文脈は担保・マスク外は base（範囲外は変わらない＝近くの似た家具や壁も保護・上の壁への横線も出ない）。
             const matched = await harmonizeEditToBase(base, full, o.placements, baseW, baseH);
-            return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather);
+            // 複数範囲でも少しだけ dilate して合成する＝隣接する範囲どうしの境界に base の細い帯（白線）が
+            // 残らないようにする（②・260717）。単一範囲は従来どおり dilate（接地影を少し残す）。
+            return { url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate), composited: true };
           }
           // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）: base 寸法へ整える。
           const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
@@ -693,11 +697,15 @@ export function AiEditWorkspace({
           // （contain は multiRegion では発生しない＝mode は multiRegion で cover 固定のため旧 contain 早期returnは不要）。
           if (multiRegion || shouldCompositeAreaEdit({ placementCount: o.placements.length, fitMode: mode, unionCoverage: objCoverage })) {
             const matched = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
-            return await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, multiRegion ? 0 : dilate);
+            // 複数範囲でも dilate を効かせ、隣接範囲の境界に base の白線が残るのを防ぐ（②・260717。従来は multiRegion で 0）。
+            return { url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate), composited: true };
           }
           // ここは「単一・実質全画面（被覆≥0.85）＝合成せず全画面採用」のケース。contain のままだと最終出力に黒帯
           // （レターボックス）が残るため、黒帯を避けて cover で返す（端がわずかに切れるが黒帯より良い・260715 監査対応）。
-          return mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
+          return {
+            url: mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted,
+            composited: false,
+          };
         } catch {
           // この範囲の編集失敗は他範囲を巻き込まずスキップ（null）。
           return null;
@@ -721,10 +729,12 @@ export function AiEditWorkspace({
       let editedRegions = 0; // 編集に成功した“範囲（placement）”の総数。最終仕上げの発火判定に使う（オブジェクト数ではなく範囲数）。
       let editedHasReplacement = false; // 実際に成功した編集の中に「差し替え（参照画像あり）」が含まれるか＝最終パスの種類選択に使う。
       let failedCount = 0; // 失敗（null）したエリアの数。1件でも成功したうえで一部失敗したら警告を出す（無言失敗の可視化・260715 監査対応）。
+      let anyComposited = false; // 1範囲でも「合成マスクで閉じ込め」たか。true のとき最終仕上げも範囲外へ閉じ込める（①②・260717）。
       for (const o of processOrder) {
         const r = await editOneRegion(workingBase, o, multiRegion, !!occludedMap[o.id]);
         if (r) {
-          workingBase = r;
+          workingBase = r.url;
+          if (r.composited) anyComposited = true;
           editedCount += 1;
           editedRegions += o.placements.length;
           if (o.imageDataUrl) editedHasReplacement = true;
@@ -763,6 +773,22 @@ export function AiEditWorkspace({
           }
         } catch {
           /* なじませ失敗は貼り合わせ結果を採用 */
+        }
+      }
+
+      // 【最終の閉じ込め（範囲外を必ずベースへ戻す・①②・260717 クライアント要望）】
+      // 上の仕上げ（naturalize/harmonize）は全画面生成のため、指定範囲の外に家具を新しく描いてしまう（①）ことや、
+      // 隣接範囲の境界に継ぎ目（白線・②）を残すことがある。全範囲の合成マスク（union）で仕上げ結果をベースへ閉じ込め直す＝
+      // ・範囲外は元のベース画像に完全に戻す（範囲外に何も足さない＝勝手に増えた家具を消す・①）
+      // ・全範囲を1つの union マスクで採るため、隣接範囲の内側は連続（境界に base の白線が出ない・②）
+      // 合成マスクで閉じ込めた編集があったとき（anyComposited）だけ適用する（単一の実質全画面編集は対象外＝従来どおり全面採用）。
+      if (anyComposited && allPlacements.length > 0) {
+        try {
+          const unionFeather = Math.round(Math.max(baseW, baseH) * 0.008);
+          const unionDilate = Math.round(Math.max(baseW, baseH) * 0.015); // 接地影を少し残しつつ、範囲から離れた新規家具は確実に除外。
+          outUrl = await compositeMaskedEdit(baseScaled, outUrl, allPlacements, baseW, baseH, unionFeather, unionDilate);
+        } catch {
+          /* 最終閉じ込め失敗は仕上げ結果をそのまま採用（フェイルソフト） */
         }
       }
       } // === Gemini 経路ここまで（if (outUrl == null)）===
