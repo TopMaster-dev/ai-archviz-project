@@ -7,6 +7,7 @@ import { computeBoundsTree, disposeBoundsTree, acceleratedRaycast } from 'three-
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js';
 import { ModelRoot } from './ModelRoot.js';
 import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
+import { sanitizeGeometryScale } from '../utils/modelUnit.js';
 import { useStore } from 'zustand';
 import { useProjectStore } from '../lib/store/projectStore.js';
 import { useLoadingStore } from '../lib/store/loadingStore.js';
@@ -1042,7 +1043,8 @@ const ClayModel = ({
     isSelected,
     captureStep,
     alignTop,
-    colored
+    colored,
+    unitScale
 }: {
     object: THREE.Object3D;
     /** 読み込み形式。FBX/OBJ は単位が一定でないため描画前にサイズ正規化する。 */
@@ -1054,13 +1056,19 @@ const ClayModel = ({
     alignTop?: boolean;
     /** true のとき通常表示でモデル本来の色/マテリアルを維持する（アップロード品を色付きで配置・260717）。 */
     colored?: boolean;
+    /** 取り込み単位(③・260717)の幾何プリスケール f_U。設定時は正規化ヒューリスティクスの代わりに実寸化する。 */
+    unitScale?: number;
 }) => {
     // クローンと座標補正は「最初の1回」だけ行う（ここで計算を確定させる）
     const clonedScene = useMemo(() => {
         const clone = object.clone();
-        // FBX/OBJ は単位がまちまち（FBX は cm 慣習で約100倍になりがち）。常識的な家具サイズへ正規化する。
-        // glTF はカタログが 1単位=1m 前提で作られているため正規化しない（既存挙動を維持）。
-        if (format === 'fbx' || format === 'obj') {
+        // 取り込み単位(③)が指定されていれば、その幾何プリスケールで実寸化する（正規化ヒューリスティクスは使わない）。
+        // 未指定時は従来どおり：FBX/OBJ は単位がまちまち（cm 慣習で約100倍）なので常識的な家具サイズへ正規化、
+        // glTF はカタログが 1単位=1m 前提のため正規化しない。計測 computeGltfFootprintBaseMm と同一ロジック。
+        const geomScale = sanitizeGeometryScale(unitScale);
+        if (geomScale != null) {
+            clone.scale.multiplyScalar(geomScale);
+        } else if (format === 'fbx' || format === 'obj') {
             const preBox = new THREE.Box3().setFromObject(clone);
             const sz = preBox.getSize(new THREE.Vector3());
             const s = exoticNormalizeScale(Math.max(sz.x, sz.y, sz.z));
@@ -1079,7 +1087,7 @@ const ClayModel = ({
             }
         });
         return clone;
-    }, [object, alignTop, format]);
+    }, [object, alignTop, format, unitScale]);
 
     // maskMode が変わった時は「マテリアル（色）」だけを変える（座標は絶対にいじらない）
     useEffect(() => {
@@ -1124,7 +1132,8 @@ const GLTFCore = ({
     snapshotMode: _snapshotMode,
     captureStep,
     alignTop,
-    colored
+    colored,
+    unitScale
 }: {
     modelUrl: string;
     maskMode?: boolean;
@@ -1135,6 +1144,8 @@ const GLTFCore = ({
     alignTop?: boolean;
     /** true のとき通常表示でモデル本来の色/マテリアルを維持する（260717）。 */
     colored?: boolean;
+    /** 取り込み単位(③・260717)の幾何プリスケール f_U。 */
+    unitScale?: number;
 }) => {
     return (
         <ModelRoot url={modelUrl}>
@@ -1147,6 +1158,7 @@ const GLTFCore = ({
                     captureStep={captureStep}
                     alignTop={alignTop}
                     colored={colored}
+                    unitScale={unitScale}
                 />
             )}
         </ModelRoot>
@@ -1999,6 +2011,7 @@ const GLTFFurniture: React.FC<{
                                 captureStep={captureStep}
                                 alignTop={item.ceilingMount}
                                 colored={item.type === UPLOAD_FURNITURE_TYPE}
+                                unitScale={item.modelUnitScale}
                             />
                         </Suspense>
                     </CanvasErrorBoundary>

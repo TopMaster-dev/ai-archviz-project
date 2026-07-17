@@ -427,13 +427,15 @@ const getFurnitureBaseFootprintMm = (item: FurnitureItem) => {
   return { width: 1000, depth: 700 };
 };
 
-/** 2D/当たり判定用：異常寸法・非有限スケールを遮断（mm） */
-const FOOTPRINT_MIN_MM = 200;
-const FOOTPRINT_MAX_MM = 10000;
+// 2D/当たり判定用：異常寸法・非有限スケールを遮断（mm）。
+// 下限は小物（取り込み単位③で実寸取り込みするマグ/本/照明等・実寸<200mm もある）を潰さないよう小さく取る。
+// スケール下限は寸法編集④の SCALE_MIN(0.02) と一致させ、④で縮小したとき 2D と 3D 描画がずれないようにする。
+const FOOTPRINT_MIN_MM = 10;
+const FOOTPRINT_MAX_MM = 50000;
 
 function clampFiniteScale(v: number, fallback: number): number {
   if (!Number.isFinite(v) || v <= 0) return fallback;
-  return Math.max(0.2, Math.min(50, v));
+  return Math.max(0.02, Math.min(50, v));
 }
 
 function clampFootprintDimensionsMm(width: number, depth: number): { width: number; depth: number } {

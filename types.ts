@@ -22,6 +22,12 @@ export interface FurnitureItem {
   modelFootprintBaseMm?: { width: number; depth: number };
   /** GLTF 計測のスケール1時の高さ（mm・Y）。寸法編集の高さ基準に使う（260717）。未設定は背景計測で補完。 */
   modelBaseHeightMm?: number;
+  /**
+   * 取り込み単位(③・260717)の幾何プリスケール f_U（描画側 ClayModel と計測が同一適用する）。
+   * 設定時は exoticNormalizeScale のヒューリスティクスを使わずこの係数でジオメトリを実寸化する。
+   * これにより footprint2d/描画が実寸で一致し FurnitureItem.scale は 1 のまま扱える。未設定は既定挙動。
+   */
+  modelUnitScale?: number;
   /** 2D軽量表示専用の足跡（mm）。実行時計測を避けるための優先値 */
   footprint2d?: { width: number; depth: number };
   /** モデルが正面を向く基準ヨー角（度）。2D/3D初期向きの共通基準 */
@@ -48,6 +54,8 @@ export interface FurnitureCatalogItem {
   defaultScale?: number;
   footprint2d?: { widthMm: number; depthMm: number };
   forwardYawDeg?: number;
+  /** 取り込み単位(③・260717)の幾何プリスケール f_U。配置時に FurnitureItem.modelUnitScale へ引き継ぐ。 */
+  modelUnitScale?: number;
   /** 見積もり連携用の商品メタ（任意・260620 Tier1）。未設定時は配置時に furnitureProductMeta から補完する。 */
   brand?: string;
   /** 品番/型番。 */

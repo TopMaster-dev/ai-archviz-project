@@ -20,6 +20,7 @@ import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
 import { lookDirection } from './utils/walkthrough.js';
 import { computeGltfFootprintBaseMm } from './utils/furnitureModelFootprint.js';
+import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from './utils/modelUnit.js';
 import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
@@ -2007,12 +2008,15 @@ const App: React.FC = () => {
   const [pendingModelBrand, setPendingModelBrand] = useState('');
   const [pendingModelModelNumber, setPendingModelModelNumber] = useState('');
   const [pendingModelPrice, setPendingModelPrice] = useState('');
+  // 取り込み単位（③・260717）。'auto' は従来挙動（ヒューリスティクスのまま）。
+  const [pendingModelUnit, setPendingModelUnit] = useState<ModelUnit>('auto');
   const closeModelPopup = () => {
     setPendingModelFile(null);
     setPendingModelName('');
     setPendingModelBrand('');
     setPendingModelModelNumber('');
     setPendingModelPrice('');
+    setPendingModelUnit('auto');
   };
   // ファイル選択時はアップロードせず、情報入力ポップアップを開く（データ名称はファイル名で初期化）。
   const handleModelFileUpload = useCallback((file: File | undefined) => {
@@ -2026,6 +2030,7 @@ const App: React.FC = () => {
     setPendingModelBrand('');
     setPendingModelModelNumber('');
     setPendingModelPrice('');
+    setPendingModelUnit('auto');
   }, []);
   // 確認後に実アップロード。入力値を metadata に保存（uploadToFurnitureItem が name/brand/modelNumber/price を読む）。
   const commitModelUpload = useCallback(async () => {
@@ -2052,6 +2057,13 @@ const App: React.FC = () => {
       if (brand) metadata.brand = brand;
       if (modelNumber) metadata.modelNumber = modelNumber;
       if (price !== undefined) metadata.price = price;
+      // 取り込み単位（③・260717）。幾何プリスケール f_U は単位から同期的に確定できるので即 metadata へ保存
+      // （配置レース回避＝計測完了を待たずに描画スケールが確定する）。実寸 footprint2d は計測後に反映。
+      if (pendingModelUnit !== 'auto') {
+        metadata.modelUnit = pendingModelUnit;
+        const gscale = unitGeometryScale(pendingModelUnit);
+        if (gscale != null) metadata.modelUnitScale = gscale;
+      }
       const row = await uploadUserFile(file, 'model', { metadata });
       const initialItem = uploadToFurnitureItem(row);
       // 即座にカタログへ追加（この時点では footprint2d 未計測＝undefined のことがある）。
@@ -2075,7 +2087,7 @@ const App: React.FC = () => {
       useLoadingStore.getState().hide('model-upload');
       modelUploadBusyRef.current = false;
     }
-  }, [pendingModelFile, pendingModelName, pendingModelBrand, pendingModelModelNumber, pendingModelPrice]);
+  }, [pendingModelFile, pendingModelName, pendingModelBrand, pendingModelModelNumber, pendingModelPrice, pendingModelUnit]);
 
   // Fetch Furniture dynamically from API（本番=Cloudinary）。
   // Cloudinary 未構成/空/失敗時は、同梱の静的カタログ public/models/catalog.json に
@@ -2269,10 +2281,12 @@ const App: React.FC = () => {
       const item = pending.shift();
       if (!item || !item.modelUrl) return;
       const modelUrl = item.modelUrl;
+      // 取り込み単位(③・260717)の幾何プリスケール込みで計測＝描画と同じ実寸の footprint2d/高さになる。
+      const itemUnitScale = item.modelUnitScale;
       const cancelTask = scheduleIdleTask(() => {
         if (cancelled) return;
         const t0 = performance.now();
-        computeGltfFootprintBaseMm(modelUrl)
+        computeGltfFootprintBaseMm(modelUrl, itemUnitScale)
           .then((dims) => {
             if (cancelled) return;
             // 完了した項目だけを attempted に記録（キャンセル時は未記録＝次回再実行で再計測される）。
@@ -2655,6 +2669,8 @@ const App: React.FC = () => {
           position: [0, placeOnCeiling ? roomHeight / 1000 : defaultY, 0],
           rotation: [0, initialYaw, 0],
           scale: [defaultScale, defaultScale, defaultScale],
+          // 取り込み単位(③・260717)の幾何プリスケール f_U。描画/計測を実寸化する（scale とは独立）。
+          modelUnitScale: catalogItem.modelUnitScale,
           // アップロード家具を寸法未計測(fallback)のまま配置した場合は footprint2d を付けない＝
           // 下の実測効果が modelFootprintBaseMm を計測して 2D/3D に正しい寸法を反映する（配置レース対策・260625）。
           footprint2d:
@@ -3532,7 +3548,7 @@ const App: React.FC = () => {
             <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
             <div className="mt-4 flex gap-4">
-              <ModelFilePreview file={pendingModelFile} className="h-28 w-28 shrink-0 rounded-lg border border-white/10" />
+              <ModelFilePreview file={pendingModelFile} unit={pendingModelUnit} className="h-28 w-28 shrink-0 rounded-lg border border-white/10" />
               <div className="grid flex-1 grid-cols-1 gap-2.5 self-center">
                 <div>
                   <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
@@ -3563,21 +3579,41 @@ const App: React.FC = () => {
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    inputMode="numeric"
-                    value={pendingModelPrice}
-                    onChange={(e) => setPendingModelPrice(e.target.value)}
-                    placeholder="例: 45000"
-                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
-                  />
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={pendingModelPrice}
+                      onChange={(e) => setPendingModelPrice(e.target.value)}
+                      placeholder="例: 45000"
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    {/* 取り込み単位（③・260717）。左のプレビューに選択単位での実寸(W×D×H)を表示。 */}
+                    <label className="mb-1 block text-[10px] text-neutral-400">取り込み単位</label>
+                    <select
+                      value={pendingModelUnit}
+                      onChange={(e) => setPendingModelUnit(e.target.value as ModelUnit)}
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    >
+                      {MODEL_UNIT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
+              ※モデルが実寸と違うサイズで表示される場合は、元データの単位（㎜/㎝/m など）を選ぶと正しい寸法で取り込めます。左のプレビューに選択単位での寸法が表示されます。取り込み後もサイズは編集できます。
+            </p>
             <div className="mt-5 flex justify-end gap-2">
               <button type="button" onClick={closeModelPopup} className="rounded-lg border border-white/10 px-4 py-2 text-xs font-semibold text-neutral-300 transition hover:bg-white/5">キャンセル</button>
               <button type="button" onClick={() => void commitModelUpload()} className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition hover:bg-emerald-500">この内容で追加</button>
@@ -4646,6 +4682,8 @@ const App: React.FC = () => {
                                         );
                                     };
                                     const resetDimsToActual = () => {
+                                        // 実寸(等倍)に戻す。取り込み単位(③)の補正はジオメトリ側(modelUnitScale)に入っているため、
+                                        // scale=1 がそのまま取り込み時の実寸になる。
                                         setFurnitureItems((prev) =>
                                             prev.map((f) =>
                                                 f.id === activeFurnitureId ? { ...f, scale: [1, 1, 1] as [number, number, number] } : f
