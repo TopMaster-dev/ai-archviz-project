@@ -35,7 +35,7 @@ export default async function handler(req: any, res: any) {
       if (!a.success) {
         return res.status(a.status).json({ success: false, error: a.error });
       }
-      return res.status(200).json({ success: true, narratives: a.narratives, occluded: a.occluded });
+      return res.status(200).json({ success: true, narratives: a.narratives, occluded: a.occluded, openings: a.openings });
     }
 
     const result = await runAiEdit(apiKey, body);

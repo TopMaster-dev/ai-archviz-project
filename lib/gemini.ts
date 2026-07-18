@@ -109,11 +109,23 @@ export interface AgentAttachment {
 }
 
 /** ベース画像と配置座標から、オブジェクトごとの短い日本語位置説明を生成（失敗時は {}） */
+/** 検出した開口（窓・ドア・ガラス・建具）の外接矩形（画像全体に対する正規化 0〜1）。 */
+export interface DetectedOpeningRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export async function generatePlacementNarratives(
   apiKey: string,
   params: { baseImageDataUrl: string; objects: AiEditObjectReference[] }
-): Promise<{ narratives: Record<string, string>; occluded: Record<string, boolean> }> {
-  if (!params.objects.length) return { narratives: {}, occluded: {} };
+): Promise<{
+  narratives: Record<string, string>;
+  occluded: Record<string, boolean>;
+  openings: Record<string, DetectedOpeningRect[]>;
+}> {
+  if (!params.objects.length) return { narratives: {}, occluded: {}, openings: {} };
 
   const spec = params.objects
     .map((o, i) => {
@@ -128,12 +140,14 @@ export async function generatePlacementNarratives(
 各 objectId について、次を1行（120文字以内）に凝縮します: (1)フォーカス領域が指す“差し替える対象”（家具に限らず照明・小物等も含む。例: 奥の白いラウンジチェア）(2)画面上のおおまかな位置と距離感（例: 中央やや右・中景）(3)向き（例: 正面がやや左向き）(4)前後関係と、触らず保持すべき手前の家具（重なりがあれば、対象が手前か奥か・手前に何が重なっているか。例: 手前にソファが重なる＝ソファは保持）(5)同じ種類の家具・オブジェクトが範囲の外の別の場所にもある場合は、それらは編集対象ではない旨（例: 左に別の椅子があるが対象ではない）。
 重要: 対象は必ずしも最前面とは限らない。手前の家具の後ろに一部隠れている“奥の対象”でも、その対象自体を差し替える前提で分析し、対象を空いた場所へ動かす想定はしない。範囲外にある“似た種類の家具・オブジェクト”は対象ではないので、それらを差し替える前提にしない。位置・向きは原則そのまま維持する前提。座標の数値は繰り返さない。判断が難しい項目は書かない（誤った断定はしない）。
 さらに各 objectId について occluded を判定する: その“差し替える対象”が、別の家具・オブジェクトの後ろに一部隠れている（手前の物に重なって遮蔽されている）なら occluded=true、手前に何も重なっておらず全体がはっきり見えているなら occluded=false。判断が難しい場合は false にする。
+さらに各 objectId について openings を検出する: そのフォーカス領域が「壁・床・天井などの面」で、その面の内側（または重なる位置）に、屋外や隣室が見える“本物の建築開口”＝窓・ガラス窓・掃き出し窓・ドア（開き戸/引き戸/ガラスドア）・サッシ建具がある場合のみ、それぞれの外接矩形を openings に列挙する。各矩形は画像全体を基準とした正規化座標 {"x":左端,"y":上端,"w":幅,"h":高さ}（各0〜1）で、ガラス面と建具枠を含む開口全体を過不足なく囲むタイトな矩形にする（周囲の壁を余分に含めない）。
+【誤検出を避ける（重要）】次のものは開口ではないので openings に含めない: 鏡・姿見、絵画・写真・ポスター・タペストリー・壁掛けアート、テレビ・モニター・スクリーン、時計、棚・キャビネット・収納の扉、壁の装飾パネルや飾り、単に色や明るさが違うだけの壁面、影・映り込み。判断に迷う矩形は列挙しない（“本物の窓・ドアだと確信できるものだけ”を挙げ、疑わしきは含めない＝取りこぼしの方が誤検出より安全）。開口が無ければ openings は空配列 []。フォーカス領域が面（壁/床/天井）でない（家具の差し替え等）場合も空配列。
 
 【フォーカス領域の仕様（正規化座標が最優先。この分析は参考用）】
 ${spec}
 
 次の JSON のみを返してください。前後に説明文やマークダウンを付けないこと。
-{"descriptions":[{"objectId":"<idと同じ文字列>","text":"<日本語1行・120文字以内>","occluded":true または false}]}`;
+{"descriptions":[{"objectId":"<idと同じ文字列>","text":"<日本語1行・120文字以内>","occluded":true または false,"openings":[{"x":0.0,"y":0.0,"w":0.0,"h":0.0}]}]}`;
 
   const base = parseImageDataUrl(params.baseImageDataUrl);
   const payload = {
@@ -147,7 +161,8 @@ ${spec}
       },
     ],
     generationConfig: {
-      temperature: 0.35,
+      // 開口検出は誤検出（幻覚した窓）が「壁に穴が空く」不具合に直結するため、低温で決定論寄りにして精度を優先（260718 監査対応）。
+      temperature: 0.2,
       responseModalities: ['TEXT'],
     },
   };
@@ -163,28 +178,57 @@ ${spec}
       },
       body: JSON.stringify(payload),
     });
-    if (!response.ok) return { narratives: {}, occluded: {} };
+    if (!response.ok) return { narratives: {}, occluded: {}, openings: {} };
     const result = await response.json();
     const raw = result.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text)?.text;
-    if (!raw || typeof raw !== 'string') return { narratives: {}, occluded: {} };
+    if (!raw || typeof raw !== 'string') return { narratives: {}, occluded: {}, openings: {} };
     return parsePlacementNarrativesJson(raw);
   } catch {
-    return { narratives: {}, occluded: {} };
+    return { narratives: {}, occluded: {}, openings: {} };
   }
 }
 
-function parsePlacementNarrativesJson(raw: string): { narratives: Record<string, string>; occluded: Record<string, boolean> } {
+function clamp01(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) ? Math.min(1, Math.max(0, v)) : 0;
+}
+
+/** モデルが返した openings 配列（{x,y,w,h}）を、健全な DetectedOpeningRect（[0,1] クランプ・正の面積のみ）へ正規化。 */
+function parseOpenings(v: unknown): DetectedOpeningRect[] {
+  if (!Array.isArray(v)) return [];
+  const out: DetectedOpeningRect[] = [];
+  for (const r of v) {
+    if (!r || typeof r !== 'object') continue;
+    const o = r as Record<string, unknown>;
+    const x = clamp01(o.x);
+    const y = clamp01(o.y);
+    let w = clamp01(o.w ?? o.width);
+    let h = clamp01(o.h ?? o.height);
+    // 画像外へはみ出す矩形は内側にクランプ。
+    w = Math.min(w, 1 - x);
+    h = Math.min(h, 1 - y);
+    if (w > 0.002 && h > 0.002) out.push({ x, y, width: w, height: h });
+    if (out.length >= 12) break; // 暴走防止（1面あたりの開口上限）
+  }
+  return out;
+}
+
+function parsePlacementNarrativesJson(raw: string): {
+  narratives: Record<string, string>;
+  occluded: Record<string, boolean>;
+  openings: Record<string, DetectedOpeningRect[]>;
+} {
   const narratives: Record<string, string> = {};
   const occluded: Record<string, boolean> = {};
+  const openings: Record<string, DetectedOpeningRect[]> = {};
   let s = raw.trim();
   const fence = s.match(/^```(?:json)?\s*([\s\S]*?)```$/m);
   if (fence) s = fence[1].trim();
   try {
     const parsed = JSON.parse(s) as {
-      descriptions?: Array<{ objectId?: string; text?: string; occluded?: unknown }>;
+      descriptions?: Array<{ objectId?: string; text?: string; occluded?: unknown; openings?: unknown }>;
     };
     const arr = parsed.descriptions;
-    if (!Array.isArray(arr)) return { narratives, occluded };
+    if (!Array.isArray(arr)) return { narratives, occluded, openings };
     for (const row of arr) {
       if (row && typeof row.objectId === 'string') {
         if (typeof row.text === 'string') {
@@ -192,12 +236,14 @@ function parsePlacementNarrativesJson(raw: string): { narratives: Record<string,
         }
         // occluded は true 明示（真偽値/文字列"true"）のときだけ true。曖昧・欠落は false（案1を無闇に発動させない）。
         occluded[row.objectId] = row.occluded === true || row.occluded === 'true';
+        const rects = parseOpenings(row.openings);
+        if (rects.length > 0) openings[row.objectId] = rects;
       }
     }
   } catch {
-    return { narratives, occluded };
+    return { narratives, occluded, openings };
   }
-  return { narratives, occluded };
+  return { narratives, occluded, openings };
 }
 
 export interface AgentChatMessage {

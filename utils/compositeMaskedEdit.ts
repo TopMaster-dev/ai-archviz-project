@@ -32,7 +32,9 @@ export async function compositeMaskedEdit(
   width: number,
   height: number,
   featherPx?: number,
-  dilatePx?: number
+  dilatePx?: number,
+  /** 面から除外する開口（窓・ドア等）。ここはマスクから穴をあけ、合成後 base のまま（＝窓/ドアを保持）にする（case B・260718）。 */
+  excludeRects?: NormalizedRect[]
 ): Promise<string> {
   if (!placements || placements.length === 0 || width <= 0 || height <= 0) return editDataUrl;
   // フェザーは控えめに（内側のみに適用するため小さめで十分・境界の名残を減らす・260702）。
@@ -80,6 +82,24 @@ export async function compositeMaskedEdit(
       } else {
         mctx.fillRect(p.x * width, p.y * height, p.width * width, p.height * height);
       }
+    }
+    // 開口（窓・ドア）を面から除外＝マスクに穴をあける（合成後、開口部は base のまま＝窓/ドアを保持・case B・260718）。
+    // 面全体を一様に仕上げさせ（塗り残しゼロ・③）、検出した開口だけを決定論的に元へ戻す。
+    if (excludeRects && excludeRects.length > 0) {
+      mctx.globalCompositeOperation = 'destination-out';
+      mctx.fillStyle = 'rgba(255,255,255,1)';
+      for (const r of excludeRects) {
+        if (r.points && r.points.length >= 3) {
+          mctx.beginPath();
+          mctx.moveTo(r.points[0].x * width, r.points[0].y * height);
+          for (let i = 1; i < r.points.length; i += 1) mctx.lineTo(r.points[i].x * width, r.points[i].y * height);
+          mctx.closePath();
+          mctx.fill('nonzero');
+        } else {
+          mctx.fillRect(r.x * width, r.y * height, r.width * width, r.height * height);
+        }
+      }
+      mctx.globalCompositeOperation = 'source-over';
     }
     let maskCanvas: HTMLCanvasElement = mask;
     if (feather > 0) {

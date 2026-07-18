@@ -222,7 +222,7 @@ export default defineConfig(({ mode }) => {
                             return res.end(
                                 JSON.stringify(
                                     a.success
-                                        ? { success: true, narratives: a.narratives, occluded: a.occluded }
+                                        ? { success: true, narratives: a.narratives, occluded: a.occluded, openings: a.openings }
                                         : { success: false, error: a.error }
                                 )
                             );

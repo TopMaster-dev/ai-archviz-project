@@ -30,6 +30,7 @@ import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
+import { clipOpeningsToPlacements, dropImplausibleOpenings } from '../utils/openingRects.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
 import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
 import {
@@ -44,7 +45,12 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
-import { ENABLE_HARMONIZE_FLATTEN, ENABLE_KEEP_QUALITY_ENHANCE, isSurfacePlaneFinish } from '../lib/aiEditPrompt.js';
+import {
+  ENABLE_HARMONIZE_FLATTEN,
+  ENABLE_KEEP_QUALITY_ENHANCE,
+  ENABLE_OPENING_PRESERVE,
+  isSurfacePlaneFinish,
+} from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
@@ -621,6 +627,9 @@ export function AiEditWorkspace({
       let narratives: Record<string, string> = {};
       // 各対象が手前の家具に隠れているか（遮蔽）。遮蔽対象を「先に・単独編集相当のフォーカスクロップ」で処理するため（260715）。
       let occludedMap: Record<string, boolean> = {};
+      // 面仕上げ（壁/床/天井）の内側に検出した窓・ドア等の開口（objectId→正規化矩形・260718 case B）。
+      // 面全体を一様に塗らせ（塗り残しゼロ・③）、検出した開口だけを合成で除外＝元のまま保持する。
+      let openingsMap: Record<string, NormalizedRect[]> = {};
       try {
         // 事前解析は /api/ai-edit に analyze:true で相乗り（Hobbyプランのサーバレス関数数上限=12 対策・専用
         // エンドポイントを増やさない・260709）。遮蔽判定はベース画像＋範囲（座標）だけで足りるので、参照画像
@@ -638,6 +647,7 @@ export function AiEditWorkspace({
         if (adata?.success) {
           narratives = adata.narratives ?? {};
           occludedMap = adata.occluded ?? {};
+          openingsMap = (adata.openings ?? {}) as Record<string, NormalizedRect[]>;
         }
       } catch {
         /* 解析失敗は非クロップ（自然）で続行 */
@@ -691,6 +701,20 @@ export function AiEditWorkspace({
           // 面全体を見て塗り残しなく仕上げやすい（③）。家具の生地張り替えや差し替えは従来どおりクロップで寄る。
           const isSurface = isSurfacePlaneFinish(o);
           const cropPx = isSurface ? null : isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
+          // 【面の開口保持（case B・260718 → 監査対応 F1/F4）】検出した窓・ドア等の開口は、合成でマスクから除外＝元のまま
+          // 保持する。モデルには面全体を一様に塗らせ（塗り残しゼロ・③）、開口だけ決定論的に元へ戻す。
+          // F1: 除外の発火は「開口が検出されたか」で判定する（isSurfacePlaneFinish 依存をやめる）。開口検出は解析モデルが
+          // 「フォーカスが壁/床/天井の面か」を視覚判断して行い、RE_SURFACE(語彙)とは別基準。例:「壁を白く塗る」は RE_SURFACE
+          // に載らない（塗る は家具誤爆回避で除外）が窓は検出される→従来は除外されず塗り潰されていた。検出有無で揃える。
+          // F4: 開口をこの面自身の placements 外接矩形へクリップ（隣の面へ穴を空けない・はみ出し/交差なしは除去）。
+          // R2-1: 面のほとんどを覆う非現実的な検出（誤検出）は丸ごと落として、面全体が未仕上げになる最悪ケースを防ぐ。
+          // フラグ OFF なら決定論の開口除外を止め、プロンプトのみ（一様塗り＋見える窓のソフト保持）で対応する。
+          const detectedOpenings = ENABLE_OPENING_PRESERVE ? openingsMap[o.id] : undefined;
+          const clippedOpenings =
+            detectedOpenings && detectedOpenings.length > 0
+              ? dropImplausibleOpenings(clipOpeningsToPlacements(detectedOpenings, o.placements), o.placements)
+              : [];
+          const excludeRects = clippedOpenings.length > 0 ? clippedOpenings : undefined;
           // 【合成マスクは「描いた範囲そのもの（o.placements）」で統一（260715 report: 横一直線の継ぎ目）】
           // 以前は差し替えで範囲を pad で上下左右へ広げた矩形(thisKeep)を採っていたが、背の高い家具では“上方向の pad”が
           // 家具の上の壁・窓まで採り込み、その上端が横一直線の継ぎ目として見えていた（複数家具の上端が揃うと画面幅の横線）。
@@ -730,7 +754,10 @@ export function AiEditWorkspace({
             const matched = await harmonizeEditToBase(base, full, o.placements, baseW, baseH);
             // 複数範囲でも少しだけ dilate して合成する＝隣接する範囲どうしの境界に base の細い帯（白線）が
             // 残らないようにする（②・260717）。単一範囲は従来どおり dilate（接地影を少し残す）。
-            return { url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate), composited: true };
+            return {
+              url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate, excludeRects),
+              composited: true,
+            };
           }
           // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）: base 寸法へ整える。
           const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
@@ -739,12 +766,27 @@ export function AiEditWorkspace({
           const mode: 'cover' | 'contain' =
             !multiRegion && !isBounded && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
           const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
+          // 【面仕上げで検出開口があるときは必ず合成する（case B・260718）】被覆率が高い（囲みがほぼ全画面）と
+          // shouldCompositeAreaEdit は false（＝全画面直で継ぎ目なし）を返す。しかし面仕上げで窓・ドアの開口を検出して
+          // いる場合、合成を飛ばすと開口をマスクから除外できず窓・ドアが仕上げで塗り潰されたまま残る（③の窓・ドア回帰）。
+          // 壁いっぱいに囲む＝高被覆こそ本ケースの典型なので、除外すべき開口があるときは被覆率に関わらず合成経路へ回す。
+          const mustExcludeOpenings = !!excludeRects && excludeRects.length > 0;
           // 全画面経路も合成マスクは o.placements（描いた範囲）で統一。複数範囲は常に閉じ込め、単一は被覆率で判定
           // （contain は multiRegion では発生しない＝mode は multiRegion で cover 固定のため旧 contain 早期returnは不要）。
-          if (multiRegion || shouldCompositeAreaEdit({ placementCount: o.placements.length, fitMode: mode, unionCoverage: objCoverage })) {
-            const matched = await harmonizeEditToBase(base, fitted, o.placements, baseW, baseH);
+          if (multiRegion || mustExcludeOpenings || shouldCompositeAreaEdit({ placementCount: o.placements.length, fitMode: mode, unionCoverage: objCoverage })) {
+            // 【合成するなら contain（レターボックス）は使わない（R2-2・260718 監査対応）】mode==='contain' の fitted は黒帯付き。
+            // 合成マスク(o.placements)・excludeRects は base 座標系なので、シフトしたレターボックス画像を合成すると壁の中に黒帯や
+            // 位置ズレが混入する（shouldCompositeAreaEdit が fitMode!=='cover' で合成しないのは元々このため）。mustExcludeOpenings で
+            // 合成を強制するときはここで cover に取り直して base と座標を揃える（端がわずかに切れるが黒帯より良い＝非合成経路と同方針）。
+            const compFitted =
+              mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
+            const matched = await harmonizeEditToBase(base, compFitted, o.placements, baseW, baseH);
             // 複数範囲でも dilate を効かせ、隣接範囲の境界に base の白線が残るのを防ぐ（②・260717。従来は multiRegion で 0）。
-            return { url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate), composited: true };
+            // 面仕上げは検出した開口(excludeRects)をマスクから除外＝窓・ドアを元のまま保持する（case B・260718）。
+            return {
+              url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate, excludeRects),
+              composited: true,
+            };
           }
           // ここは「単一・実質全画面（被覆≥0.85）＝合成せず全画面採用」のケース。contain のままだと最終出力に黒帯
           // （レターボックス）が残るため、黒帯を避けて cover で返す（端がわずかに切れるが黒帯より良い・260715 監査対応）。
@@ -796,6 +838,11 @@ export function AiEditWorkspace({
         );
       }
       outUrl = workingBase;
+      // 仕上げパス（naturalize/harmonize）を通す前の貼り合わせ結果を控える（R2-3・260718 監査対応）。最終の union 閉じ込めで
+      // 「範囲外＝base に戻す／開口＝元へ戻す」の“戻し先”はこれを使う。baseScaled（原画）だと、面の窓の手前に置いた家具
+      // （別範囲の差し替え）が開口の穴あけで原画に戻され、せっかく置いた家具が消える。仕上げ前の workingBase は
+      // 「範囲外＝base・面の窓＝base・窓の手前の家具＝家具」を既に正しく含むため、戻し先として正しい。
+      const confineBase = workingBase;
 
       // 【最終の全体仕上げ（エリア編集は必ず1回 Gemini を通す・260715 クライアント要望）】各範囲を個別に編集して
       // 貼り合わせた1枚を、最後に Gemini で1回だけ通し、貼り合わせで生じた境界（継ぎ目）と残像（ゴースト・古い対象の
@@ -832,7 +879,29 @@ export function AiEditWorkspace({
         try {
           const unionFeather = Math.round(Math.max(baseW, baseH) * 0.008);
           const unionDilate = Math.round(Math.max(baseW, baseH) * 0.015); // 接地影を少し残しつつ、範囲から離れた新規家具は確実に除外。
-          outUrl = await compositeMaskedEdit(baseScaled, outUrl, allPlacements, baseW, baseH, unionFeather, unionDilate);
+          // 検出した開口（窓・ドア）は最終合成でも除外＝仕上げパスが窓を塗り直してもここで元へ戻す（case B・260718）。
+          // F1: isSurfacePlaneFinish フィルタを外し「検出された開口」を根拠にする（開口は面領域でのみ解析モデルが返すため安全）。
+          // F4: 各面の開口を“その面自身の placements”へクリップしてから束ねる＝隣の面の範囲へ穴を空けない（union は全範囲マスクのため）。
+          // R2-1: 面のほとんどを覆う非現実的な検出は丸ごと落とす。フラグ OFF なら開口除外自体を止める。
+          const allSurfaceOpenings = ENABLE_OPENING_PRESERVE
+            ? objectsScaled.flatMap((o) => {
+                const ops = openingsMap[o.id];
+                return ops && ops.length > 0
+                  ? dropImplausibleOpenings(clipOpeningsToPlacements(ops, o.placements), o.placements)
+                  : [];
+              })
+            : [];
+          // R2-3: 戻し先は confineBase（仕上げ前の貼り合わせ結果）。開口の穴あけで原画に戻すと窓手前の家具が消えるため。
+          outUrl = await compositeMaskedEdit(
+            confineBase,
+            outUrl,
+            allPlacements,
+            baseW,
+            baseH,
+            unionFeather,
+            unionDilate,
+            allSurfaceOpenings.length > 0 ? allSurfaceOpenings : undefined
+          );
         } catch {
           /* 最終閉じ込め失敗は仕上げ結果をそのまま採用（フェイルソフト） */
         }

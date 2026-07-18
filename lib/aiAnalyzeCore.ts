@@ -1,4 +1,4 @@
-import { generatePlacementNarratives } from './gemini.js';
+import { generatePlacementNarratives, type DetectedOpeningRect } from './gemini.js';
 import type { AiEditObjectReference } from '../types.js';
 import { normalizeObjectReference } from './aiEditNormalize.js';
 
@@ -16,7 +16,13 @@ export interface AiAnalyzeRequestBody {
 }
 
 export type AiAnalyzeResult =
-  | { success: true; narratives: Record<string, string>; occluded: Record<string, boolean> }
+  | {
+      success: true;
+      narratives: Record<string, string>;
+      occluded: Record<string, boolean>;
+      /** 面仕上げ（壁/床/天井）の内側に検出した窓・ドア等の開口（正規化矩形・260718）。合成で「面から除外＝元のまま保持」する。 */
+      openings: Record<string, DetectedOpeningRect[]>;
+    }
   | { success: false; status: number; error: string };
 
 /** APIキー抽出済み前提。body を検証し、事前解析（説明＋遮蔽判定）を返す。 */
@@ -35,16 +41,16 @@ export async function runAiAnalyze(apiKey: string, body: AiAnalyzeRequestBody): 
   }
   if (objects.length === 0) {
     // 解析対象が無ければ空で返す（エラーにせず、呼び出し側は全画面=非クロップで続行できる）。
-    return { success: true, narratives: {}, occluded: {} };
+    return { success: true, narratives: {}, occluded: {}, openings: {} };
   }
   try {
-    const { narratives, occluded } = await generatePlacementNarratives(apiKey, {
+    const { narratives, occluded, openings } = await generatePlacementNarratives(apiKey, {
       baseImageDataUrl: body.baseImage,
       objects,
     });
-    return { success: true, narratives, occluded };
+    return { success: true, narratives, occluded, openings };
   } catch (e) {
     // 解析失敗は致命ではない（呼び出し側は非クロップで続行）。空を返す。
-    return { success: true, narratives: {}, occluded: {} };
+    return { success: true, narratives: {}, occluded: {}, openings: {} };
   }
 }
