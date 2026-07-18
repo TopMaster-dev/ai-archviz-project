@@ -27,6 +27,7 @@ import { maybeApplyFreePlanOutputLimits } from '../utils/freePlanImage.js';
 import { creditBlockMessage } from '../utils/freePlanCredits.js';
 import { aiEditObjectUiColors } from '../utils/aiEditObjectPalette.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
+import { compressDataUrlToBudget, dataUrlTransmitBytes } from '../utils/compressDataUrl.js';
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
@@ -179,6 +180,12 @@ type Props = {
   /** 使い方ガイドを開く（260624: AI画像編集にも「?」を出し、2D/3D 同様に見返せるように）。 */
   onOpenGuide?: () => void;
 };
+
+// 送信ペイロード予算（≈ data URL 文字数＝JSON body に載るバイト）。Vercel サーバレス関数の body 上限(~4.5MB)を
+// 超えると原因不明の失敗になるため、差し替え経路で base/参照を予算内へ圧縮し、なお超える場合だけ明確に止める（260718）。
+const SEND_REF_MAX_BYTES = 1_300_000; // 参照画像1枚の送信サイズ上限
+const SEND_BASE_MAX_BYTES = 2_200_000; // 送信用 base（合成には元画像を使うので画質に影響しない）
+const SEND_BODY_MAX_BYTES = 4_200_000; // base+参照1枚の合計がこれを超えたら明確なメッセージで停止（~4.5MB の手前）
 
 export function AiEditWorkspace({
   isOpen,
@@ -597,15 +604,37 @@ export function AiEditWorkspace({
       // （AIレンダリングは PREVIEW_GEMINI_IMAGE_SIZE=1K で正常、AIデザイン/編集だけ 2K で異常・260619報告対応）。
       const imageSize = PREVIEW_GEMINI_IMAGE_SIZE;
 
+      // 参照画像は「寸法を2048へ丸め」たうえで「送信サイズ（バイト）予算」まで圧縮する（260718）。
+      // 旧実装は downscaleDataUrlIfNeeded で寸法しか丸めず（PNG はロスレスで実バイトが減らない）、2MB級の参照＋base を
+      // 1つの body で送ると Vercel の関数上限(~4.5MB)を超えて原因不明の「編集に失敗しました」になっていた。
+      // 予算内の画像はそのまま（＝小さい PNG は PNG のまま）、超過時のみ JPEG 化して収める。
       const objectsScaled = await Promise.all(
         draftObjects.map(async (o) => {
           const norm = normalizeImageDataUrl(o.imageDataUrl);
           return {
             ...o,
-            imageDataUrl: norm ? await downscaleDataUrlIfNeeded(await ensureDataUrl(norm)) : null,
+            imageDataUrl: norm
+              ? await compressDataUrlToBudget(await downscaleDataUrlIfNeeded(await ensureDataUrl(norm)), {
+                  maxBytes: SEND_REF_MAX_BYTES,
+                })
+              : null,
           };
         })
       );
+
+      // 【送信ペイロードの事前チェック（Vercel body 上限~4.5MB 対策・差し替え経路・260718）】
+      // 各範囲は base+参照1枚を1つの JSON body で送るため、最悪ケース（送信用に圧縮した base＋最大の参照1枚）で概算し、
+      // 圧縮後もなお上限を超える場合は、原因不明の失敗ではなく明確なメッセージで止める（コーディネート欄と同じ考え方）。
+      // ※通常は上の圧縮で収まるため、これは圧縮しきれない特殊ケースの保険。
+      const sentBaseForCheck = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES });
+      const maxRefBytes = objectsScaled.reduce(
+        (m, o) => Math.max(m, o.imageDataUrl ? dataUrlTransmitBytes(o.imageDataUrl) : 0),
+        0
+      );
+      if (dataUrlTransmitBytes(sentBaseForCheck) + maxRefBytes > SEND_BODY_MAX_BYTES) {
+        setSubmitError('アップロードした画像のサイズが大きすぎます。もう少し小さい画像（目安2MB以下）でお試しください。');
+        return; // finally で isSubmitting=false
+      }
 
       // in-context反映（row 211/219）: 個人の高評価傾向＋全体共有プールを取得し、生成プロンプトへ参考添付（ベストエフォート）。
       const learnedHints = await getLearnedHints().catch(() => [] as string[]);
@@ -639,7 +668,7 @@ export function AiEditWorkspace({
           headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
           body: JSON.stringify({
             analyze: true,
-            baseImage: baseScaled,
+            baseImage: sentBaseForCheck, // 圧縮済みの base（解析は視覚判断なので JPEG 化で十分・payload 削減）
             objects: objectsScaled.map((o) => ({ ...o, imageDataUrl: null })),
           }),
         });
@@ -722,12 +751,15 @@ export function AiEditWorkspace({
           // 多角形は形どおり・矩形はそのまま・複数 placement の“間”も base のまま（範囲外は変わらない）。
           // クロップ経路ではベース・配置座標・アスペクト比をクロップ空間に統一。渡す objects はこの1領域だけ（入れ替わり防止）。
           const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
+          // 送信用 base を予算内へ圧縮（Vercel body 上限対策・260718）。合成には呼び出し元の base（元画像）を使うので、
+          // 送信を JPEG 化しても未編集域の画質・連鎖編集の劣化には影響しない（マスク内はどのみち生成し直される）。
+          const sentBase = await compressDataUrlToBudget(postBase, { maxBytes: SEND_BASE_MAX_BYTES });
           const postObjects = cropPx
             ? [{ ...o, placements: remapPlacementsToCrop(o.placements, cropPx, baseW, baseH) }]
             : [o];
           const postAspect = cropPx ? pickClosestAspectRatio(cropPx.sw, cropPx.sh) : aspectRatio;
           const body: Record<string, unknown> = {
-            baseImage: postBase,
+            baseImage: sentBase,
             objects: postObjects,
             aspectRatio: postAspect,
             imageSize,
@@ -854,10 +886,13 @@ export function AiEditWorkspace({
       if (editedRegions >= 1) {
         const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
         try {
+          // 仕上げパスも全画面画像を送るため、送信用に予算内へ圧縮する（Vercel body 上限対策・260718）。仕上げ出力は
+          // 生成し直され、最終の union 合成では confineBase（元画像基準）を使うので、送信の JPEG 化は最終画質に影響しない。
+          const finishBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: outUrl, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+            body: JSON.stringify({ baseImage: finishBase, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
           });
           const hdata = await hres.json();
           if (hdata.success && hdata.url) {
@@ -917,11 +952,14 @@ export function AiEditWorkspace({
       // 一切渡さない＝重ね焼き（ゴースト）が構造的に起きない。失敗時は元の結果をそのまま使う（best-effort）。
       if (ENABLE_KEEP_QUALITY_ENHANCE && keepQuality) {
         try {
+          // 精細化パスも全画面画像を送るため送信用に予算内へ圧縮（Vercel body 上限対策・260718 監査V1）。出力は生成し直され、
+          // 失敗時は元 outUrl を採用するので、送信の JPEG 化は最終画質に影響しない。
+          const enhanceBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
           const eres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
             body: JSON.stringify({
-              baseImage: outUrl,
+              baseImage: enhanceBase,
               enhanceDetail: true,
               aspectRatio: pickClosestAspectRatio(baseW, baseH),
               imageSize, // 1K 据え置き（2K はこのモデルで白っぽくぼやける既知事象）
@@ -1024,14 +1062,21 @@ export function AiEditWorkspace({
       const styleMemo = draftStyleMemo.trim();
       // スタイル参照は複数対応（260707）。各画像を控えめ（長辺1280）に縮小して配列で送る（複数でも Vercel の
       // body 上限を超えないように。スタイル参照は「雰囲気の手がかり」なので高解像は不要）。
+      // スタイル参照は長辺1280へ縮小のうえ、送信サイズ（バイト）予算まで圧縮する（PNGでも実バイトを確実に減らす・260718 監査V2）。
       const styleScaledList = await Promise.all(
-        styleImageDataUrls.map(async (u) => downscaleDataUrlIfNeeded(await ensureDataUrl(u), 1280)),
+        styleImageDataUrls.map(async (u) =>
+          compressDataUrlToBudget(await downscaleDataUrlIfNeeded(await ensureDataUrl(u), 1280), {
+            maxBytes: SEND_REF_MAX_BYTES,
+          }),
+        ),
       );
-      // 添付画像が多い/大きいと Vercel の body 上限(~4.5MB)を超えて不明瞭なエラーになるため、送信前に合計サイズを
-      // 概算チェックし、超過時は分かりやすいメッセージで止める（260707 検証 should-fix）。
-      const approxBytes = (u: string) => Math.floor((u.length * 3) / 4);
-      const totalBytes = approxBytes(baseScaled) + styleScaledList.reduce((s, u) => s + approxBytes(u), 0);
-      if (totalBytes > 4_000_000) {
+      // 送信用 base も予算内へ圧縮（コーディネートは全体生成でマスク合成しないため、送信のJPEG化は生成し直される出力に影響しない）。
+      const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES });
+      // 添付が多い/大きいと Vercel の body 上限(~4.5MB)を超えて不明瞭なエラーになるため、送信前に合計サイズを概算して止める。
+      // サイズは「送信される base64 文字数」で測る（旧実装は decode 後バイト=len*3/4 で見ており 4/3 だけ過小評価していた・監査V2）。
+      const totalBytes =
+        dataUrlTransmitBytes(sentBase) + styleScaledList.reduce((s, u) => s + dataUrlTransmitBytes(u), 0);
+      if (totalBytes > SEND_BODY_MAX_BYTES) {
         setSubmitError('添付画像の合計サイズが大きすぎます。枚数を減らすか、小さめの画像でお試しください。');
         setIsSubmitting(false);
         return;
@@ -1039,7 +1084,7 @@ export function AiEditWorkspace({
       const hasPrompt = styleMemo.length > 0 || styleScaledList.length > 0;
       const body: Record<string, unknown> = hasPrompt
         ? {
-            baseImage: baseScaled,
+            baseImage: sentBase,
             styleImages: styleScaledList,
             objects: [],
             aspectRatio,
@@ -1047,7 +1092,7 @@ export function AiEditWorkspace({
             learnedHints,
             ...(styleMemo ? { styleMemo } : {}),
           }
-        : { baseImage: baseScaled, coordinate: true, aspectRatio, imageSize: PREVIEW_GEMINI_IMAGE_SIZE, learnedHints };
+        : { baseImage: sentBase, coordinate: true, aspectRatio, imageSize: PREVIEW_GEMINI_IMAGE_SIZE, learnedHints };
       const res = await fetch('/api/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
