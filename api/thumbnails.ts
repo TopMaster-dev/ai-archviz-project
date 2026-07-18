@@ -50,10 +50,13 @@ export default async function handler(req: any, res: any) {
             return res.status(500).json({ error: 'Upload path mismatch', publicId: result.public_id });
         }
 
-        console.log(`Uploaded to Cloudinary: ${result.secure_url}`);
+        // 配信URLに f_auto,q_auto を付与して自動軽量化（素材/テクスチャ配信と同じ方式・260718）。
+        // 同一画像を最適フォーマット/画質で配信するのみで、保存アセットや表示挙動は不変（既存の保存済みURLも従来どおり動作）。
+        const optimizedUrl = result.secure_url.replace('/upload/', '/upload/f_auto,q_auto/');
+        console.log(`Uploaded to Cloudinary: ${optimizedUrl}`);
         res.status(200).json({
             success: true,
-            url: result.secure_url,
+            url: optimizedUrl,
             publicId: result.public_id
         });
     } catch (error) {

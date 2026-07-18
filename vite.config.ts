@@ -83,8 +83,10 @@ export default defineConfig(({ mode }) => {
                                 res.end(JSON.stringify({ error: 'Upload path mismatch', publicId: result.public_id }));
                                 return;
                             }
+                            // 配信URLに f_auto,q_auto を付与して自動軽量化（本番 api/thumbnails.ts と同一・260718）。
+                            const optimizedUrl = result.secure_url.replace('/upload/', '/upload/f_auto,q_auto/');
                             res.setHeader('Content-Type', 'application/json');
-                            res.end(JSON.stringify({ success: true, url: result.secure_url, publicId: result.public_id }));
+                            res.end(JSON.stringify({ success: true, url: optimizedUrl, publicId: result.public_id }));
                         } else {
                             res.statusCode = 400;
                             res.end(JSON.stringify({ error: 'Invalid data' }));
