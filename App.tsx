@@ -26,7 +26,7 @@ import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
-import { beamExposedAreaM2, wallBeamWallCoverAreaM2 } from './utils/beamArea.js';
+import { beamExposedAreaM2, wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } from './utils/beamArea.js';
 import { beamOverlapDeductionByIdM2 } from './utils/beamOverlap.js';
 import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
@@ -742,6 +742,8 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
         </div>
       )}
 
+      {/* AI追加アイテムは AI編集ビューのみ表示（3Dビューでは非表示・クライアント要望1d・260720）。 */}
+      {forAiEdit && (
       <div ref={aiEstimateSectionRef}>
         <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-2.5 px-1">
           <span className="text-[10px] font-black tracking-widest text-neutral-400">AI追加アイテム</span>
@@ -828,6 +830,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
           </div>
         )}
       </div>
+      )}
       <div className="text-right mt-1">
         <span className="text-[8px] text-neutral-600 font-bold uppercase">※建材はロス率込み</span>
       </div>
@@ -2993,10 +2996,24 @@ const App: React.FC = () => {
       }
       // 壁梁が覆う帯は梁の仕上げとして別計上されるため、その裏のクロス面積を差し引く
       // （260613: 「梁がある部分も壁面に含まれている」不具合の修正。壁梁のみ対象）。
+      // さらに自由配置(壁非スナップ)の梁も、壁に沿って近接していれば同様に差し引く（3c-iii・260720 クライアント要望）。
+      const wp1 = sketchPoints[baseIdx];
+      const wp2 = sketchPoints[(baseIdx + 1) % sketchPoints.length];
       let beamCover = 0;
       for (const bm of beams) {
-        if (bm.wallIndex !== baseIdx) continue;
-        beamCover += wallBeamWallCoverAreaM2(bm, segBottomMm, segTopMm, roomHeight);
+        if (bm.wallIndex === baseIdx) {
+          beamCover += wallBeamWallCoverAreaM2(bm, segBottomMm, segTopMm, roomHeight);
+        } else if (bm.wallIndex === undefined && wp1 && wp2) {
+          // 壁端点を mm（sketch/0.05）へ変換し、梁 cx/cy と同一座標系で射影・近接判定する。
+          beamCover += freeBeamWallCoverAreaM2(
+            bm,
+            { x: wp1.x / 0.05, y: wp1.y / 0.05 },
+            { x: wp2.x / 0.05, y: wp2.y / 0.05 },
+            segBottomMm,
+            segTopMm,
+            roomHeight,
+          );
+        }
       }
       return Math.max(0, grossArea - holeSum - beamCover);
     }
@@ -3115,9 +3132,15 @@ const App: React.FC = () => {
     () => furnitureItems.reduce((sum, item) => sum + (item.customPrice ?? 0), 0),
     [furnitureItems]
   );
+  // 【AI追加アイテムを生成画像ごとに同期（1c・260720）】versionId 未指定＝「共通」（全画像で表示）、指定＝その画像を
+  // 表示中のときだけ表示・集計する。表示中の生成画像（aiEditActiveVersionId）に紐付く項目＋共通項目だけを見積へ反映。
+  const visibleAiEstimateItems = useMemo(
+    () => aiEstimateItems.filter((it) => !it.versionId || it.versionId === aiEditActiveVersionId),
+    [aiEstimateItems, aiEditActiveVersionId]
+  );
   const aiEstimateTotal = useMemo(
-    () => aiEstimateItems.reduce((sum, item) => sum + (item.price ?? 0), 0),
-    [aiEstimateItems]
+    () => visibleAiEstimateItems.reduce((sum, item) => sum + (item.price ?? 0), 0),
+    [visibleAiEstimateItems]
   );
   const grandTotal = useMemo(
     () => materialsTotal + baseboardTotal + furnitureTotal + aiEstimateTotal,
@@ -3129,17 +3152,17 @@ const App: React.FC = () => {
   );
   const aiEstimateMissingCount = useMemo(
     () =>
-      // 未入力判定は「名称・金額」のみ（ブランド/メーカーは任意・260716 クライアント要望）。
-      aiEstimateItems.filter(
+      // 未入力判定は「名称・金額」のみ（ブランド/メーカーは任意・260716 クライアント要望）。表示中の項目だけを対象にする。
+      visibleAiEstimateItems.filter(
         (item) => !item.name.trim() || !(item.price && item.price > 0)
       ).length,
-    [aiEstimateItems]
+    [visibleAiEstimateItems]
   );
   const missingInputCount = furnitureMissingCount + aiEstimateMissingCount;
 
   const estimatePayload = useMemo(
     () =>
-      buildEstimateExportPayload(costBreakdown as CostBreakdownEntry[], furnitureItems, aiEstimateItems, {
+      buildEstimateExportPayload(costBreakdown as CostBreakdownEntry[], furnitureItems, visibleAiEstimateItems, {
         wallDivisions,
         materialMemoByProductId: materialMemoOverrides,
         baseboardRows: baseboardBreakdown,
@@ -3148,7 +3171,7 @@ const App: React.FC = () => {
         projectName: projectSession?.projectName ?? '',
         authorName: authProfile?.company || authProfile?.display_name || '',
       }),
-    [costBreakdown, furnitureItems, aiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown, baseboardMemoOverrides, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
+    [costBreakdown, furnitureItems, visibleAiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown, baseboardMemoOverrides, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
   );
   const canExportEstimate =
     estimatePayload.materialSections.some((s) => s.rows.length > 0) ||
@@ -3157,19 +3180,49 @@ const App: React.FC = () => {
 
   const [estimateExportBusy, setEstimateExportBusy] = useState(false);
 
+  // 見積書PDFの先頭に載せる「現在表示中の画像」を書き出し時に取得（3h・260720）。
+  // AI編集中はAI生成画像を優先し、それ以外は現在ビュー（3D/2Dスケッチ）のキャンバスを取り込む。取得できなければ undefined。
+  const captureEstimateHeroImage = useCallback(async (): Promise<string | undefined> => {
+    try {
+      if (aiEditOpen && aiEditVersions.length > 0) {
+        const active =
+          aiEditVersions.find((v) => v.id === aiEditActiveVersionId) ?? aiEditVersions[aiEditVersions.length - 1];
+        if (active?.outputImageDataUrl) return await ensureDataUrl(active.outputImageDataUrl);
+      }
+      const sel = viewMode === '3D' ? 'canvas[data-arise-room]' : 'canvas[data-arise-sketch]';
+      const c = document.querySelector(sel) as HTMLCanvasElement | null;
+      if (!c || c.width < 8 || c.height < 8) return undefined;
+      const scale = Math.min(1, 1400 / c.width);
+      const tw = Math.max(1, Math.round(c.width * scale));
+      const th = Math.max(1, Math.round(c.height * scale));
+      const tmp = document.createElement('canvas');
+      tmp.width = tw;
+      tmp.height = th;
+      const tctx = tmp.getContext('2d');
+      if (!tctx) return undefined;
+      tctx.fillStyle = '#0b0b0b'; // 2Dスケッチは透明背景のためJPEGの黒落ち防止に画面と同じ背景を敷く
+      tctx.fillRect(0, 0, tw, th);
+      tctx.drawImage(c, 0, 0, tw, th);
+      return tmp.toDataURL('image/jpeg', 0.85);
+    } catch {
+      return undefined; // 取得できなくても見積書は出せる（画像なしで続行）
+    }
+  }, [aiEditOpen, aiEditVersions, aiEditActiveVersionId, viewMode]);
+
   const executeEstimateExport = useCallback(async (kind: 'pdf' | 'csv') => {
     if (!canExportEstimate || estimateExportBusy) return;
     setEstimateExportBusy(true);
     try {
       if (kind === 'pdf') {
-        await downloadEstimatePdf(estimatePayload);
+        const roomImageDataUrl = await captureEstimateHeroImage();
+        await downloadEstimatePdf({ ...estimatePayload, roomImageDataUrl });
       } else {
         downloadEstimateCsv(estimatePayload);
       }
     } finally {
       setEstimateExportBusy(false);
     }
-  }, [canExportEstimate, estimateExportBusy, estimatePayload]);
+  }, [canExportEstimate, estimateExportBusy, estimatePayload, captureEstimateHeroImage]);
 
   const handleExportEstimateCsv = useCallback(() => {
     if (!canExportEstimate) return;
@@ -3218,8 +3271,12 @@ const App: React.FC = () => {
   }, [activeCategory, selectedBrand, products, sortOrder]);
 
   const handleAddAiEstimateItem = useCallback(() => {
-    setAiEstimateItems((prev) => [...prev, createAiEstimateItem()]);
-  }, []);
+    // 表示中の生成画像に紐付ける（1c）。AI画像が無ければ versionId 未指定＝共通（全画像で表示）。
+    setAiEstimateItems((prev) => [
+      ...prev,
+      { ...createAiEstimateItem(), versionId: aiEditActiveVersionId ?? undefined },
+    ]);
+  }, [aiEditActiveVersionId]);
 
   const handleUpdateAiEstimateItem = useCallback(
     (id: string, patch: Partial<AiEstimateItem>) => {
@@ -3245,9 +3302,10 @@ const App: React.FC = () => {
         memo: rec.reason ?? '',
         modelNumber: rec.modelNumber,
         productUrl: rec.productUrl,
+        versionId: aiEditActiveVersionId ?? undefined, // 表示中の生成画像に紐付け（1c）
       },
     ]);
-  }, []);
+  }, [aiEditActiveVersionId]);
 
   // エージェントへ渡す家具カタログ（重複排除・価格付き）。furnitureCatalog 変化時のみ再計算。
   const agentCatalog = useMemo(() => buildAgentCatalog(furnitureCatalog), [furnitureCatalog]);
@@ -3388,7 +3446,7 @@ const App: React.FC = () => {
                 setFurnitureItems={setFurnitureItems}
                 onPersistFurnitureUpload={schedulePersistUploadFurnitureMeta}
                 furnitureTotal={furnitureTotal}
-                aiEstimateItems={aiEstimateItems}
+                aiEstimateItems={visibleAiEstimateItems}
                 aiEstimateTotal={aiEstimateTotal}
                 handleAddAiEstimateItem={handleAddAiEstimateItem}
                 handleUpdateAiEstimateItem={handleUpdateAiEstimateItem}
@@ -3404,7 +3462,7 @@ const App: React.FC = () => {
     [
       activeFurnitureId,
       activeMeshes,
-      aiEstimateItems,
+      visibleAiEstimateItems,
       aiEstimateTotal,
       baseboardBreakdown,
       baseboardTotal,

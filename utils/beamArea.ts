@@ -1,4 +1,5 @@
 import type { Beam } from '../lib/project/projectState.js';
+import { beamFootprintCornersMm } from './beamOverlap.js';
 
 /**
  * 梁の露出表面積(m²)を返す（見積の数量算出用）。
@@ -71,4 +72,64 @@ export function wallBeamWallCoverAreaM2(
   const overlapMm = Math.min(segTopMm, beamTopMm) - Math.max(segBottomMm, beamBottomMm);
   if (overlapMm <= 0) return 0;
   return (overlapMm / 1000) * L;
+}
+
+/**
+ * 自由配置の梁（wallIndex 未定義）が、壁セグメントのクロス面を覆う帯の面積(m²)（3c-iii・260720 クライアント要望）。
+ * 壁に沿って（ほぼ平行かつ近接して）置かれた自由梁は、室内側側面が梁仕上げとして別計上されるため、その裏のクロス面積を
+ * 二重計上しないよう差し引く（壁梁 wallBeamWallCoverAreaM2 の自由梁版）。
+ *
+ * 座標系: 壁端点 p1Mm/p2Mm と 梁 cx/cy はいずれも「mm（sketch/SKETCH_BASE_SCALE=0.05）」で同一原点。
+ *  - 近接: 梁フットプリントの壁法線範囲が壁線(s=0)から NEAR_TOL_MM 以内に触れていること。
+ *  - 壁沿い: 法線方向の広がりが widthMm+TOL 以内（＝壁に斜め/直交な梁は「壁沿い」でないので対象外）。
+ *  - 覆う長さ: フットプリントを壁方向へ射影し、壁セグメント [0, wallLen] にクリップ。
+ *  - 鉛直: 梁帯 [top-H, top] と壁セグメント [segBottom, segTop] の重なり。
+ * 壁梁(wallIndex 定義)・非有限・非正・重なり無しは 0。
+ */
+export function freeBeamWallCoverAreaM2(
+  beam: Pick<Beam, 'cx' | 'cy' | 'lengthMm' | 'widthMm' | 'angleDeg' | 'heightMm' | 'wallIndex'> & { dropMm?: number },
+  p1Mm: { x: number; y: number },
+  p2Mm: { x: number; y: number },
+  segBottomMm: number,
+  segTopMm: number,
+  roomHeightMm: number,
+): number {
+  if (beam.wallIndex !== undefined) return 0; // 壁梁は wallBeamWallCoverAreaM2 の担当
+  const H = Number.isFinite(beam.heightMm) ? beam.heightMm : 0;
+  const W = Number.isFinite(beam.widthMm) ? beam.widthMm : 0;
+  if (H <= 0 || W <= 0 || !Number.isFinite(roomHeightMm)) return 0;
+  const wx = p2Mm.x - p1Mm.x;
+  const wy = p2Mm.y - p1Mm.y;
+  const wallLen = Math.hypot(wx, wy);
+  if (wallLen < 1e-6) return 0;
+  const dx = wx / wallLen;
+  const dy = wy / wallLen; // 壁方向 unit
+  const nx = -dy;
+  const ny = dx; // 壁法線 unit
+  const corners = beamFootprintCornersMm(beam);
+  let tmin = Infinity;
+  let tmax = -Infinity;
+  let sMin = Infinity;
+  let sMax = -Infinity;
+  for (const c of corners) {
+    const rx = c.x - p1Mm.x;
+    const ry = c.y - p1Mm.y;
+    const t = rx * dx + ry * dy; // 壁方向の位置(mm)
+    const s = rx * nx + ry * ny; // 壁からの法線距離(mm・符号付き)
+    if (t < tmin) tmin = t;
+    if (t > tmax) tmax = t;
+    if (s < sMin) sMin = s;
+    if (s > sMax) sMax = s;
+  }
+  const NEAR_TOL_MM = 150; // 壁面から梁までの許容距離（壁厚・微小ずれ吸収）
+  if (sMin > NEAR_TOL_MM || sMax < -NEAR_TOL_MM) return 0; // 壁から離れている
+  if (sMax - sMin > W + NEAR_TOL_MM) return 0; // 壁に斜め/直交（法線方向に長く広がる）＝壁沿いでない
+  const coveredLenMm = Math.min(tmax, wallLen) - Math.max(tmin, 0);
+  if (coveredLenMm <= 0) return 0;
+  const drop = Number.isFinite(beam.dropMm) ? (beam.dropMm as number) : 0;
+  const beamTopMm = roomHeightMm - drop;
+  const beamBottomMm = beamTopMm - H;
+  const vOverlapMm = Math.min(segTopMm, beamTopMm) - Math.max(segBottomMm, beamBottomMm);
+  if (vOverlapMm <= 0) return 0;
+  return (coveredLenMm / 1000) * (vOverlapMm / 1000);
 }

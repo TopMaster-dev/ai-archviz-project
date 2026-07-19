@@ -264,37 +264,16 @@ export interface AgentRecommendationPick {
  * Tier2（260620）: カタログを渡すと、家具/コーディネート提案時に該当商品を index で推薦する
  * （reply=会話文、recommendations=index付き推薦）。失敗時は全文を reply 扱い（推薦なし）にフォールバック。
  */
-export async function generateAgentReply(
-  apiKey: string,
-  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[] }
-): Promise<{ reply: string; recommendations: AgentRecommendation[]; usage: TokenUsage | null }> {
-  const catalog = params.catalog ?? [];
-  const catalogBlock = catalog.length
-    ? `\n\n【利用可能な家具カタログ（家具提案は必ずこの中から index で指定。ここに無い商品は提案しない）】\n` +
-      catalog
-        .map(
-          (c, i) =>
-            `${i}: ${c.name}（${c.type}）${c.brand ? ` / ${c.brand}` : ''}${c.modelNumber ? ` / 品番${c.modelNumber}` : ''}${
-              c.price !== undefined ? ` / ¥${c.price.toLocaleString()}` : ''
-            }`
-        )
-        .join('\n')
-    : '';
-  const system = `あなたは建築・内装に精通したプロのAIデザインアドバイザーです。Arise（2D作図→3D→AIパース→概算見積もりの空間デザインツール）のユーザーを支援します。
-- 配色・素材・家具・照明・レイアウト・コーディネート、見積もりや進め方の相談に、日本語で具体的かつ実務的に助言する。
-- 不要な前置きは避け、要点は短い段落や箇条書きで簡潔に。
-- 画像が添付されている場合は、その空間を踏まえて助言する。画像に写っている建材・家具・素材・色・テイストを具体的に読み取り、それらに合う/近い実在商品をカタログから提案する。
-- 家具やコーディネートを提案するときは、上記カタログから該当商品を index で挙げる（カタログに無いものは挙げない）。家具提案が不要な相談では空配列にする。メーカー・品番・価格・商品URLは表示側がカタログから自動付与するため、reason には選定理由のみを簡潔に書く。
-- 推薦した商品はユーザーが「見積に追加」ボタンでそのまま概算見積もりへ反映できる。これがツールの強みなので、画像内の建材・家具に対しては積極的に実在商品（メーカー/品番/URL付き）を提案する。
-- 出力は必ず次の形式の JSON のみ（前後に説明やマークダウンを付けない）:
-{"reply":"<会話的な日本語の助言。必須。recommendationsの有無に関わらず必ず入れる>","recommendations":[{"index":<カタログ番号(整数)>,"name":"<見積もりに載せる自然な日本語名>","reason":"<短い推薦理由>"}]}${catalogBlock}`;
-
+/** エージェントの会話 contents を組み立てる（画像/添付は最新ユーザー発話にのみ付与）。 */
+function buildAgentContents(params: {
+  messages: AgentChatMessage[];
+  imageDataUrl?: string | null;
+  files?: AgentAttachment[];
+}) {
   const files = params.files ?? [];
   const lastIdx = params.messages.length - 1;
-  const contents = params.messages.map((m, i) => {
-    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
-      { text: m.content },
-    ];
+  return params.messages.map((m, i) => {
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [{ text: m.content }];
     if (m.role === 'user' && i === lastIdx) {
       if (params.imageDataUrl) {
         const img = parseImageDataUrl(params.imageDataUrl);
@@ -307,11 +286,8 @@ export async function generateAgentReply(
         for (const f of files) {
           const { mimeType: dm, base64 } = parseDataUrl(f?.dataUrl || '');
           const mime = resolveAttachmentMime(f?.name, dm);
-          if (base64 && isGeminiInlineSupported(mime)) {
-            parts.push({ inlineData: { mimeType: mime, data: base64 } });
-          } else if (f?.name) {
-            unsupported.push(f.name);
-          }
+          if (base64 && isGeminiInlineSupported(mime)) parts.push({ inlineData: { mimeType: mime, data: base64 } });
+          else if (f?.name) unsupported.push(f.name);
         }
         const names = files.map((f) => f?.name).filter(Boolean) as string[];
         if (names.length) {
@@ -325,7 +301,75 @@ export async function generateAgentReply(
     }
     return { role: m.role === 'assistant' ? 'model' : 'user', parts };
   });
+}
 
+/** テキストから最初の JSON オブジェクトを取り出す（```json フェンスや前後の地の文・出典表記に耐える）。 */
+function extractJsonObject(text: string): string | null {
+  let s = text.trim();
+  const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
+  if (fence) s = fence[1].trim();
+  const start = s.indexOf('{');
+  const end = s.lastIndexOf('}');
+  if (start >= 0 && end > start) return s.slice(start, end + 1);
+  return null;
+}
+
+/** Web検索由来の推薦（モデルが直接返した実在商品フィールド）を AgentRecommendation へ正規化。 */
+function parseAgentWebRecommendations(v: unknown): AgentRecommendation[] {
+  if (!Array.isArray(v)) return [];
+  const out: AgentRecommendation[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== 'object') continue;
+    const o = x as Record<string, unknown>;
+    const name = typeof o.name === 'string' ? o.name.trim() : '';
+    if (!name) continue;
+    const rawPrice =
+      typeof o.price === 'number'
+        ? o.price
+        : typeof o.price === 'string'
+        ? Number(o.price.replace(/[^0-9.]/g, ''))
+        : NaN;
+    const url = typeof o.productUrl === 'string' ? o.productUrl.trim() : '';
+    out.push({
+      name,
+      brand: typeof o.brand === 'string' ? o.brand.trim() : '',
+      modelNumber: typeof o.modelNumber === 'string' ? o.modelNumber.trim() || undefined : undefined,
+      price: Number.isFinite(rawPrice) && rawPrice > 0 ? rawPrice : undefined,
+      productUrl: /^https?:\/\//i.test(url) ? url : undefined,
+      reason: typeof o.reason === 'string' ? o.reason.trim() || undefined : undefined,
+    });
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+const AGENT_ADVISOR_INTRO = `あなたは建築・内装に精通したプロのAIデザインアドバイザーです。Arise（2D作図→3D→AIパース→概算見積もりの空間デザインツール）のユーザーを支援します。
+- 配色・素材・家具・照明・レイアウト・コーディネート、見積もりや進め方の相談に、日本語で具体的かつ実務的に助言する。
+- 不要な前置きは避け、要点は短い段落や箇条書きで簡潔に。
+- 画像が添付されている場合は、その空間を踏まえて助言する。画像に写っている建材・家具・素材・色・テイストを具体的に読み取る。
+- 推薦した商品はユーザーが「見積に追加」ボタンでそのまま概算見積もりへ反映できる。これがツールの強みなので、画像内の建材・家具に対しては積極的に実在商品を提案する。`;
+
+/** 従来のカタログ index 方式（Web検索グラウンディングが使えない環境のフォールバック・捏造防止）。 */
+async function catalogAgentReply(
+  apiKey: string,
+  contents: ReturnType<typeof buildAgentContents>,
+  catalog: AgentCatalogEntry[]
+): Promise<{ reply: string; recommendations: AgentRecommendation[]; usage: TokenUsage | null }> {
+  const catalogBlock = catalog.length
+    ? `\n\n【利用可能な家具カタログ（家具提案は必ずこの中から index で指定。ここに無い商品は提案しない）】\n` +
+      catalog
+        .map(
+          (c, i) =>
+            `${i}: ${c.name}（${c.type}）${c.brand ? ` / ${c.brand}` : ''}${c.modelNumber ? ` / 品番${c.modelNumber}` : ''}${
+              c.price !== undefined ? ` / ¥${c.price.toLocaleString()}` : ''
+            }`
+        )
+        .join('\n')
+    : '';
+  const system = `${AGENT_ADVISOR_INTRO}
+- 家具やコーディネートを提案するときは、上記カタログから該当商品を index で挙げる（カタログに無いものは挙げない）。家具提案が不要な相談では空配列にする。メーカー・品番・価格・商品URLは表示側がカタログから自動付与するため、reason には選定理由のみを簡潔に書く。
+- 出力は必ず次の形式の JSON のみ（前後に説明やマークダウンを付けない）:
+{"reply":"<会話的な日本語の助言。必須。recommendationsの有無に関わらず必ず入れる>","recommendations":[{"index":<カタログ番号(整数)>,"name":"<見積もりに載せる自然な日本語名>","reason":"<短い推薦理由>"}]}${catalogBlock}`;
   const payload = {
     systemInstruction: { parts: [{ text: system }] },
     contents,
@@ -376,15 +420,65 @@ export async function generateAgentReply(
       }
     }
   } catch {
-    reply = text.trim(); // JSON でない稀なケースのみ全文表示
+    reply = text.trim();
   }
-  // 構造化はできたが reply キーが無い/想定外の形 → 生JSONをユーザーに見せない（汎用文へ）。
   if (!reply) reply = parsedOk ? '回答を取得できませんでした。もう一度お試しください。' : text.trim();
-
-  // 推薦の index 解決は「モデルへ番号付きで提示したのと同じ配列(catalog)」に対して行う（index ずれ＝
-  // 別商品の実価格/品番が紛れ込む事故を防ぐ）。価格/品番/URL はカタログ由来を採用（捏造防止）。
   const recommendations = resolveAgentRecommendations(catalog, picks);
   return { reply, recommendations, usage: readUsage(result) };
+}
+
+/**
+ * AIエージェント相談（建築・内装デザインのアドバイス）。
+ * 1a（260720 クライアント要望）: 家具/建材の品番・メーカー・価格・URLを **Web検索グラウンディング** で実在情報から提案する。
+ * グラウンディングは responseMimeType(JSON) と併用できないため、プロンプトでJSON出力を指示し頑健にパースする。
+ * グラウンディングが使えない環境（キー/モデル未対応など）では、従来のカタログ index 方式（catalogAgentReply）へフォールバック。
+ * ※ Web由来の品番/価格/URLは正確性を保証しないため、実機での品質確認が前提（在庫・価格・リンク切れ等）。
+ */
+export async function generateAgentReply(
+  apiKey: string,
+  params: { messages: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[] }
+): Promise<{ reply: string; recommendations: AgentRecommendation[]; usage: TokenUsage | null }> {
+  const catalog = params.catalog ?? [];
+  const contents = buildAgentContents(params);
+
+  const groundedSystem = `${AGENT_ADVISOR_INTRO}
+- 家具・建材を提案するときは、Web検索で「実在する商品」を調べ、メーカー名・品番・参考価格（税込・日本円）・商品ページURLを可能な限り正確に添える。憶測で品番やURLを作らない（検索で確認できたものだけ記載し、不明な項目は空にする）。日本国内で入手しやすい商品を優先する。
+- 家具提案が不要な相談では recommendations は空配列にする。
+- 出力は必ず次の JSON のみ（前後に説明・マークダウン・出典表記を付けない）:
+{"reply":"<日本語の助言。必須>","recommendations":[{"name":"<商品名>","brand":"<メーカー>","modelNumber":"<品番>","price":<参考価格の数値・任意>,"productUrl":"<商品ページURL>","reason":"<短い推薦理由>"}]}`;
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${resolveAgentModel()}:generateContent`;
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: JSON.stringify({
+        systemInstruction: { parts: [{ text: groundedSystem }] },
+        contents,
+        tools: [{ googleSearch: {} }], // Web検索グラウンディング（1a）
+        generationConfig: { temperature: 0.4 },
+      }),
+    });
+    if (response.ok) {
+      const result = await response.json();
+      const text: string = (result.candidates?.[0]?.content?.parts ?? [])
+        .filter((p: { text?: string }) => typeof p.text === 'string')
+        .map((p: { text?: string }) => p.text as string)
+        .join('\n');
+      const jsonStr = text ? extractJsonObject(text) : null;
+      if (jsonStr) {
+        const parsed = JSON.parse(jsonStr) as { reply?: unknown; recommendations?: unknown };
+        const reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : '';
+        if (reply) {
+          return { reply, recommendations: parseAgentWebRecommendations(parsed.recommendations), usage: readUsage(result) };
+        }
+      }
+      // ok だが JSON を取り出せない → フォールバックへ
+    }
+  } catch {
+    /* グラウンディング非対応/ネットワーク等 → フォールバックへ */
+  }
+  // フォールバック: 従来のカタログ index 方式（グラウンディングが使えなくても提案が動く）。
+  return await catalogAgentReply(apiKey, contents, catalog);
 }
 
 /** マルチ参照対応のインテリア編集（ベース + スタイル0〜1 + オブジェクト複数） */

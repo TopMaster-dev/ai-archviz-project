@@ -276,13 +276,16 @@ export default defineConfig(({ mode }) => {
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: 'メッセージが必要です。' }));
                         }
-                        const { reply, usage } = await generateAgentReply(apiKey, {
+                        // 本番 api/agent.ts と同様に catalog/files を渡し、recommendations も返す（dev/prod 一致・1a のWeb検索提案もdevで機能）。
+                        const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
                             messages,
                             imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : null,
+                            catalog: Array.isArray(parsed.catalog) ? parsed.catalog : undefined,
+                            files: Array.isArray(parsed.files) ? parsed.files : undefined,
                         });
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, reply, usage, model: resolveAgentModel() }));
+                        return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model: resolveAgentModel() }));
                     } catch (e: any) {
                         console.error('agent local error:', e);
                         res.statusCode = 500;

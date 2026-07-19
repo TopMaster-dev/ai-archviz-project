@@ -65,6 +65,8 @@ export interface MaterialBoardItem {
   productId: string;
   textureUrl: string;
   partCode: string;
+  /** ユーザーが入力した品番（あれば）。無ければマテリアルボードは partCode（内部productId）へフォールバック（3e・260720）。 */
+  modelNumber?: string;
   displayName: string;
   brand: string;
   /** 実際に貼られた面（3Dビューのメッシュ由来・床/壁/天井/梁）。面ごとに1スワッチ（260716）。 */
@@ -87,6 +89,8 @@ export interface EstimateExportPayload {
   materialBoard: MaterialBoardItem[];
   furniture: FurnitureExportRow[];
   aiItems: AiEstimateExportRow[];
+  /** 見積書PDF先頭に載せる「現在表示中の画像」（AI生成画像 or 3D/2Dビュー）。書き出し時に付与（3h・260720）。CSVでは未使用。 */
+  roomImageDataUrl?: string;
 }
 
 export interface BuildEstimateOptions {
@@ -304,6 +308,7 @@ export function buildEstimateExportPayload(
         productId: item.productId || pid,
         textureUrl: item.textureUrl ?? '',
         partCode: item.productId || pid,
+        modelNumber: item.modelNumber, // ユーザー入力の品番（あればボード表記に優先・3e・260720）
         displayName: `${item.brand} ${item.prodName}`.trim(),
         brand: item.brand,
         surface,
@@ -411,65 +416,35 @@ export function buildEstimateCsv(payload: EstimateExportPayload): string {
     baseboard: '【巾木】',
   };
 
+  // 「区分」「入力状態」列はクライアント要望で削除（260720・3f）。
   for (const sec of payload.materialSections) {
     pushRow([sectionTitles[sec.key]]);
-    pushRow(['No.', '明細名称', '仕様', '数量', '単位', '単価', '金額', '区分', '入力状態', '備考']);
+    pushRow(['No.', '明細名称', '仕様', '数量', '単位', '単価', '金額', '備考']);
     for (const r of sec.rows) {
-      pushRow([
-        r.no,
-        r.detailName,
-        r.spec,
-        r.quantity,
-        r.unit,
-        r.unitPrice,
-        r.amount,
-        r.sectionType,
-        r.inputStatus,
-        r.remark,
-      ]);
+      pushRow([r.no, r.detailName, r.spec, r.quantity, r.unit, r.unitPrice, r.amount, r.remark]);
     }
-    pushRow([`${sec.title} 小計`, '', '', '', '', '', sec.subtotal, '', '', '']);
+    pushRow([`${sec.title} 小計`, '', '', '', '', '', sec.subtotal, '']);
     lines.push('');
   }
 
   pushRow(['【家具リスト】']);
-  pushRow(['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態', '備考']);
+  pushRow(['No.', '品名', 'ブランド', '数量', '単価', '金額', '備考']);
   for (const r of payload.furniture) {
-    pushRow([
-      r.no,
-      r.itemName,
-      r.brand,
-      r.quantity,
-      r.unitPrice,
-      r.amount,
-      r.sectionType,
-      r.inputStatus,
-      r.remark,
-    ]);
+    pushRow([r.no, r.itemName, r.brand, r.quantity, r.unitPrice, r.amount, r.remark]);
   }
   lines.push('');
   pushRow(['【AI追加アイテム】']);
-  pushRow(['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態', '備考']);
+  pushRow(['No.', '品名', 'ブランド', '数量', '単価', '金額', '備考']);
   for (const r of payload.aiItems) {
-    pushRow([
-      r.no,
-      r.itemName,
-      r.brand,
-      r.quantity,
-      r.unitPrice,
-      r.amount,
-      r.sectionType,
-      r.inputStatus,
-      r.remark,
-    ]);
+    pushRow([r.no, r.itemName, r.brand, r.quantity, r.unitPrice, r.amount, r.remark]);
   }
-  pushRow(['', '', '', '', '税込合計', payload.grandTotal, '', '', '']);
+  pushRow(['', '', '', '', '税込合計', payload.grandTotal, '']);
   lines.push('');
 
   pushRow(['【マテリアルボード】']);
   pushRow(['品番', '表示名', '使用箇所', 'テクスチャURL']);
   for (const b of payload.materialBoard) {
-    pushRow([b.partCode, b.displayName, b.usages.join(' / '), b.textureUrl]);
+    pushRow([b.modelNumber || b.partCode, b.displayName, b.usages.join(' / '), b.textureUrl]);
   }
 
   return '\uFEFF' + lines.join('\r\n');

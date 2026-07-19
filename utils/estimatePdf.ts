@@ -35,6 +35,20 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   sub.style.cssText = 'font-size:8px;color:#666;margin-bottom:10px;';
   root.appendChild(sub);
 
+  // 現在表示中の画像（AI生成画像 or 3D/2Dビュー）を見積書の先頭に載せる（3h・260720）。
+  if (payload.roomImageDataUrl) {
+    const imgWrap = document.createElement('div');
+    imgWrap.style.cssText =
+      'width:100%;margin-bottom:12px;border:1px solid #ccc;background:#f4f4f4;text-align:center;line-height:0;';
+    const img = document.createElement('img');
+    img.crossOrigin = 'anonymous';
+    img.src = payload.roomImageDataUrl;
+    img.style.cssText = 'max-width:100%;max-height:340px;object-fit:contain;display:inline-block;vertical-align:middle;';
+    img.alt = '';
+    imgWrap.appendChild(img);
+    root.appendChild(imgWrap);
+  }
+
   const totalBar = document.createElement('div');
   totalBar.style.cssText = 'margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #111;';
   const tl = document.createElement('div');
@@ -58,7 +72,8 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
     table.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;margin-bottom:4px;';
     const thead = document.createElement('thead');
     const hr = document.createElement('tr');
-    ['No.', '明細', '数量', '単位', '単価', '金額', '区分', '入力状態', '備考'].forEach((text, idx) => {
+    // 「区分」「入力状態」列はクライアント要望で削除（260720・3f）。
+    ['No.', '明細', '数量', '単位', '単価', '金額', '備考'].forEach((text, idx) => {
       const th = document.createElement('th');
       th.textContent = text;
       th.style.cssText = thStyle(idx >= 2 && idx <= 5 ? 'right' : 'left');
@@ -70,7 +85,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
     if (rows.length === 0) {
       const tr = document.createElement('tr');
       const td = document.createElement('td');
-      td.colSpan = 9;
+      td.colSpan = 7;
       td.textContent = '（該当なし）';
       td.style.cssText = tdStyle('left', 'color:#999;font-style:italic;');
       tr.appendChild(td);
@@ -85,8 +100,6 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
           r.unit,
           formatYen(r.unitPrice),
           formatYen(r.amount),
-          r.sectionType,
-          r.inputStatus,
           r.remark || ''
         ];
         cells.forEach((text, i) => {
@@ -100,7 +113,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
     }
     const trS = document.createElement('tr');
     const tdL = document.createElement('td');
-    tdL.colSpan = 8;
+    tdL.colSpan = 6;
     tdL.textContent = `${titlePlain} 小計`;
     tdL.style.cssText = tdStyle('right', 'font-weight:700;');
     trS.appendChild(tdL);
@@ -126,7 +139,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   fTable.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;';
   const ftHead = document.createElement('thead');
   const fhr = document.createElement('tr');
-  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態', '備考'].forEach((text, idx) => {
+  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '備考'].forEach((text, idx) => {
     const th = document.createElement('th');
     th.textContent = text;
     th.style.cssText = thStyle(idx >= 3 && idx <= 5 ? 'right' : 'left');
@@ -138,7 +151,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   if (payload.furniture.length === 0) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 9;
+    td.colSpan = 7;
     td.textContent = '（家具なし）';
     td.style.cssText = tdStyle('left', 'color:#999;font-style:italic;');
     tr.appendChild(td);
@@ -153,8 +166,6 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
         String(r.quantity),
         formatYen(r.unitPrice),
         formatYen(r.amount),
-        r.sectionType,
-        r.inputStatus,
         r.remark || ''
       ].forEach(
         (text, i) => {
@@ -169,7 +180,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   }
   const fTrSum = document.createElement('tr');
   const fTdL = document.createElement('td');
-  fTdL.colSpan = 8;
+  fTdL.colSpan = 6;
   fTdL.textContent = '家具 小計';
   fTdL.style.cssText = tdStyle('right', 'font-weight:700;');
   fTrSum.appendChild(fTdL);
@@ -190,7 +201,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   aTable.style.cssText = 'width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px;';
   const atHead = document.createElement('thead');
   const ahr = document.createElement('tr');
-  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '区分', '入力状態', '備考'].forEach((text, idx) => {
+  ['No.', '品名', 'ブランド', '数量', '単価', '金額', '備考'].forEach((text, idx) => {
     const th = document.createElement('th');
     th.textContent = text;
     th.style.cssText = thStyle(idx >= 3 && idx <= 5 ? 'right' : 'left');
@@ -202,7 +213,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   if (payload.aiItems.length === 0) {
     const tr = document.createElement('tr');
     const td = document.createElement('td');
-    td.colSpan = 9;
+    td.colSpan = 7;
     td.textContent = '（AI追加なし）';
     td.style.cssText = tdStyle('left', 'color:#999;font-style:italic;');
     tr.appendChild(td);
@@ -217,8 +228,6 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
         String(r.quantity),
         formatYen(r.unitPrice),
         formatYen(r.amount),
-        r.sectionType,
-        r.inputStatus,
         r.remark || ''
       ].forEach((text, i) => {
         const td = document.createElement('td');
@@ -231,7 +240,7 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   }
   const aTrSum = document.createElement('tr');
   const aTdL = document.createElement('td');
-  aTdL.colSpan = 8;
+  aTdL.colSpan = 6;
   aTdL.textContent = 'AI追加 小計';
   aTdL.style.cssText = tdStyle('right', 'font-weight:700;');
   aTrSum.appendChild(aTdL);
@@ -308,7 +317,8 @@ function buildMaterialBoardPage(
     if (!seenSurface.has(it.surface)) {
       seenSurface.add(it.surface);
       catSlot.textContent = `■${SURFACE_JP[it.surface] ?? ''}`;
-      catSlot.style.cssText = 'height:20px;line-height:20px;color:#cc0000;font-size:14px;font-weight:800;margin-bottom:2px;';
+      // 壁/床/天井などの面見出しは黒（クライアント要望・260720。旧: 赤 #cc0000）。
+      catSlot.style.cssText = 'height:20px;line-height:20px;color:#111;font-size:14px;font-weight:800;margin-bottom:2px;';
     } else {
       catSlot.style.cssText = 'height:20px;margin-bottom:2px;';
     }
@@ -335,9 +345,10 @@ function buildMaterialBoardPage(
       'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;word-break:break-all;';
     const mark = document.createElement('span');
     mark.textContent = '■';
-    mark.style.cssText = 'color:#cc0000;margin-right:2px;';
+    mark.style.cssText = 'color:#111;margin-right:2px;'; // 黒（クライアント要望・260720。旧: 赤 #cc0000）
     cap.appendChild(mark);
-    cap.appendChild(document.createTextNode(`${label}：${it.partCode}【${it.brand || 'メーカー名'}】`));
+    // 品番はユーザー入力の modelNumber を優先し、無ければ内部 partCode（productId）にフォールバック（3e・260720）。
+    cap.appendChild(document.createTextNode(`${label}：${it.modelNumber || it.partCode}【${it.brand || 'メーカー名'}】`));
 
     card.appendChild(imgWrap);
     card.appendChild(cap);
@@ -437,6 +448,10 @@ async function renderBoardToA3Page(pdf: jsPDF, node: HTMLElement): Promise<void>
 
 export async function downloadEstimatePdf(payload: EstimateExportPayload): Promise<void> {
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
+  // 見積先頭の画像（3h）は html2canvas 前に読み込んでおく（未ロードだと白紙で写るため・board 画像と同じ方式）。
+  if (payload.roomImageDataUrl) {
+    await preloadTextureUrls([payload.roomImageDataUrl]);
+  }
   const estimateEl = buildEstimatePage(payload);
   await renderNodeToPdfPage(pdf, estimateEl, true);
 

@@ -205,6 +205,11 @@ export interface AiEstimateItem {
   modelNumber?: string;
   /** 商品ページの URL（任意・260619）。 */
   productUrl?: string;
+  /**
+   * 紐付く生成画像（AI編集バージョン）のID（1c・260720）。指定時はその画像を表示中のときだけ見積に表示・集計する。
+   * 未指定（undefined）は「共通」＝全画像で表示する（既存項目・移行の安全策）。
+   */
+  versionId?: string;
 }
 
 /** AIエージェントへ渡す家具カタログ商品（推薦候補・Tier2 260620）。エージェントは番号(index)で参照する。 */

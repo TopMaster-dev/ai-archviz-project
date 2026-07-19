@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { beamExposedAreaM2, wallBeamWallCoverAreaM2 } from './beamArea.js';
+import { beamExposedAreaM2, wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } from './beamArea.js';
 
 describe('beamExposedAreaM2 (260611 #2a: count only faces not touching wall/ceiling/floor)', () => {
   it('free beam flush to ceiling: 2 sides + 2 ends + bottom (top touches ceiling)', () => {
@@ -67,5 +67,63 @@ describe('wallBeamWallCoverAreaM2 (260613: subtract wall-beam-covered strip from
     expect(wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 300, dropMm: 0 }, 0, roomH, roomH)).toBe(0);
     expect(wallBeamWallCoverAreaM2({ lengthMm: 0, heightMm: 300, wallIndex: 1 }, 0, roomH, roomH)).toBe(0);
     expect(wallBeamWallCoverAreaM2({ lengthMm: 3000, heightMm: 0, wallIndex: 1 }, 0, roomH, roomH)).toBe(0);
+  });
+});
+
+describe('freeBeamWallCoverAreaM2 (3c-iii: free beams along a wall reduce cross area)', () => {
+  const roomH = 2700;
+  // 壁: (0,0)→(3000,0) の3m壁（X軸に沿う・mm）。
+  const p1 = { x: 0, y: 0 };
+  const p2 = { x: 3000, y: 0 };
+
+  it('壁に沿って近接した自由梁: 覆う帯を差し引く（長さ2000×鉛直300 → 0.6㎡）', () => {
+    // cx=1500,cy=0（壁線上）, L=2000, angle=0(壁と平行), W=150, H=300, drop=0 → band[2400,2700]∩[0,2700]=300
+    const a = freeBeamWallCoverAreaM2(
+      { cx: 1500, cy: 0, lengthMm: 2000, widthMm: 150, angleDeg: 0, heightMm: 300, dropMm: 0 },
+      p1, p2, 0, roomH, roomH,
+    );
+    expect(a).toBeCloseTo(0.6, 5);
+  });
+
+  it('壁から離れた自由梁（部屋中央・平行）は 0', () => {
+    const a = freeBeamWallCoverAreaM2(
+      { cx: 1500, cy: 1000, lengthMm: 2000, widthMm: 150, angleDeg: 0, heightMm: 300, dropMm: 0 },
+      p1, p2, 0, roomH, roomH,
+    );
+    expect(a).toBe(0);
+  });
+
+  it('壁に直交する自由梁は「壁沿い」でないので 0', () => {
+    const a = freeBeamWallCoverAreaM2(
+      { cx: 1500, cy: 0, lengthMm: 2000, widthMm: 150, angleDeg: 90, heightMm: 300, dropMm: 0 },
+      p1, p2, 0, roomH, roomH,
+    );
+    expect(a).toBe(0);
+  });
+
+  it('壁端をはみ出す自由梁はセグメント長にクリップ（1800→3000で1200×300 → 0.36㎡）', () => {
+    // cx=2800, L=2000 → 射影 x∈[1800,3800] を [0,3000] にクリップ→1200mm
+    const a = freeBeamWallCoverAreaM2(
+      { cx: 2800, cy: 0, lengthMm: 2000, widthMm: 150, angleDeg: 0, heightMm: 300, dropMm: 0 },
+      p1, p2, 0, roomH, roomH,
+    );
+    expect(a).toBeCloseTo(0.36, 5);
+  });
+
+  it('鉛直の重なりが無い腰壁下段では 0（梁は上部の帯）', () => {
+    // band[2400,2700]・下段[0,900] は重ならない
+    const a = freeBeamWallCoverAreaM2(
+      { cx: 1500, cy: 0, lengthMm: 2000, widthMm: 150, angleDeg: 0, heightMm: 300, dropMm: 0 },
+      p1, p2, 0, 900, roomH,
+    );
+    expect(a).toBe(0);
+  });
+
+  it('壁梁(wallIndex 定義)は対象外で 0（自由梁専用）', () => {
+    const a = freeBeamWallCoverAreaM2(
+      { cx: 1500, cy: 0, lengthMm: 2000, widthMm: 150, angleDeg: 0, heightMm: 300, dropMm: 0, wallIndex: 0 },
+      p1, p2, 0, roomH, roomH,
+    );
+    expect(a).toBe(0);
   });
 });
