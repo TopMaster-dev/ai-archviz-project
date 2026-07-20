@@ -31,7 +31,7 @@ import { compressDataUrlToBudget, dataUrlTransmitBytes } from '../utils/compress
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
-import { clipOpeningsToPlacements, dropImplausibleOpenings } from '../utils/openingRects.js';
+import { sanitizeDetectedOpenings } from '../utils/openingRects.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
 import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
 import {
@@ -761,11 +761,9 @@ export function AiEditWorkspace({
           // F4: 開口をこの面自身の placements 外接矩形へクリップ（隣の面へ穴を空けない・はみ出し/交差なしは除去）。
           // R2-1: 面のほとんどを覆う非現実的な検出（誤検出）は丸ごと落として、面全体が未仕上げになる最悪ケースを防ぐ。
           // フラグ OFF なら決定論の開口除外を止め、プロンプトのみ（一様塗り＋見える窓のソフト保持）で対応する。
+          // 検出開口はクリップ→面積バックストップ→幾何フィルタ（天井際コーブ等の誤検出除去・260720）を一本化して健全化。
           const detectedOpenings = ENABLE_OPENING_PRESERVE ? openingsMap[o.id] : undefined;
-          const clippedOpenings =
-            detectedOpenings && detectedOpenings.length > 0
-              ? dropImplausibleOpenings(clipOpeningsToPlacements(detectedOpenings, o.placements), o.placements)
-              : [];
+          const clippedOpenings = sanitizeDetectedOpenings(detectedOpenings, o.placements);
           const excludeRects = clippedOpenings.length > 0 ? clippedOpenings : undefined;
           // 【合成マスクは「描いた範囲そのもの（o.placements）」で統一（260715 report: 横一直線の継ぎ目）】
           // 以前は差し替えで範囲を pad で上下左右へ広げた矩形(thisKeep)を採っていたが、背の高い家具では“上方向の pad”が
@@ -963,12 +961,7 @@ export function AiEditWorkspace({
           // F4: 各面の開口を“その面自身の placements”へクリップしてから束ねる＝隣の面の範囲へ穴を空けない（union は全範囲マスクのため）。
           // R2-1: 面のほとんどを覆う非現実的な検出は丸ごと落とす。フラグ OFF なら開口除外自体を止める。
           const allSurfaceOpenings = ENABLE_OPENING_PRESERVE
-            ? objectsScaled.flatMap((o) => {
-                const ops = openingsMap[o.id];
-                return ops && ops.length > 0
-                  ? dropImplausibleOpenings(clipOpeningsToPlacements(ops, o.placements), o.placements)
-                  : [];
-              })
+            ? objectsScaled.flatMap((o) => sanitizeDetectedOpenings(openingsMap[o.id], o.placements))
             : [];
           // R2-3: 戻し先は confineBase（仕上げ前の貼り合わせ結果）。開口の穴あけで原画に戻すと窓手前の家具が消えるため。
           // 面仕上げのみ: 最終合成の前に、仕上げパス出力(outUrl)の境界色を confineBase へ合わせ込む（露出/WBの段差＝
@@ -999,12 +992,7 @@ export function AiEditWorkspace({
       if (skipFinishFor1B && ENABLE_OPENING_PRESERVE && outUrl) {
         const aiFull = outUrl;
         try {
-          const openings1b = objectsScaled.flatMap((o) => {
-            const ops = openingsMap[o.id];
-            return ops && ops.length > 0
-              ? dropImplausibleOpenings(clipOpeningsToPlacements(ops, o.placements), o.placements)
-              : [];
-          });
+          const openings1b = objectsScaled.flatMap((o) => sanitizeDetectedOpenings(openingsMap[o.id], o.placements));
           if (openings1b.length > 0) {
             const openingFeather = Math.round(Math.max(baseW, baseH) * 0.004);
             // base=全画面AI(aiFull), edit=原画(baseScaled), placements=開口 → 開口内=原画の窓/ドア・その他=AI全画面。

@@ -4,6 +4,8 @@ import {
   placementsArea,
   clipOpeningsToPlacements,
   dropImplausibleOpenings,
+  dropCeilingArtifactOpenings,
+  sanitizeDetectedOpenings,
 } from './openingRects.js';
 import type { NormalizedRect } from '../types.js';
 
@@ -151,5 +153,64 @@ describe('dropImplausibleOpenings（誤検出バックストップ・R2-1）', (
   it('placements が退化なら素通し（分母0で誤爆しない）', () => {
     const o = [rect(0.1, 0.1, 0.2, 0.2)];
     expect(dropImplausibleOpenings(o, [])).toEqual(o);
+  });
+});
+
+describe('dropCeilingArtifactOpenings（天井際の誤検出フィルタ・260720）', () => {
+  const wall = [rect(0.0, 0.0, 1.0, 1.0)]; // faceH=1, faceW=1
+
+  it('壁の中ほどの本物の窓は残す', () => {
+    const win = rect(0.35, 0.3, 0.25, 0.3); // bottomRel=0.6, hFrac=0.3, aspect≈0.83
+    expect(dropCeilingArtifactOpenings([win], wall)).toEqual([win]);
+  });
+
+  it('床まで届く背の高いドア/窓は残す', () => {
+    const door = rect(0.4, 0.4, 0.15, 0.6); // bottomRel=1.0
+    expect(dropCeilingArtifactOpenings([door], wall)).toEqual([door]);
+  });
+
+  it('(1) 天井際スライバー（開口全体が上端の細い帯）は落とす＝コーブ/LED帯の誤検出', () => {
+    const cove = rect(0.2, 0.03, 0.5, 0.06); // bottomRel=0.09 ≤ 0.18
+    expect(dropCeilingArtifactOpenings([cove], wall)).toEqual([]);
+  });
+
+  it('(2) 上部の薄い横帯（見切り/モールディング）は落とす', () => {
+    const band = rect(0.1, 0.1, 0.5, 0.1); // bottomRel=0.2(>0.18), topRel=0.1, hFrac=0.1(<0.12), aspect=5(>3)
+    expect(dropCeilingArtifactOpenings([band], wall)).toEqual([]);
+  });
+
+  it('上寄りでも十分な高さがあれば残す（薄くない＝本物の高窓）', () => {
+    const highWin = rect(0.1, 0.1, 0.2, 0.35); // hFrac=0.35(>0.12), bottomRel=0.45(>0.18)
+    expect(dropCeilingArtifactOpenings([highWin], wall)).toEqual([highWin]);
+  });
+
+  it('下部の薄い横帯（腰高の帯等）は落とさない＝天井際の誤検出だけを狙う', () => {
+    const lowBand = rect(0.1, 0.7, 0.6, 0.1); // topRel=0.7(>0.35) → ルール2非該当・bottomRel=0.8 → ルール1非該当
+    expect(dropCeilingArtifactOpenings([lowBand], wall)).toEqual([lowBand]);
+  });
+
+  it('面が退化なら素通し（判定不能なら落とさない）', () => {
+    const o = [rect(0.2, 0.02, 0.5, 0.05)];
+    expect(dropCeilingArtifactOpenings(o, [])).toEqual(o);
+  });
+});
+
+describe('sanitizeDetectedOpenings（クリップ→面積→幾何の一本化・260720）', () => {
+  const wall = [rect(0.0, 0.0, 1.0, 1.0)];
+
+  it('本物の窓は残し、天井際の誤検出だけ落とす', () => {
+    const win = rect(0.35, 0.3, 0.25, 0.3);
+    const cove = rect(0.2, 0.03, 0.5, 0.06);
+    expect(sanitizeDetectedOpenings([win, cove], wall)).toEqual([win]);
+  });
+
+  it('未検出/空は空配列', () => {
+    expect(sanitizeDetectedOpenings(undefined, wall)).toEqual([]);
+    expect(sanitizeDetectedOpenings([], wall)).toEqual([]);
+  });
+
+  it('面のほとんどを覆う非現実的検出は面積バックストップで落ちる', () => {
+    const huge = rect(0.05, 0.05, 0.9, 0.9); // 0.81 > 0.7
+    expect(sanitizeDetectedOpenings([huge], wall)).toEqual([]);
   });
 });

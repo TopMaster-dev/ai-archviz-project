@@ -115,3 +115,60 @@ export function clipOpeningsToPlacements(
   }
   return out;
 }
+
+/**
+ * 幾何ベースの誤検出フィルタ（260720 クライアント報告）。折上げ天井の間接照明（コーブ/LED）帯・下がり天井
+ * （ソフィット）の見切り・廻り縁・天井際の明るい帯などが「窓・ドア」として誤検出されると、その矩形を面から穴あけ
+ * →「元の壁が露出した灰色の帯/矩形」が面の上端（天井際）に出る。実在の窓・ドアは壁面の中ほどまで縦に伸び、天井に
+ * ぴったり貼り付いた薄い横帯にはならない。次のいずれかに該当する開口を「窓/ドアではない」として落とす:
+ *  (1) 天井際スライバー: 開口“全体”が面（placements 外接矩形）の上端 ceilingBandFrac 以内に収まる
+ *      （＝下端も天井際の細い帯の中。窓なら下枠がもっと下にある）。
+ *  (2) 上部の薄い横帯: 上寄り（開口上端が面の上 upperZoneFrac 以内）かつ 薄い（高さ<面高×minOpeningHFrac）
+ *      かつ 横長（幅/高さ>maxThinAspect）＝間接照明のコーブ/見切り線/モールディングの形。
+ * 面（placements）が退化なら素通し（判定不能なら落とさない＝取りこぼしを避ける）。純関数（DOM 非依存・テスト可能）。
+ */
+export function dropCeilingArtifactOpenings(
+  openings: NormalizedRect[],
+  placements: NormalizedRect[],
+  opts?: { ceilingBandFrac?: number; maxThinAspect?: number; minOpeningHFrac?: number; upperZoneFrac?: number }
+): NormalizedRect[] {
+  const bb = placementsBBox(placements);
+  if (!bb) return openings;
+  const faceH = bb.y1 - bb.y0;
+  const faceW = bb.x1 - bb.x0;
+  if (faceH <= 0 || faceW <= 0) return openings;
+  const ceilingBandFrac = opts?.ceilingBandFrac ?? 0.18;
+  const maxThinAspect = opts?.maxThinAspect ?? 3.0;
+  const minOpeningHFrac = opts?.minOpeningHFrac ?? 0.12;
+  const upperZoneFrac = opts?.upperZoneFrac ?? 0.35;
+  return openings.filter((o) => {
+    const oh = Math.max(0, o.height);
+    const ow = Math.max(0, o.width);
+    if (oh <= 0 || ow <= 0) return false; // 退化開口は落とす
+    const topRel = (o.y - bb.y0) / faceH; // 0=面の上端（天井際）
+    const bottomRel = (o.y + oh - bb.y0) / faceH;
+    const hFrac = oh / faceH;
+    const aspect = ow / oh;
+    // (1) 天井際スライバー: 開口全体が面上端の細い帯に収まる → 窓ではない
+    if (bottomRel <= ceilingBandFrac) return false;
+    // (2) 上部の薄い横帯（コーブ/見切り/モールディング）: 上寄り かつ 薄い かつ 横長 → 窓ではない
+    if (topRel <= upperZoneFrac && hFrac < minOpeningHFrac && aspect > maxThinAspect) return false;
+    return true;
+  });
+}
+
+/**
+ * 検出開口の後処理を一本化（260720）。クリップ（他面へはみ出さない・F4）→ 面積バックストップ（>70%は誤検出・R2-1）→
+ * 幾何フィルタ（天井際の帯・コーブ等の誤検出を落とす）の順で適用する。空/未検出は空配列を返す。呼び出し側は本関数だけ
+ * 使えば、全経路（各範囲/最終union/1-B開口復元）で同じ健全化が保証される。
+ */
+export function sanitizeDetectedOpenings(
+  raw: NormalizedRect[] | undefined,
+  placements: NormalizedRect[]
+): NormalizedRect[] {
+  if (!raw || raw.length === 0) return [];
+  return dropCeilingArtifactOpenings(
+    dropImplausibleOpenings(clipOpeningsToPlacements(raw, placements), placements),
+    placements
+  );
+}
