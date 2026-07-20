@@ -7,7 +7,8 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateAgentReply, generateGeminiImage, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage, type AgentAttachment } from './lib/gemini.js';
+import type { AgentCatalogEntry } from './types.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
 import { runAiEdit } from './lib/aiEditCore.js';
@@ -262,7 +263,7 @@ export default defineConfig(({ mode }) => {
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキーが見つかりません。' }));
                         }
-                        const parsed = JSON.parse(body) as { messages?: AgentChatMessage[]; imageDataUrl?: string | null };
+                        const parsed = JSON.parse(body) as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[] };
                         const messages: AgentChatMessage[] = Array.isArray(parsed.messages)
                             ? parsed.messages
                                   .filter(

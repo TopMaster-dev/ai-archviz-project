@@ -267,6 +267,24 @@ export function AiEditWorkspace({
   const [candidatePick, setCandidatePick] = useState<
     { parentId: string; baseImageDataUrl: string; candidates: string[] } | null
   >(null);
+  // 【生成中の進捗表示（260720 クライアント要望 point3）】3枚生成でロードが長くなり「固まった？」と不安になる問題への対策。
+  // 候補は逐次生成（下の候補ループが await 逐次）のため「N/total 完了」を実測でき、完了した候補は届いた順にサムネで
+  // 見せられる＝進んでいることが見える＝最大の不安解消。正確な％は生成APIが途中経過を返さないため出さない（作り物にしない）。
+  const [genProgress, setGenProgress] = useState<{ total: number; done: string[] } | null>(null);
+  const [genElapsedSec, setGenElapsedSec] = useState(0);
+  // 経過秒カウントアップ（実測＝誠実）。生成中(isSubmitting)だけ動かし、終了で 0 に戻す。
+  useEffect(() => {
+    if (!isSubmitting) {
+      setGenElapsedSec(0);
+      return;
+    }
+    setGenElapsedSec(0);
+    const startedAt = Date.now();
+    const id = window.setInterval(() => {
+      setGenElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 1000);
+    return () => window.clearInterval(id);
+  }, [isSubmitting]);
   // AI編集キャンバスの閲覧ズーム（260708 クライアント要望）: マウスホイールで拡大縮小し細部を確認できる
   // （DL→Photoshop/プロパティで確認する手間の削減）。表示専用＝拡大中は作図を無効化しドラッグはパン（移動）、
   // 等倍(1)で作図に戻る。imgLayout は wrapper 実寸から算出＝変形に依存しないので、画像＋オーバーレイをまとめて
@@ -704,6 +722,10 @@ export function AiEditWorkspace({
       const allPlacements = objectsScaled.flatMap((o) => o.placements);
       const unionBBox = allPlacements.length > 0 ? unionBBoxOfPlacements(allPlacements) : null;
       const sharedCropPx: CropPx | null = cropForBBox(unionBBox);
+      // 【面仕上げのみの編集か（260720・境界線対策 point1-A）】全対象が面仕上げ（壁/床/天井）のときだけ、合成の
+      // フェザーを両側（外側にも）掛けて境界のすぐ外側の硬い縁を溶かす。家具差し替えを含むと外側フェザーで元家具の
+      // ゴースト二重縁が出るため、混在時は従来どおり内側限定に留める（安全側）。
+      const surfaceOnly = objectsScaled.length > 0 && objectsScaled.every((o) => isSurfacePlaneFinish(o));
 
       // editOneRegion: base に対して1領域 o を Gemini で編集し、範囲外を base のまま保った全画像を返す（失敗は null）。
       const editOneRegion = async (
@@ -783,11 +805,13 @@ export function AiEditWorkspace({
             const full = await pasteCropIntoBase(base, fittedCrop, cropPx, baseW, baseH);
             // 合成マスクは「描いた範囲(o.placements)」で閉じ込める（差し替え・テキスト・削除すべて共通）。クロップは
             // 送っているので文脈は担保・マスク外は base（範囲外は変わらない＝近くの似た家具や壁も保護・上の壁への横線も出ない）。
-            const matched = await harmonizeEditToBase(base, full, o.placements, baseW, baseH);
+            // ゲイン補正の適用域を合成の貼り込み域（dilate ぶん膨張）に合わせる＝境界外側の未補正リングを無くす（260720）。
+            const matched = await harmonizeEditToBase(base, full, o.placements, baseW, baseH, { applyDilatePx: dilate });
             // 複数範囲でも少しだけ dilate して合成する＝隣接する範囲どうしの境界に base の細い帯（白線）が
             // 残らないようにする（②・260717）。単一範囲は従来どおり dilate（接地影を少し残す）。
+            // 面仕上げ(isSurface)は featherOutside=true で両側フェザー＝囲み外側の硬い境界線を溶かす（point1-A・260720）。
             return {
-              url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate, excludeRects),
+              url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate, excludeRects, isSurface),
               composited: true,
             };
           }
@@ -812,11 +836,13 @@ export function AiEditWorkspace({
             // 合成を強制するときはここで cover に取り直して base と座標を揃える（端がわずかに切れるが黒帯より良い＝非合成経路と同方針）。
             const compFitted =
               mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
-            const matched = await harmonizeEditToBase(base, compFitted, o.placements, baseW, baseH);
+            // ゲイン補正の適用域を合成の貼り込み域（dilate 膨張）に合わせて境界外側の未補正リングを無くす（260720）。
+            const matched = await harmonizeEditToBase(base, compFitted, o.placements, baseW, baseH, { applyDilatePx: dilate });
             // 複数範囲でも dilate を効かせ、隣接範囲の境界に base の白線が残るのを防ぐ（②・260717。従来は multiRegion で 0）。
             // 面仕上げは検出した開口(excludeRects)をマスクから除外＝窓・ドアを元のまま保持する（case B・260718）。
+            // 面仕上げ(isSurface)は featherOutside=true で両側フェザー＝囲み外側の硬い境界線を溶かす（point1-A・260720）。
             return {
-              url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate, excludeRects),
+              url: await compositeMaskedEdit(base, matched, o.placements, baseW, baseH, feather, dilate, excludeRects, isSurface),
               composited: true,
             };
           }
@@ -912,7 +938,9 @@ export function AiEditWorkspace({
       // 合成マスクで閉じ込めた編集があったとき（anyComposited）だけ適用する（単一の実質全画面編集は対象外＝従来どおり全面採用）。
       if (anyComposited && allPlacements.length > 0) {
         try {
-          const unionFeather = Math.round(Math.max(baseW, baseH) * 0.008);
+          // 面仕上げのみの編集では、最終の union 境界（＝実際にユーザーが見ていた「囲みのすぐ外側の線」）を
+          // 両側フェザーで溶かし、フェザー幅も広げる（0.008→0.012）。混在編集は従来どおり内側限定・標準幅（安全側）。
+          const unionFeather = Math.round(Math.max(baseW, baseH) * (surfaceOnly ? 0.012 : 0.008));
           const unionDilate = Math.round(Math.max(baseW, baseH) * 0.015); // 接地影を少し残しつつ、範囲から離れた新規家具は確実に除外。
           // 検出した開口（窓・ドア）は最終合成でも除外＝仕上げパスが窓を塗り直してもここで元へ戻す（case B・260718）。
           // F1: isSurfacePlaneFinish フィルタを外し「検出された開口」を根拠にする（開口は面領域でのみ解析モデルが返すため安全）。
@@ -927,15 +955,21 @@ export function AiEditWorkspace({
               })
             : [];
           // R2-3: 戻し先は confineBase（仕上げ前の貼り合わせ結果）。開口の穴あけで原画に戻すと窓手前の家具が消えるため。
+          // 面仕上げのみ: 最終合成の前に、仕上げパス出力(outUrl)の境界色を confineBase へ合わせ込む（露出/WBの段差＝
+          // 窓際で顕著だった境界線の主因を消す）。適用域は unionDilate に合わせる。退化/失敗時は outUrl のまま（フェイルソフト）。
+          const confined = surfaceOnly
+            ? await harmonizeEditToBase(confineBase, outUrl, allPlacements, baseW, baseH, { applyDilatePx: unionDilate })
+            : outUrl;
           outUrl = await compositeMaskedEdit(
             confineBase,
-            outUrl,
+            confined,
             allPlacements,
             baseW,
             baseH,
             unionFeather,
             unionDilate,
-            allSurfaceOpenings.length > 0 ? allSurfaceOpenings : undefined
+            allSurfaceOpenings.length > 0 ? allSurfaceOpenings : undefined,
+            surfaceOnly
           );
         } catch {
           /* 最終閉じ込め失敗は仕上げ結果をそのまま採用（フェイルソフト） */
@@ -982,14 +1016,20 @@ export function AiEditWorkspace({
       // 【複数候補から選ぶ（Option 1・260717 クライアント要望）】candidateCount>1 のとき同一入力で複数回生成し、
       // ユーザーが最良の1枚を選ぶ（AI生成のばらつきを味方につける＝③④の“当たり外れ”対策）。1のときは従来どおり即確定。
       const count = Math.min(3, Math.max(1, Math.round(candidateCount)));
+      setGenProgress({ total: count, done: [] }); // オーバーレイに進捗（N/total・サムネ）を出す（point3・260720）。
       if (count <= 1) {
-        commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, await produceOne());
+        const only = await produceOne();
+        setGenProgress({ total: 1, done: [only] });
+        commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, only);
       } else {
         const results: string[] = [];
         let lastErr: unknown = null;
         for (let i = 0; i < count; i++) {
           try {
-            results.push(await produceOne());
+            const r = await produceOne();
+            results.push(r);
+            // 完了した候補を即オーバーレイへ反映（届いた順にサムネ表示＝進捗が見える・point3）。
+            setGenProgress({ total: count, done: [...results] });
           } catch (e) {
             lastErr = e; // 一部候補の失敗は許容（他が出れば選べる）。全滅なら下で throw。
           }
@@ -1013,6 +1053,7 @@ export function AiEditWorkspace({
       setSubmitError(err instanceof Error ? err.message : 'エラー');
     } finally {
       setIsSubmitting(false);
+      setGenProgress(null); // 進捗表示を片付ける（オーバーレイは isSubmitting で閉じるが状態も戻す）。
     }
   }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality, candidateCount, commitEditResult]);
 
@@ -2266,14 +2307,55 @@ export function AiEditWorkspace({
           分かりにくいため、AIデザイン提案/編集実行の実行中をはっきり示す。3Dレンダのオーバーレイと同方針）。 */}
       {isSubmitting && (
         <div className="fixed inset-0 z-[10050] flex flex-col items-center justify-center bg-zinc-950/90 backdrop-blur-sm">
-          <div className="flex flex-col items-center gap-6 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-8 text-center shadow-2xl">
+          <div className="flex w-full max-w-md flex-col items-center gap-5 rounded-2xl border border-zinc-800 bg-zinc-900/80 p-8 text-center shadow-2xl">
             <Loader2 className="h-14 w-14 animate-spin text-purple-400" />
             <div>
               <h3 className="mb-2 bg-gradient-to-r from-blue-400 to-purple-500 bg-clip-text text-xl font-bold text-transparent">
                 AIが画像を生成中…
               </h3>
-              <p className="text-sm text-zinc-400">しばらくお待ちください。</p>
+              {/* 進捗（point3・260720）: 候補は逐次生成のため「N/total 完了」を実測表示。正確な％は生成APIが
+                  途中経過を返さないため出さない（＝作り物にしない・誠実）。経過秒は実測。 */}
+              {genProgress && genProgress.total > 1 ? (
+                <p className="text-sm font-bold text-emerald-300">
+                  {genProgress.done.length} / {genProgress.total} 枚 完了
+                </p>
+              ) : (
+                <p className="text-sm text-zinc-400">しばらくお待ちください。</p>
+              )}
+              <p className="mt-1 text-xs text-zinc-500">経過 {genElapsedSec} 秒（通常 30〜90 秒ほど）</p>
             </div>
+            {/* 進捗バーは「完了枚数/total」で確定分だけ塗る（実測ベース）。1枚だけのときは途中経過が取れないので出さない。 */}
+            {genProgress && genProgress.total > 1 && (
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-zinc-800">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-blue-400 to-purple-500 transition-all duration-500"
+                  style={{ width: `${Math.round((genProgress.done.length / genProgress.total) * 100)}%` }}
+                />
+              </div>
+            )}
+            {/* 完了した候補を届いた順にサムネ表示＝進んでいることが見える（フリーズ不安の解消・最大の効果）。 */}
+            {genProgress && genProgress.total > 1 && (
+              <div className="flex w-full items-center justify-center gap-2">
+                {Array.from({ length: genProgress.total }).map((_, i) => {
+                  const url = genProgress.done[i];
+                  return url ? (
+                    <img
+                      key={i}
+                      src={url}
+                      alt={`候補${i + 1}`}
+                      className="h-16 w-16 rounded-md border border-emerald-500/50 object-cover"
+                    />
+                  ) : (
+                    <div
+                      key={i}
+                      className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-zinc-700 bg-zinc-800/40"
+                    >
+                      <Loader2 className="h-4 w-4 animate-spin text-zinc-600" />
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
           {/* 生成待ち時間の右カラム: 上半分=広告／下半分=お役立ち情報（260707 クライアント要望の2分割）。 */}
           <RenderInfoColumn className="absolute right-6 top-1/2 -translate-y-1/2" />

@@ -34,7 +34,15 @@ export async function compositeMaskedEdit(
   featherPx?: number,
   dilatePx?: number,
   /** 面から除外する開口（窓・ドア等）。ここはマスクから穴をあけ、合成後 base のまま（＝窓/ドアを保持）にする（case B・260718）。 */
-  excludeRects?: NormalizedRect[]
+  excludeRects?: NormalizedRect[],
+  /**
+   * 面仕上げ（壁/床/天井の塗装・張替・タイル等）向け: フェザーをマスクの「外側」にも掛けて境界を両側でなじませる
+   * （内側限定クリップを外す）。true にすると、囲みのすぐ外側に残っていた“硬い縁（境界線）”が両側フェザーで溶ける
+   * （260720 クライアント報告・窓際で顕著だった段差の主因への対策）。
+   * 家具の差し替え等では false（＝内側限定）のまま: 外側へアルファがにじむと、境界の外に元家具の輪郭が薄く残る
+   * 「二重縁（ゴースト）」が出るため。既定 false＝従来挙動を厳密維持。
+   */
+  featherOutside?: boolean
 ): Promise<string> {
   if (!placements || placements.length === 0 || width <= 0 || height <= 0) return editDataUrl;
   // フェザーは控えめに（内側のみに適用するため小さめで十分・境界の名残を減らす・260702）。
@@ -111,14 +119,19 @@ export async function compositeMaskedEdit(
         // ctx.filter 未対応エンジンでは無視され、ハードな縁になるだけ（致命ではない）。
         bctx.filter = `blur(${feather}px)`;
         bctx.drawImage(mask, 0, 0);
-        // フェザーを「内側のみ」に限定（260702・クライアント報告「境界に前の下絵の名残が残る」対応）:
-        // ぼかしで多角形の外側へ広がったアルファを、元の多角形（ハードエッジ）でクリップして取り除く。
-        // これで編集は必ず描いた線の内側に収まり（拘束力）、線の外側へベース画像の元オブジェクトがにじんで
-        // 残る「境界の名残（二重縁）」も出さない。内側だけがなだらかに馴染む。
         bctx.filter = 'none';
-        bctx.globalCompositeOperation = 'destination-in';
-        bctx.drawImage(mask, 0, 0);
-        bctx.globalCompositeOperation = 'source-over';
+        if (!featherOutside) {
+          // フェザーを「内側のみ」に限定（既定・260702・クライアント報告「境界に前の下絵の名残が残る」対応）:
+          // ぼかしで多角形の外側へ広がったアルファを、元の多角形（ハードエッジ）でクリップして取り除く。
+          // これで編集は必ず描いた線の内側に収まり（拘束力）、線の外側へベース画像の元オブジェクトがにじんで
+          // 残る「境界の名残（二重縁）」も出さない。家具差し替え等はこちら。
+          bctx.globalCompositeOperation = 'destination-in';
+          bctx.drawImage(mask, 0, 0);
+          bctx.globalCompositeOperation = 'source-over';
+        }
+        // featherOutside=true（面仕上げ）: 内側限定クリップを行わない＝アルファが境界の“外側”へも ~feather ぶん
+        // なだらかに減衰する（両側フェザー）。生成画像は全画面なので外側にはみ出す画素も同じ面の描画であり、
+        // ベースの同じ面へ滑らかに溶ける＝「囲みのすぐ外側に残る硬い縁（境界線）」が消える（260720）。
         maskCanvas = blur;
       }
     }

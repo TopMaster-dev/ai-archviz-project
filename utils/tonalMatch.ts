@@ -109,10 +109,26 @@ function drawToImageData(
   return ctx.getImageData(0, 0, width, height);
 }
 
-/** compositeMaskedEdit と同一の塗り経路で union マスクを描く（同じ領域で測るため）。 */
-function fillUnionMask(mctx: CanvasRenderingContext2D, placements: NormalizedRect[], width: number, height: number): void {
+/**
+ * compositeMaskedEdit と同一の塗り経路で union マスクを描く（同じ領域で測る／同じ領域へ適用するため）。
+ * dilatePx>0 のときは compositeMaskedEdit と同じ要領で外側へ膨張させる（多角形はストローク線幅 dilate*2・矩形は各辺拡張）。
+ */
+function fillUnionMask(
+  mctx: CanvasRenderingContext2D,
+  placements: NormalizedRect[],
+  width: number,
+  height: number,
+  dilatePx = 0,
+): void {
   mctx.clearRect(0, 0, width, height);
   mctx.fillStyle = 'rgba(255,255,255,1)';
+  const dilate = Math.max(0, Math.round(dilatePx));
+  if (dilate > 0) {
+    mctx.strokeStyle = 'rgba(255,255,255,1)';
+    mctx.lineJoin = 'round';
+    mctx.lineCap = 'round';
+    mctx.lineWidth = dilate * 2;
+  }
   for (const p of placements) {
     if (p.points && p.points.length >= 3) {
       mctx.beginPath();
@@ -122,6 +138,14 @@ function fillUnionMask(mctx: CanvasRenderingContext2D, placements: NormalizedRec
       }
       mctx.closePath();
       mctx.fill('nonzero');
+      if (dilate > 0) mctx.stroke();
+    } else if (dilate > 0) {
+      mctx.fillRect(
+        p.x * width - dilate,
+        p.y * height - dilate,
+        p.width * width + dilate * 2,
+        p.height * height + dilate * 2,
+      );
     } else {
       mctx.fillRect(p.x * width, p.y * height, p.width * width, p.height * height);
     }
@@ -138,7 +162,7 @@ export async function harmonizeEditToBase(
   placements: NormalizedRect[],
   width: number,
   height: number,
-  opts?: { ringPx?: number; maxGain?: number; minRingPixels?: number },
+  opts?: { ringPx?: number; maxGain?: number; minRingPixels?: number; applyDilatePx?: number },
 ): Promise<string> {
   if (!placements || placements.length === 0 || width <= 0 || height <= 0) return editDataUrl;
   if (typeof document === 'undefined') return editDataUrl;
@@ -224,7 +248,23 @@ export async function harmonizeEditToBase(
     // ゲインが実質1（補正不要）なら再エンコード（JPEG劣化）せず元を返す。
     if (res.gain[0] === 1 && res.gain[1] === 1 && res.gain[2] === 1) return editDataUrl;
 
-    applyGainInMask(editImageData.data, maskData.data, res.gain, px);
+    // 適用マスク（260720）: 合成(compositeMaskedEdit)が実際に貼り込むのは dilate ぶん外側まで膨らんだ領域。
+    // ゲイン補正を undilated マスクだけに掛けると、境界のすぐ外側に貼られる“未補正の生成画素リング”が段差＝境界線
+    // として残る（クライアント報告・窓際で顕著）。計測（リング）は精度優先で undilated のまま、適用だけ合成と同じ
+    // dilate に合わせて広げ、貼り込まれる帯まで確実に色合わせする。applyDilatePx 未指定(=0)なら従来どおり undilated。
+    const applyDilate = Math.max(0, Math.round(opts?.applyDilatePx ?? 0));
+    let applyMaskData: ImageData = maskData;
+    if (applyDilate > 0) {
+      const am = document.createElement('canvas');
+      am.width = width;
+      am.height = height;
+      const amctx = am.getContext('2d', { willReadFrequently: true });
+      if (amctx) {
+        fillUnionMask(amctx, placements, width, height, applyDilate);
+        applyMaskData = amctx.getImageData(0, 0, width, height);
+      }
+    }
+    applyGainInMask(editImageData.data, applyMaskData.data, res.gain, px);
     ectx.putImageData(editImageData, 0, 0);
 
     const isJpeg =
