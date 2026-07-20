@@ -121,9 +121,10 @@ export function clipOpeningsToPlacements(
  * （ソフィット）の見切り・廻り縁・天井際の明るい帯などが「窓・ドア」として誤検出されると、その矩形を面から穴あけ
  * →「元の壁が露出した灰色の帯/矩形」が面の上端（天井際）に出る。実在の窓・ドアは壁面の中ほどまで縦に伸び、天井に
  * ぴったり貼り付いた薄い横帯にはならない。次のいずれかに該当する開口を「窓/ドアではない」として落とす:
- *  (1) 天井際スライバー: 開口“全体”が面（placements 外接矩形）の上端 ceilingBandFrac 以内に収まる
- *      （＝下端も天井際の細い帯の中。窓なら下枠がもっと下にある）。
- *  (2) 上部の薄い横帯: 上寄り（開口上端が面の上 upperZoneFrac 以内）かつ 薄い（高さ<面高×minOpeningHFrac）
+ *  (1) 天井際バンド: 開口“全体”が面（placements 外接矩形）の上端 ceilingBandFrac 以内に収まる
+ *      （＝下端も上端の帯の中。実在の窓・ドアは下枠が壁の中ほど＝面の 55〜65% あたりまで下がるので、上端 30% に
+ *      すっぽり収まる開口は窓ではない＝天井まわりの誤検出）。260720 実機で薄帯より“やや厚い”誤検出が残ったため 0.30 に拡大。
+ *  (2) 上部の薄めの横帯: 上寄り（開口上端が面の上 upperZoneFrac 以内）かつ 低め（高さ<面高×minOpeningHFrac）
  *      かつ 横長（幅/高さ>maxThinAspect）＝間接照明のコーブ/見切り線/モールディングの形。
  * 面（placements）が退化なら素通し（判定不能なら落とさない＝取りこぼしを避ける）。純関数（DOM 非依存・テスト可能）。
  */
@@ -137,9 +138,10 @@ export function dropCeilingArtifactOpenings(
   const faceH = bb.y1 - bb.y0;
   const faceW = bb.x1 - bb.x0;
   if (faceH <= 0 || faceW <= 0) return openings;
-  const ceilingBandFrac = opts?.ceilingBandFrac ?? 0.18;
-  const maxThinAspect = opts?.maxThinAspect ?? 3.0;
-  const minOpeningHFrac = opts?.minOpeningHFrac ?? 0.12;
+  // 実在の窓・ドアは面の中ほど（下枠 55〜65%）まで縦に伸びるため、上端 30% に収まる開口は落として問題ない。
+  const ceilingBandFrac = opts?.ceilingBandFrac ?? 0.30;
+  const maxThinAspect = opts?.maxThinAspect ?? 2.2;
+  const minOpeningHFrac = opts?.minOpeningHFrac ?? 0.2;
   const upperZoneFrac = opts?.upperZoneFrac ?? 0.35;
   return openings.filter((o) => {
     const oh = Math.max(0, o.height);

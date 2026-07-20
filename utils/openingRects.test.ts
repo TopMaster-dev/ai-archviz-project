@@ -189,6 +189,18 @@ describe('dropCeilingArtifactOpenings（天井際の誤検出フィルタ・2607
     expect(dropCeilingArtifactOpenings([lowBand], wall)).toEqual([lowBand]);
   });
 
+  it('やや厚い天井際パッチ（上端30%以内に収まる）も落とす（260720 しきい値強化）', () => {
+    // 薄帯より厚め（h=0.16）だが下端 0.24 ≤ 0.30 → 天井際バンドで落とす（旧 0.18 では取りこぼしていたケース）。
+    const patch = rect(0.08, 0.08, 0.4, 0.16);
+    expect(dropCeilingArtifactOpenings([patch], wall)).toEqual([]);
+  });
+
+  it('中ほどまで下がる窓は上端付近から始まっても残す（下端が30%超）', () => {
+    // 上端 0.25 から始まるが下端 0.5（>0.30）→ 天井際バンド非該当。高さ十分（0.25>0.20）→ 薄帯ルール非該当。
+    const win = rect(0.2, 0.25, 0.3, 0.25);
+    expect(dropCeilingArtifactOpenings([win], wall)).toEqual([win]);
+  });
+
   it('面が退化なら素通し（判定不能なら落とさない）', () => {
     const o = [rect(0.2, 0.02, 0.5, 0.05)];
     expect(dropCeilingArtifactOpenings(o, [])).toEqual(o);
