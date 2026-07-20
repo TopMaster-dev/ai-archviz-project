@@ -70,6 +70,21 @@ function normalizeImageDataUrl(raw: string | null | undefined): string | null {
   return s;
 }
 
+/** applyAreaEditFinish に渡す“仕上げ段”のコンテキスト（生成入力に依存する値。候補ごとに保持し、本番確定で再利用する・point2）。 */
+type AreaEditFinishCtx = {
+  baseW: number;
+  baseH: number;
+  imageSize: string;
+  editedHasReplacement: boolean;
+  skipFinishFor1B: boolean;
+  anyComposited: boolean;
+  allPlacements: NormalizedRect[];
+  surfaceOnly: boolean;
+  openings: NormalizedRect[];
+  keepQuality: boolean;
+  isFreePlan: boolean;
+};
+
 function getContainedRect(
   containerW: number,
   containerH: number,
@@ -266,8 +281,10 @@ export function AiEditWorkspace({
   const [candidateCount, setCandidateCount] = useState(1);
   // 生成した複数候補と、採用時に版を作るための親情報。null のときピッカー非表示。
   const [candidatePick, setCandidatePick] = useState<
-    { parentId: string; baseImageDataUrl: string; candidates: string[] } | null
+    { parentId: string; baseImageDataUrl: string; candidates: { url: string; ctx: AreaEditFinishCtx }[] } | null
   >(null);
+  // 選んだ候補を本番確定（仕上げ Gemini パス）している最中のローディング（point2・260721）。
+  const [finalizingCandidate, setFinalizingCandidate] = useState(false);
   // 【生成中の進捗表示（260720 クライアント要望 point3）】3枚生成でロードが長くなり「固まった？」と不安になる問題への対策。
   // 候補は逐次生成（下の候補ループが await 逐次）のため「N/total 完了」を実測でき、完了した候補は届いた順にサムネで
   // 見せられる＝進んでいることが見える＝最大の不安解消。正確な％は生成APIが途中経過を返さないため出さない（作り物にしない）。
@@ -606,6 +623,101 @@ export function AiEditWorkspace({
     [versions, onEditSuccess, draftObjects]
   );
 
+  // 【コスト2段化（point2・260721 クライアント要望）】エリア編集の“後段（仕上げ）”を1関数に集約し、フラグで
+  // 走らせる段を切り替えられるようにする。候補（ドラフト）生成では高コストな段（仕上げ Gemini パス・精細化・
+  // フリープラン後処理）を回さず素早く・安く複数枚を提示し、ユーザーが1枚を選んだ“本番確定”のときにだけそれらを
+  // 通す。本番はドラフト画像“そのもの”を土台にする（元画像から作り直さない）ので、選んだ構図・家具の形はそのまま
+  // 保たれる（＝プレビューと本番のズレが出ない）。単一候補は全段 true で従来と完全に同一挙動。
+  const applyAreaEditFinish = useCallback(
+    async (
+      input: string,
+      confineBase: string,
+      baseScaled: string,
+      ctx: AreaEditFinishCtx,
+      flags: { runFinishing: boolean; runOpeningRestore: boolean; runEnhance: boolean; runFreePlan: boolean }
+    ): Promise<string> => {
+      const { baseW, baseH, imageSize, editedHasReplacement, skipFinishFor1B, anyComposited, allPlacements, surfaceOnly, openings } = ctx;
+      let outUrl = input;
+      // 仕上げパス（naturalize/harmonize）。1-B（面仕上げのみ全画面採用）は継ぎ目が無いので元々回さない。
+      if (flags.runFinishing && !skipFinishFor1B) {
+        const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
+        try {
+          const finishBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
+          const hres = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({ baseImage: finishBase, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+          });
+          const hdata = await hres.json();
+          if (hdata.success && hdata.url) {
+            void recordAiUsage({ feature: 'ai_edit', usage: hdata.usage, model: hdata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+            outUrl = await fitDataUrlToSize(hdata.url as string, baseW, baseH, 'cover');
+          }
+        } catch {
+          /* なじませ失敗は入力（貼り合わせ結果）を採用 */
+        }
+      }
+      // 最終の閉じ込め（範囲外を base へ戻す／開口を除外）。仕上げパスが範囲外へ描いた家具や継ぎ目をここで是正。
+      if (anyComposited && allPlacements.length > 0) {
+        try {
+          const unionFeather = Math.round(Math.max(baseW, baseH) * (surfaceOnly ? 0.012 : 0.008));
+          const unionDilate = Math.round(Math.max(baseW, baseH) * 0.015);
+          const confined = surfaceOnly
+            ? await harmonizeEditToBase(confineBase, outUrl, allPlacements, baseW, baseH, { applyDilatePx: unionDilate })
+            : outUrl;
+          outUrl = await compositeMaskedEdit(
+            confineBase,
+            confined,
+            allPlacements,
+            baseW,
+            baseH,
+            unionFeather,
+            unionDilate,
+            openings.length > 0 ? openings : undefined,
+            surfaceOnly
+          );
+        } catch {
+          /* 最終閉じ込め失敗は仕上げ結果をそのまま採用 */
+        }
+      }
+      // 1-B の開口復元（面仕上げのみ全画面採用時）。ドラフト生成時に一度実施済みのため、本番確定では再実施しない
+      // （runOpeningRestore=false＝冪等な再貼りを省く）。
+      if (flags.runOpeningRestore && skipFinishFor1B && openings.length > 0 && baseScaled) {
+        const aiFull = outUrl;
+        try {
+          const openingFeather = Math.round(Math.max(baseW, baseH) * 0.004);
+          outUrl = await compositeMaskedEdit(aiFull, baseScaled, openings, baseW, baseH, openingFeather, 0, undefined, false);
+        } catch {
+          /* 開口復元の失敗は全画面結果を採用 */
+        }
+      }
+      // 画質を高める（精細化・keepQuality）。高コストなので本番確定でのみ。
+      if (flags.runEnhance && ENABLE_KEEP_QUALITY_ENHANCE && ctx.keepQuality) {
+        try {
+          const enhanceBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
+          const eres = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({ baseImage: enhanceBase, enhanceDetail: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+          });
+          const edata = await eres.json();
+          if (edata.success && edata.url) {
+            void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+            outUrl = await fitDataUrlToSize(edata.url as string, baseW, baseH, 'cover');
+          }
+        } catch {
+          /* 精細化失敗は元の結果をそのまま使う */
+        }
+      }
+      // フリープラン出力制限（縮小＋透かし）。本番確定でのみ適用（ドラフトには掛けない）。
+      if (flags.runFreePlan) {
+        outUrl = await maybeApplyFreePlanOutputLimits(outUrl, ctx.isFreePlan);
+      }
+      return outUrl;
+    },
+    [projectSession]
+  );
+
   const runEdit = useCallback(async () => {
     if (!activeVersion) return;
     setSubmitError(null);
@@ -663,9 +775,14 @@ export function AiEditWorkspace({
       // （重なった家具の分離＝精度向上）、編集後は必ずベースへ貼り戻して多角形/矩形でクリップする。これにより
       // マスク外は常にベースのまま＝指定外は改変されない（＝拘束力の担保）。
       // 生成結果を1つ作る内部関数（同一入力で複数回呼べば別候補になる・Option 1 複数候補・260717）。
-      const produceOne = async (): Promise<string> => {
+      // draftMode=true のときは高コストな仕上げ段を回さず“ドラフト”を返す（複数候補を安く提示・point2）。返り値は
+      // 画像URLと、本番確定（applyAreaEditFinish）で再利用する仕上げコンテキスト。
+      const produceOne = async (draftMode = false): Promise<{ url: string; ctx: AreaEditFinishCtx }> => {
       // 生成結果（エリア編集は Gemini のみ・範囲ごとにクロップ＋範囲外の閉じ込め）。
       let outUrl: string | null = null;
+      // 仕上げ段のコンテキストと戻し先（Gemini 経路の内側で確定するため外側に控える・point2）。
+      let finishCtx: AreaEditFinishCtx | null = null;
+      let confineBaseForFinish = '';
 
       // === Gemini 経路 ===
       if (outUrl == null) {
@@ -911,137 +1028,45 @@ export function AiEditWorkspace({
       // 「範囲外＝base に戻す／開口＝元へ戻す」の“戻し先”はこれを使う。baseScaled（原画）だと、面の窓の手前に置いた家具
       // （別範囲の差し替え）が開口の穴あけで原画に戻され、せっかく置いた家具が消える。仕上げ前の workingBase は
       // 「範囲外＝base・面の窓＝base・窓の手前の家具＝家具」を既に正しく含むため、戻し先として正しい。
-      const confineBase = workingBase;
-
-      // 【最終の全体仕上げ（エリア編集は必ず1回 Gemini を通す・260715 クライアント要望）】各範囲を個別に編集して
-      // 貼り合わせた1枚を、最後に Gemini で1回だけ通し、貼り合わせで生じた境界（継ぎ目）と残像（ゴースト・古い対象の
-      // 輪郭・二重縁・マスクの跡）を自然に処理する。**オブジェクトの配置も環境（壁・床・天井・照明・窓の外）も変えない。**
-      // 発火は編集が1件でも成功したら常に（編集した“範囲=placement”数で判定・単一範囲も対象）。パスの種類は編集内容で出し分け:
-      // ・差し替え（参照画像あり）を含む → naturalize（置いた家具は変えず、接地影/前後関係/光を環境へなじませ＋継ぎ目/残像消し）。
-      // ・テキストのみ（窓の外・色替え等・参照画像なし） → harmonize（境界の段差と残像だけを消し、オブジェクト・環境は一切変えない）。
-      // 失敗時は貼り合わせ結果を採用（フェイルソフト）。
-      // 【1-B】面仕上げのみの全画面採用では貼り合わせ＝継ぎ目が無いため、この仕上げ（継ぎ目消し）パスは不要。むしろ全画面
-      // 再生成をもう1回挟むと家具等の drift・コスト・待ち時間が増えるので回さない（＝1回の生成＋開口復元でクリーンに完結）。
+      confineBaseForFinish = workingBase;
+      // 【1-B】面仕上げのみの全画面採用では貼り合わせ＝継ぎ目が無いため、仕上げ（継ぎ目消し）パスは不要
+      // （後段 applyAreaEditFinish 内で skipFinishFor1B により自動スキップ）。
       const skipFinishFor1B = surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME;
-      if (editedRegions >= 1 && !skipFinishFor1B) {
-        const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
-        try {
-          // 仕上げパスも全画面画像を送るため、送信用に予算内へ圧縮する（Vercel body 上限対策・260718）。仕上げ出力は
-          // 生成し直され、最終の union 合成では confineBase（元画像基準）を使うので、送信の JPEG 化は最終画質に影響しない。
-          const finishBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
-          const hres = await fetch('/api/ai-edit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: finishBase, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
-          });
-          const hdata = await hres.json();
-          if (hdata.success && hdata.url) {
-            void recordAiUsage({ feature: 'ai_edit', usage: hdata.usage, model: hdata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-            outUrl = await fitDataUrlToSize(hdata.url as string, baseW, baseH, 'cover');
-          }
-        } catch {
-          /* なじませ失敗は貼り合わせ結果を採用 */
-        }
-      }
-
-      // 【最終の閉じ込め（範囲外を必ずベースへ戻す・①②・260717 クライアント要望）】
-      // 上の仕上げ（naturalize/harmonize）は全画面生成のため、指定範囲の外に家具を新しく描いてしまう（①）ことや、
-      // 隣接範囲の境界に継ぎ目（白線・②）を残すことがある。全範囲の合成マスク（union）で仕上げ結果をベースへ閉じ込め直す＝
-      // ・範囲外は元のベース画像に完全に戻す（範囲外に何も足さない＝勝手に増えた家具を消す・①）
-      // ・全範囲を1つの union マスクで採るため、隣接範囲の内側は連続（境界に base の白線が出ない・②）
-      // 合成マスクで閉じ込めた編集があったとき（anyComposited）だけ適用する（単一の実質全画面編集は対象外＝従来どおり全面採用）。
-      if (anyComposited && allPlacements.length > 0) {
-        try {
-          // 面仕上げのみの編集では、最終の union 境界（＝実際にユーザーが見ていた「囲みのすぐ外側の線」）を
-          // 両側フェザーで溶かし、フェザー幅も広げる（0.008→0.012）。混在編集は従来どおり内側限定・標準幅（安全側）。
-          const unionFeather = Math.round(Math.max(baseW, baseH) * (surfaceOnly ? 0.012 : 0.008));
-          const unionDilate = Math.round(Math.max(baseW, baseH) * 0.015); // 接地影を少し残しつつ、範囲から離れた新規家具は確実に除外。
-          // 検出した開口（窓・ドア）は最終合成でも除外＝仕上げパスが窓を塗り直してもここで元へ戻す（case B・260718）。
-          // F1: isSurfacePlaneFinish フィルタを外し「検出された開口」を根拠にする（開口は面領域でのみ解析モデルが返すため安全）。
-          // F4: 各面の開口を“その面自身の placements”へクリップしてから束ねる＝隣の面の範囲へ穴を空けない（union は全範囲マスクのため）。
-          // R2-1: 面のほとんどを覆う非現実的な検出は丸ごと落とす。フラグ OFF なら開口除外自体を止める。
-          const allSurfaceOpenings = ENABLE_OPENING_PRESERVE
-            ? objectsScaled.flatMap((o) => sanitizeDetectedOpenings(openingsMap[o.id], o.placements))
-            : [];
-          // R2-3: 戻し先は confineBase（仕上げ前の貼り合わせ結果）。開口の穴あけで原画に戻すと窓手前の家具が消えるため。
-          // 面仕上げのみ: 最終合成の前に、仕上げパス出力(outUrl)の境界色を confineBase へ合わせ込む（露出/WBの段差＝
-          // 窓際で顕著だった境界線の主因を消す）。適用域は unionDilate に合わせる。退化/失敗時は outUrl のまま（フェイルソフト）。
-          const confined = surfaceOnly
-            ? await harmonizeEditToBase(confineBase, outUrl, allPlacements, baseW, baseH, { applyDilatePx: unionDilate })
-            : outUrl;
-          outUrl = await compositeMaskedEdit(
-            confineBase,
-            confined,
-            allPlacements,
-            baseW,
-            baseH,
-            unionFeather,
-            unionDilate,
-            allSurfaceOpenings.length > 0 ? allSurfaceOpenings : undefined,
-            surfaceOnly
-          );
-        } catch {
-          /* 最終閉じ込め失敗は仕上げ結果をそのまま採用（フェイルソフト） */
-        }
-      }
-
-      // 【1-B の開口復元（260720 クライアント要望）】面仕上げのみを全画面採用したときは、上の union 閉じ込めは走らない
-      // （anyComposited=false）。面以外はポリゴンで閉じ込めず全画面AIを使う＝境界線を作らないが、窓・ドアだけは原画
-      // (baseScaled)から決定論的に復元する（モデルが面仕上げで窓を塗り潰しても元へ戻す・case B の趣旨は維持）。ポリゴン
-      // 境界の合成はせず開口の穴だけを両側フェザーで馴染ませる＝継ぎ目が出ない。失敗時は全画面結果を採用（フェイルソフト）。
-      if (skipFinishFor1B && ENABLE_OPENING_PRESERVE && outUrl) {
-        const aiFull = outUrl;
-        try {
-          const openings1b = objectsScaled.flatMap((o) => sanitizeDetectedOpenings(openingsMap[o.id], o.placements));
-          if (openings1b.length > 0) {
-            const openingFeather = Math.round(Math.max(baseW, baseH) * 0.004);
-            // base=全画面AI(aiFull), edit=原画(baseScaled), placements=開口 → 開口内=原画の窓/ドア・その他=AI全画面。
-            // featherOutside=false（内側限定）が必須。ここは全画面AIの“新しい仕上げ”と原画の“旧仕上げ”が開口の【外側】で
-            // 食い違う（壁を塗り替えている）ため、両側フェザーにすると旧仕上げが開口の外へにじみ出て窓の周りに古い色の輪
-            // （ハロー）が出る＝新たな継ぎ目（adversarial review 260720 で検出）。内側限定なら AI の新仕上げは窓枠まで crisp の
-            // まま＝継ぎ目なしで、原画の窓だけを内側へなだらかに復元する。フェザーも小さめ(0.004)にして狭い窓も確実に復元。
-            outUrl = await compositeMaskedEdit(aiFull, baseScaled, openings1b, baseW, baseH, openingFeather, 0, undefined, false);
-          }
-        } catch {
-          /* 開口復元の失敗は全画面結果を採用（フェイルソフト） */
-        }
-      }
+      // 検出開口（窓・ドア）は union 閉じ込めの excludeRects と 1-B 開口復元の両方で使う（クリップ→面積→幾何で健全化・260720）。
+      const openings = ENABLE_OPENING_PRESERVE
+        ? objectsScaled.flatMap((o) => sanitizeDetectedOpenings(openingsMap[o.id], o.placements))
+        : [];
+      // 仕上げ段（naturalize/harmonize → union 閉じ込め → 1-B 開口復元 → 精細化 → フリープラン後処理）に渡すコンテキストを確定。
+      // 実行は Gemini 経路を抜けた後の applyAreaEditFinish で行う。ドラフト（候補）は高コスト段を回さず、本番確定でのみ通す（point2）。
+      finishCtx = {
+        baseW,
+        baseH,
+        imageSize,
+        editedHasReplacement,
+        skipFinishFor1B,
+        anyComposited,
+        allPlacements,
+        surfaceOnly,
+        openings,
+        keepQuality,
+        isFreePlan,
+      };
       } // === Gemini 経路ここまで（if (outUrl == null)）===
 
       // Gemini から結果を得られなかった場合の保険（通常は上で outUrl が設定される）。
-      if (outUrl == null) {
+      if (outUrl == null || finishCtx == null) {
         throw new Error('編集に失敗しました。しばらくして再度お試しください。');
       }
-      // 「画質を高める（仕上げに精細化）」（260710）: keepQuality=ON のとき、確定した結果の“現在の1枚だけ”を
-      // もう一度AIに通し、構図・家具・色を変えずに素材の質感と輪郭のキレだけを引き上げる。見本画像（2枚目）は
-      // 一切渡さない＝重ね焼き（ゴースト）が構造的に起きない。失敗時は元の結果をそのまま使う（best-effort）。
-      if (ENABLE_KEEP_QUALITY_ENHANCE && keepQuality) {
-        try {
-          // 精細化パスも全画面画像を送るため送信用に予算内へ圧縮（Vercel body 上限対策・260718 監査V1）。出力は生成し直され、
-          // 失敗時は元 outUrl を採用するので、送信の JPEG 化は最終画質に影響しない。
-          const enhanceBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
-          const eres = await fetch('/api/ai-edit', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({
-              baseImage: enhanceBase,
-              enhanceDetail: true,
-              aspectRatio: pickClosestAspectRatio(baseW, baseH),
-              imageSize, // 1K 据え置き（2K はこのモデルで白っぽくぼやける既知事象）
-            }),
-          });
-          const edata = await eres.json();
-          if (edata.success && edata.url) {
-            void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-            outUrl = await fitDataUrlToSize(edata.url as string, baseW, baseH, 'cover');
-          }
-        } catch {
-          /* 精細化失敗は無視＝元の結果をそのまま使う */
-        }
-      }
-      // フリープラン出力制限（縮小＋透かし・row 51/52）。テストマーケ中は既定で無効。
-      outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
-      return outUrl;
+      // 仕上げ段を実行（point2・260721）。draftMode=true（候補生成）は高コスト段（仕上げ Gemini・精細化・フリープラン後処理）を
+      // 回さず素早く安く提示し、ユーザーが1枚選んだ“本番確定”でのみ通す。1-B 開口復元はドラフト時に実施済みなので本番確定側は
+      // 再実施しない（handleSelectCandidate で runOpeningRestore=false）。生成側（ここ）は常に true。
+      outUrl = await applyAreaEditFinish(outUrl, confineBaseForFinish, baseScaled, finishCtx, {
+        runFinishing: !draftMode,
+        runOpeningRestore: true,
+        runEnhance: !draftMode,
+        runFreePlan: !draftMode,
+      });
+      return { url: outUrl, ctx: finishCtx };
       }; // === produceOne ここまで ===
 
       // 【複数候補から選ぶ（Option 1・260717 クライアント要望）】candidateCount>1 のとき同一入力で複数回生成し、
@@ -1049,34 +1074,49 @@ export function AiEditWorkspace({
       const count = Math.min(3, Math.max(1, Math.round(candidateCount)));
       setGenProgress({ total: count, done: [] }); // オーバーレイに進捗（N/total・サムネ）を出す（point3・260720）。
       if (count <= 1) {
-        const only = await produceOne();
-        setGenProgress({ total: 1, done: [only] });
-        commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, only);
+        // 単一候補は従来どおり全段実行（本番品質）＝挙動不変。
+        const only = await produceOne(false);
+        setGenProgress({ total: 1, done: [only.url] });
+        commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, only.url);
       } else {
-        const results: string[] = [];
+        // 【コスト2段化（point2・260721）】複数候補は“ドラフト”（高コストな仕上げ段を省いて安く速く）で生成し、
+        // ユーザーが選んだ1枚だけ“本番確定”（applyAreaEditFinish 全段）を通す＝3枚ぶんの仕上げ/精細化を1枚に集約してコスト削減。
+        const drafts: { url: string; ctx: AreaEditFinishCtx }[] = [];
         let lastErr: unknown = null;
         for (let i = 0; i < count; i++) {
           try {
-            const r = await produceOne();
-            results.push(r);
+            const r = await produceOne(true);
+            drafts.push(r);
             // 完了した候補を即オーバーレイへ反映（届いた順にサムネ表示＝進捗が見える・point3）。
-            setGenProgress({ total: count, done: [...results] });
+            setGenProgress({ total: count, done: drafts.map((d) => d.url) });
           } catch (e) {
             lastErr = e; // 一部候補の失敗は許容（他が出れば選べる）。全滅なら下で throw。
           }
         }
-        if (results.length === 0) {
+        if (drafts.length === 0) {
           throw lastErr instanceof Error ? lastErr : new Error('編集に失敗しました。しばらくして再度お試しください。');
         }
-        if (results.length === 1) {
-          // 1つしか生成できなかった＝選ぶまでもなく確定。
-          commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, results[0]);
+        if (drafts.length === 1) {
+          // 1つしか生成できなかった＝選ぶまでもなく確定。ドラフトは仕上げ未実施なので、ここで本番確定を通してから確定する。
+          const d = drafts[0];
+          let finalUrl = d.url;
+          try {
+            finalUrl = await applyAreaEditFinish(d.url, d.url, '', d.ctx, {
+              runFinishing: true,
+              runOpeningRestore: false, // 1-B 開口復元はドラフト時に実施済み（二重貼り回避）。
+              runEnhance: true,
+              runFreePlan: true,
+            });
+          } catch {
+            /* 本番確定に失敗してもドラフトを採用（フェイルソフト） */
+          }
+          commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, finalUrl);
         } else {
-          // 候補ピッカーを開く。採用（選択）時に commitEditResult で版を1つだけ作る（それまで版は作らない）。
+          // 候補ピッカーを開く。採用（選択）時に本番確定（applyAreaEditFinish 全段）を通してから版を1つだけ作る（それまで版は作らない）。
           setCandidatePick({
             parentId: activeVersion.id,
             baseImageDataUrl: activeVersion.outputImageDataUrl,
-            candidates: results,
+            candidates: drafts,
           });
         }
       }
@@ -1086,7 +1126,33 @@ export function AiEditWorkspace({
       setIsSubmitting(false);
       setGenProgress(null); // 進捗表示を片付ける（オーバーレイは isSubmitting で閉じるが状態も戻す）。
     }
-  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality, candidateCount, commitEditResult]);
+  }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality, candidateCount, commitEditResult, applyAreaEditFinish]);
+
+  // 候補ピッカーで1枚選んだときの“本番確定”（point2・260721）: 選ばれたドラフトそのものを土台に、仕上げ Gemini パス・
+  // 精細化・フリープラン後処理を通してから版を作る。ドラフト画像を土台にするので、選んだ構図・家具の形はそのまま保たれる
+  // （元画像から作り直さない＝プレビューと本番のズレが出ない）。失敗時はドラフトを採用（フェイルソフト）。
+  const handleSelectCandidate = useCallback(
+    async (draft: { url: string; ctx: AreaEditFinishCtx }) => {
+      if (!candidatePick || finalizingCandidate) return;
+      const { parentId, baseImageDataUrl } = candidatePick;
+      setFinalizingCandidate(true);
+      let finalUrl = draft.url;
+      try {
+        finalUrl = await applyAreaEditFinish(draft.url, draft.url, '', draft.ctx, {
+          runFinishing: true,
+          runOpeningRestore: false, // 1-B 開口復元はドラフト時に実施済み（二重貼り回避）。
+          runEnhance: true,
+          runFreePlan: true,
+        });
+      } catch {
+        /* 本番確定に失敗してもドラフトを採用（生成結果を失わない） */
+      }
+      commitEditResult(parentId, baseImageDataUrl, finalUrl);
+      setFinalizingCandidate(false);
+      setCandidatePick(null);
+    },
+    [candidatePick, finalizingCandidate, applyAreaEditFinish, commitEditResult]
+  );
 
   const handleClickExecute = () => {
     if (!activeVersion || isSubmitting) return;
@@ -2275,14 +2341,20 @@ export function AiEditWorkspace({
           aria-modal="true"
         >
           <div className="flex max-h-[92vh] w-full max-w-6xl flex-col rounded-2xl border border-white/10 bg-[#0c0c0c] p-4 shadow-2xl">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-bold text-neutral-100">
-                良い候補を1つ選んでください（{candidatePick.candidates.length}案）
-              </h3>
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-neutral-100">
+                  良い候補を1つ選んでください（{candidatePick.candidates.length}案）
+                </h3>
+                <p className="mt-0.5 text-[11px] text-neutral-500">
+                  コスト削減のため候補は下書き画質で提示しています。選んだ1枚だけを高画質に仕上げます（構図・家具の形はそのまま保たれます）。
+                </p>
+              </div>
               <button
                 type="button"
+                disabled={finalizingCandidate}
                 onClick={() => setCandidatePick(null)}
-                className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-neutral-300 transition hover:bg-white/5"
+                className="shrink-0 rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold text-neutral-300 transition hover:bg-white/5 disabled:opacity-40"
               >
                 キャンセル（採用しない）
               </button>
@@ -2292,24 +2364,28 @@ export function AiEditWorkspace({
                 <img src={candidatePick.baseImageDataUrl} alt="編集前" className="block h-auto w-full" />
                 <div className="bg-black/40 px-2 py-1.5 text-[11px] text-neutral-400">編集前（元画像）</div>
               </div>
-              {candidatePick.candidates.map((url, i) => (
+              {candidatePick.candidates.map((c, i) => (
                 <button
                   key={i}
                   type="button"
-                  onClick={() => {
-                    commitEditResult(candidatePick.parentId, candidatePick.baseImageDataUrl, url);
-                    setCandidatePick(null);
-                  }}
-                  className="group overflow-hidden rounded-lg border-2 border-white/10 text-left transition-colors hover:border-emerald-500"
+                  disabled={finalizingCandidate}
+                  onClick={() => void handleSelectCandidate(c)}
+                  className="group overflow-hidden rounded-lg border-2 border-white/10 text-left transition-colors hover:border-emerald-500 disabled:opacity-50 disabled:pointer-events-none"
                 >
-                  <img src={url} alt={`候補${i + 1}`} className="block h-auto w-full" />
+                  <img src={c.url} alt={`候補${i + 1}`} className="block h-auto w-full" />
                   <div className="flex items-center justify-between bg-black/40 px-2 py-1.5 text-[11px] font-bold text-neutral-200 group-hover:bg-emerald-600/30">
                     <span>候補 {i + 1}</span>
-                    <span className="text-emerald-300 opacity-0 group-hover:opacity-100">この案を採用 →</span>
+                    <span className="text-emerald-300 opacity-0 group-hover:opacity-100">この案を高画質で採用 →</span>
                   </div>
                 </button>
               ))}
             </div>
+            {finalizingCandidate && (
+              <div className="mt-3 flex items-center justify-center gap-2 rounded-lg border border-white/10 bg-black/40 py-2 text-sm text-neutral-200">
+                <Loader2 className="h-4 w-4 animate-spin text-purple-400" />
+                選んだ案を高画質に仕上げています…
+              </div>
+            )}
           </div>
         </div>
       )}
