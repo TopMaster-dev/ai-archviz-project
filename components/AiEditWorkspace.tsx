@@ -50,6 +50,7 @@ import {
   ENABLE_HARMONIZE_FLATTEN,
   ENABLE_KEEP_QUALITY_ENHANCE,
   ENABLE_OPENING_PRESERVE,
+  ENABLE_AREA_EDIT_SURFACE_FULLFRAME,
   isSurfacePlaneFinish,
 } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
@@ -787,7 +788,10 @@ export function AiEditWorkspace({
             imageSize,
             learnedHints,
             // 複数範囲では最終的にこの範囲マスクだけを採用するため、モデルにも「この範囲だけ触る」よう常に指示する。
-            strictConfine: !!cropPx || !objIsGlobal || multiRegion,
+            // 1-B（面仕上げのみを全画面採用）では合成でポリゴン外を保護しない分、モデル側の「この範囲だけ触る」指示を
+            // 常に強制して家具・床・他壁の描き替え（drift）を最大限抑止する（260720）。
+            strictConfine:
+              (surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME) || !!cropPx || !objIsGlobal || multiRegion,
             ...(narratives[o.id] ? { placementNarratives: { [o.id]: narratives[o.id] } } : {}),
           };
           const res = await fetch('/api/ai-edit', {
@@ -822,6 +826,15 @@ export function AiEditWorkspace({
           const mode: 'cover' | 'contain' =
             !multiRegion && !isBounded && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
           const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
+          // 【1-B（260720 クライアント要望）】面仕上げのみの編集は、ここでポリゴン合成せず全画面をそのまま採用する
+          // ＝囲みのすぐ外側に境界線（継ぎ目）を構造的に作らない。モデルは画像“全体”を coherent に再生成しており、
+          // 対象面以外（家具・床・他壁）は strictConfine＋プロンプトで保持指示済み。窓・ドアの原画復元は最終段でまとめて
+          // 行う（開口だけの復元＝ポリゴン境界の継ぎ目が出ない）。contain の黒帯は避けて cover で返す。
+          if (surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME) {
+            const fullFrame =
+              mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
+            return { url: fullFrame, composited: false };
+          }
           // 【面仕上げで検出開口があるときは必ず合成する（case B・260718）】被覆率が高い（囲みがほぼ全画面）と
           // shouldCompositeAreaEdit は false（＝全画面直で継ぎ目なし）を返す。しかし面仕上げで窓・ドアの開口を検出して
           // いる場合、合成を飛ばすと開口をマスクから除外できず窓・ドアが仕上げで塗り潰されたまま残る（③の窓・ドア回帰）。
@@ -909,7 +922,10 @@ export function AiEditWorkspace({
       // ・差し替え（参照画像あり）を含む → naturalize（置いた家具は変えず、接地影/前後関係/光を環境へなじませ＋継ぎ目/残像消し）。
       // ・テキストのみ（窓の外・色替え等・参照画像なし） → harmonize（境界の段差と残像だけを消し、オブジェクト・環境は一切変えない）。
       // 失敗時は貼り合わせ結果を採用（フェイルソフト）。
-      if (editedRegions >= 1) {
+      // 【1-B】面仕上げのみの全画面採用では貼り合わせ＝継ぎ目が無いため、この仕上げ（継ぎ目消し）パスは不要。むしろ全画面
+      // 再生成をもう1回挟むと家具等の drift・コスト・待ち時間が増えるので回さない（＝1回の生成＋開口復元でクリーンに完結）。
+      const skipFinishFor1B = surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME;
+      if (editedRegions >= 1 && !skipFinishFor1B) {
         const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
         try {
           // 仕上げパスも全画面画像を送るため、送信用に予算内へ圧縮する（Vercel body 上限対策・260718）。仕上げ出力は
@@ -973,6 +989,33 @@ export function AiEditWorkspace({
           );
         } catch {
           /* 最終閉じ込め失敗は仕上げ結果をそのまま採用（フェイルソフト） */
+        }
+      }
+
+      // 【1-B の開口復元（260720 クライアント要望）】面仕上げのみを全画面採用したときは、上の union 閉じ込めは走らない
+      // （anyComposited=false）。面以外はポリゴンで閉じ込めず全画面AIを使う＝境界線を作らないが、窓・ドアだけは原画
+      // (baseScaled)から決定論的に復元する（モデルが面仕上げで窓を塗り潰しても元へ戻す・case B の趣旨は維持）。ポリゴン
+      // 境界の合成はせず開口の穴だけを両側フェザーで馴染ませる＝継ぎ目が出ない。失敗時は全画面結果を採用（フェイルソフト）。
+      if (skipFinishFor1B && ENABLE_OPENING_PRESERVE && outUrl) {
+        const aiFull = outUrl;
+        try {
+          const openings1b = objectsScaled.flatMap((o) => {
+            const ops = openingsMap[o.id];
+            return ops && ops.length > 0
+              ? dropImplausibleOpenings(clipOpeningsToPlacements(ops, o.placements), o.placements)
+              : [];
+          });
+          if (openings1b.length > 0) {
+            const openingFeather = Math.round(Math.max(baseW, baseH) * 0.004);
+            // base=全画面AI(aiFull), edit=原画(baseScaled), placements=開口 → 開口内=原画の窓/ドア・その他=AI全画面。
+            // featherOutside=false（内側限定）が必須。ここは全画面AIの“新しい仕上げ”と原画の“旧仕上げ”が開口の【外側】で
+            // 食い違う（壁を塗り替えている）ため、両側フェザーにすると旧仕上げが開口の外へにじみ出て窓の周りに古い色の輪
+            // （ハロー）が出る＝新たな継ぎ目（adversarial review 260720 で検出）。内側限定なら AI の新仕上げは窓枠まで crisp の
+            // まま＝継ぎ目なしで、原画の窓だけを内側へなだらかに復元する。フェザーも小さめ(0.004)にして狭い窓も確実に復元。
+            outUrl = await compositeMaskedEdit(aiFull, baseScaled, openings1b, baseW, baseH, openingFeather, 0, undefined, false);
+          }
+        } catch {
+          /* 開口復元の失敗は全画面結果を採用（フェイルソフト） */
         }
       }
       } // === Gemini 経路ここまで（if (outUrl == null)）===
