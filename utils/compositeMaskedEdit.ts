@@ -25,6 +25,34 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+/**
+ * マスクキャンバスから開口（窓・ドア等）を destination-out でハードに打ち抜く（合成後その部分は 100% base のまま＝保持）。
+ * fillStyle の色は destination-out では無関係（アルファのみで消える）が、不透明で塗る必要があるため白を使う。
+ */
+function punchExcludeRects(
+  ctx: CanvasRenderingContext2D,
+  excludeRects: NormalizedRect[] | undefined,
+  width: number,
+  height: number,
+): void {
+  if (!excludeRects || excludeRects.length === 0) return;
+  ctx.save();
+  ctx.globalCompositeOperation = 'destination-out';
+  ctx.fillStyle = 'rgba(255,255,255,1)';
+  for (const r of excludeRects) {
+    if (r.points && r.points.length >= 3) {
+      ctx.beginPath();
+      ctx.moveTo(r.points[0].x * width, r.points[0].y * height);
+      for (let i = 1; i < r.points.length; i += 1) ctx.lineTo(r.points[i].x * width, r.points[i].y * height);
+      ctx.closePath();
+      ctx.fill('nonzero');
+    } else {
+      ctx.fillRect(r.x * width, r.y * height, r.width * width, r.height * height);
+    }
+  }
+  ctx.restore();
+}
+
 export async function compositeMaskedEdit(
   baseDataUrl: string,
   editDataUrl: string,
@@ -93,22 +121,7 @@ export async function compositeMaskedEdit(
     }
     // 開口（窓・ドア）を面から除外＝マスクに穴をあける（合成後、開口部は base のまま＝窓/ドアを保持・case B・260718）。
     // 面全体を一様に仕上げさせ（塗り残しゼロ・③）、検出した開口だけを決定論的に元へ戻す。
-    if (excludeRects && excludeRects.length > 0) {
-      mctx.globalCompositeOperation = 'destination-out';
-      mctx.fillStyle = 'rgba(255,255,255,1)';
-      for (const r of excludeRects) {
-        if (r.points && r.points.length >= 3) {
-          mctx.beginPath();
-          mctx.moveTo(r.points[0].x * width, r.points[0].y * height);
-          for (let i = 1; i < r.points.length; i += 1) mctx.lineTo(r.points[i].x * width, r.points[i].y * height);
-          mctx.closePath();
-          mctx.fill('nonzero');
-        } else {
-          mctx.fillRect(r.x * width, r.y * height, r.width * width, r.height * height);
-        }
-      }
-      mctx.globalCompositeOperation = 'source-over';
-    }
+    punchExcludeRects(mctx, excludeRects, width, height);
     let maskCanvas: HTMLCanvasElement = mask;
     if (feather > 0) {
       const blur = document.createElement('canvas');
@@ -125,13 +138,20 @@ export async function compositeMaskedEdit(
           // ぼかしで多角形の外側へ広がったアルファを、元の多角形（ハードエッジ）でクリップして取り除く。
           // これで編集は必ず描いた線の内側に収まり（拘束力）、線の外側へベース画像の元オブジェクトがにじんで
           // 残る「境界の名残（二重縁）」も出さない。家具差し替え等はこちら。
+          // ※この destination-in は開口(excludeRects)の穴もハード(alpha=0)へ戻す役割を兼ねている（元マスクが穴あき）。
           bctx.globalCompositeOperation = 'destination-in';
           bctx.drawImage(mask, 0, 0);
           bctx.globalCompositeOperation = 'source-over';
+        } else {
+          // featherOutside=true（面仕上げ）: 内側限定クリップを外し、境界の“外側”へも ~feather ぶん減衰させる（両側
+          // フェザー）＝「囲みのすぐ外側に残る硬い縁（境界線）」を溶かす（260720）。生成画像は全画面なので外側にはみ出す
+          // 画素も同じ面の描画であり、ベースの同じ面へ滑らかに溶ける。
+          // ただし内側限定クリップは開口(excludeRects)の穴も同時にハードへ戻していたため、外側フェザーを残す本経路では
+          // 開口をここで“改めて”ハード打ち抜きする。さもないと、ぼかしで開口へ染み出した塗りが窓/ドアを塗り潰す（狭い窓は
+          // 全塗り・広い窓は縁に染み出し）＝case B 保持の回帰（adversarial review 260720 で検出）。
+          // → 外周は両側フェザーのまま／開口だけ base を厳密保持、を両立させる。
+          punchExcludeRects(bctx, excludeRects, width, height);
         }
-        // featherOutside=true（面仕上げ）: 内側限定クリップを行わない＝アルファが境界の“外側”へも ~feather ぶん
-        // なだらかに減衰する（両側フェザー）。生成画像は全画面なので外側にはみ出す画素も同じ面の描画であり、
-        // ベースの同じ面へ滑らかに溶ける＝「囲みのすぐ外側に残る硬い縁（境界線）」が消える（260720）。
         maskCanvas = blur;
       }
     }
