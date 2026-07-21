@@ -53,6 +53,7 @@ import {
   ENABLE_OPENING_PRESERVE,
   ENABLE_AREA_EDIT_SURFACE_FULLFRAME,
   ENABLE_SEAMLESS_MEMBRANE,
+  ENABLE_AREA_EDIT_FURNITURE_RAW,
   isSurfacePlaneFinish,
 } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
@@ -665,8 +666,11 @@ export function AiEditWorkspace({
     ): Promise<string> => {
       const { baseW, baseH, imageSize, editedHasReplacement, skipFinishFor1B, anyComposited, allPlacements, surfaceOnly, openings } = ctx;
       let outUrl = input;
-      // 仕上げパス（naturalize/harmonize）。1-B（面仕上げのみ全画面採用）は継ぎ目が無いので元々回さない。
-      if (flags.runFinishing && !skipFinishFor1B) {
+      // 【Stage3-lite・260722】家具/混在の“ソフトなハロー”対策(A/B)。ON のとき、家具/混在では全体仕上げと union 再閉じ込めを
+      // 回さず、membrane 済みの per-region 合成結果を直採用＝パッチ（領域だけ別トーン）の発生源を断つ。既定 OFF。
+      const furnitureRaw = ENABLE_AREA_EDIT_FURNITURE_RAW && !surfaceOnly;
+      // 仕上げパス（naturalize/harmonize）。1-B（面仕上げのみ全画面採用）は継ぎ目が無いので元々回さない。furnitureRaw も回さない。
+      if (flags.runFinishing && !skipFinishFor1B && !furnitureRaw) {
         const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
         try {
           const finishBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
@@ -685,7 +689,8 @@ export function AiEditWorkspace({
         }
       }
       // 最終の閉じ込め（範囲外を base へ戻す／開口を除外）。仕上げパスが範囲外へ描いた家具や継ぎ目をここで是正。
-      if (anyComposited && allPlacements.length > 0) {
+      // furnitureRaw のときは回さない（per-region で既に範囲外は base・開口は excludeRects 保持済み＝union パッチを出さない）。
+      if (anyComposited && allPlacements.length > 0 && !furnitureRaw) {
         try {
           // 【Stage1・260722】union 境界の“見える線”の主因は露出/WBの段差。面仕上げ限定だったトーンマッチを家具/混在にも
           // 広げ（confineBase へ境界色を合わせ込む）、フェザー幅も広げて段差を目立たなくする。幾何エッジは内側限定のまま
