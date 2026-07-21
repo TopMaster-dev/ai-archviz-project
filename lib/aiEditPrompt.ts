@@ -322,10 +322,24 @@ export const ENABLE_SEAMLESS_MEMBRANE = true;
  * パッチ化する、の2点。membrane は境界色を合わせるが、領域“内側全体”が別トーンだと面として見えるため消しきれない。
  * このフラグ ON で (a)(b) を止め、membrane で継ぎ目処理済みの per-region 結果を直採用＝パッチの発生源を断つ。
  * トレードオフ: 家具の設置感(接地影/大域なじませ)は全体仕上げに頼らず per-region 生成（周辺込みクロップ）に委ねる。
- * 既定 ON（260722: Stage2 membrane を有効にしても家具のハローが残る＝合成 approach の限界を実機で確認。ハローの形が
- * 描画範囲の union と一致＝union 再閉じ込めのパッチと判断し、既定で止める）。設置感が落ちる等あれば false でロールバック。
+ * 既定 OFF（Stage3 に置換・下記）。Stage3-lite は per-region クロップ合成を残すため境界/見切れが残り不十分だった。
  */
-export const ENABLE_AREA_EDIT_FURNITURE_RAW = true;
+export const ENABLE_AREA_EDIT_FURNITURE_RAW = false;
+
+/**
+ * 【Stage3（260722・境界線/見切れの構造的解消）】面仕上げだけでなく家具差し替え・混在“すべての”エリア編集を、
+ * per-region のクロップ合成をやめて「全画面生成（1-B）」に統一する有効化フラグ。
+ * 背景: 家具は per-region でクロップ→生成→貼り戻し（ポリゴン内側限定合成）していたため、(1)囲みごとの合成境界、
+ * (2)囲みより大きい家具の“見切れ”、が残った。Stage1/2/lite は境界の色は合わせても、貼り合わせ自体は残るため根絶できない。
+ * Stage3 は貼り合わせを一切やめ、モデルが再生成した“全画面の1枚”をそのまま採用＝境界も見切れも原理的に発生しない。
+ * ON のとき: 家具/混在でも cropPx=null（全画面送信）＋ editOneRegion は全画面を composited:false で返す＝union 閉じ込めも
+ * 仕上げパスも回さず、窓・ドアだけを最終段でシームレス（membrane）復元する。strictConfine を全画面編集で常時強制し、
+ * 対象以外の家具・床・壁の描き替え（drift）をプロンプトで最大限抑止する。
+ * トレードオフ: 全画面採用ゆえ対象以外をモデルがわずかに描き替える可能性（特に複数エリアの逐次生成で累積し得る）。
+ * strictConfine＋参照画像＋座標で抑止するが AI 任せ。問題が出たら false で従来（Stage1/2 の合成経路）へ即ロールバック。
+ * 既定 ON（クライアント/開発者要望で Stage3 を適用。境界線・見切れの根絶を優先）。境界消失/家具の非改変は実機QA前提。
+ */
+export const ENABLE_AREA_EDIT_FULLFRAME_ALL = true;
 
 /**
  * 「継ぎ目をなじませる」全体仕上げパス用プロンプト（260706 クライアント提案）。

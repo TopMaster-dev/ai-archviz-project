@@ -31,7 +31,7 @@ import { compressDataUrlToBudget, dataUrlTransmitBytes } from '../utils/compress
 import { pickClosestAspectRatio } from '../utils/pickClosestAspectRatio.js';
 import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js';
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
-import { sanitizeDetectedOpenings } from '../utils/openingRects.js';
+import { sanitizeDetectedOpenings, placementsBBox } from '../utils/openingRects.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
 import { membraneHarmonizeEditToBase } from '../utils/seamlessBlend.js';
 import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
@@ -54,6 +54,7 @@ import {
   ENABLE_AREA_EDIT_SURFACE_FULLFRAME,
   ENABLE_SEAMLESS_MEMBRANE,
   ENABLE_AREA_EDIT_FURNITURE_RAW,
+  ENABLE_AREA_EDIT_FULLFRAME_ALL,
   isSurfacePlaneFinish,
 } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
@@ -84,6 +85,8 @@ type AreaEditFinishCtx = {
   allPlacements: NormalizedRect[];
   surfaceOnly: boolean;
   openings: NormalizedRect[];
+  /** 1-B/Stage3 の開口復元(原画を窓へ貼り戻す)専用。窓手前の家具を消さないよう、家具範囲に重なる開口を除いたもの。 */
+  openingsForRestore: NormalizedRect[];
   keepQuality: boolean;
   isFreePlan: boolean;
 };
@@ -664,7 +667,7 @@ export function AiEditWorkspace({
       ctx: AreaEditFinishCtx,
       flags: { runFinishing: boolean; runOpeningRestore: boolean; runEnhance: boolean; runFreePlan: boolean }
     ): Promise<string> => {
-      const { baseW, baseH, imageSize, editedHasReplacement, skipFinishFor1B, anyComposited, allPlacements, surfaceOnly, openings } = ctx;
+      const { baseW, baseH, imageSize, editedHasReplacement, skipFinishFor1B, anyComposited, allPlacements, surfaceOnly, openings, openingsForRestore } = ctx;
       let outUrl = input;
       // 【Stage3-lite・260722】家具/混在の“ソフトなハロー”対策(A/B)。ON のとき、家具/混在では全体仕上げと union 再閉じ込めを
       // 回さず、membrane 済みの per-region 合成結果を直採用＝パッチ（領域だけ別トーン）の発生源を断つ。既定 OFF。
@@ -716,11 +719,12 @@ export function AiEditWorkspace({
       }
       // 1-B の開口復元（面仕上げのみ全画面採用時）。ドラフト生成時に一度実施済みのため、本番確定では再実施しない
       // （runOpeningRestore=false＝冪等な再貼りを省く）。
-      if (flags.runOpeningRestore && skipFinishFor1B && openings.length > 0 && baseScaled) {
+      if (flags.runOpeningRestore && skipFinishFor1B && openingsForRestore.length > 0 && baseScaled) {
         const aiFull = outUrl;
         try {
           const openingFeather = Math.round(Math.max(baseW, baseH) * 0.004);
-          outUrl = await compositeMaskedEdit(aiFull, baseScaled, openings, baseW, baseH, openingFeather, 0, undefined, false);
+          // 窓手前の家具を消さないよう、家具範囲に重なる開口を除いた openingsForRestore を使う（混在編集・Stage3 監査対応）。
+          outUrl = await compositeMaskedEdit(aiFull, baseScaled, openingsForRestore, baseW, baseH, openingFeather, 0, undefined, false);
         } catch {
           /* 開口復元の失敗は全画面結果を採用 */
         }
@@ -878,6 +882,10 @@ export function AiEditWorkspace({
       // フェザーを両側（外側にも）掛けて境界のすぐ外側の硬い縁を溶かす。家具差し替えを含むと外側フェザーで元家具の
       // ゴースト二重縁が出るため、混在時は従来どおり内側限定に留める（安全側）。
       const surfaceOnly = objectsScaled.length > 0 && objectsScaled.every((o) => isSurfacePlaneFinish(o));
+      // 【全画面採用の統一判定（Stage3・260722）】面仕上げのみ(1-B)に加え、家具/混在も含め“全て”を全画面生成で採用する
+      // モード（ENABLE_AREA_EDIT_FULLFRAME_ALL）を1つの真偽値に集約。true のとき per-region クロップ合成・union 閉じ込め・
+      // 仕上げパスを行わず、モデルの全画面1枚を採用＝合成境界も見切れも作らない。窓/ドアだけ最終段でシームレス復元する。
+      const useFullFrame = (surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME) || ENABLE_AREA_EDIT_FULLFRAME_ALL;
 
       // editOneRegion: base に対して1領域 o を Gemini で編集し、範囲外を base のまま保った全画像を返す（失敗は null）。
       const editOneRegion = async (
@@ -903,7 +911,8 @@ export function AiEditWorkspace({
           // 面の形・エッジが崩れ、境界で床色が変わる（④）。全画面のまま生成すれば面の形状が部屋全体の遠近で固定され、
           // 面全体を見て塗り残しなく仕上げやすい（③）。家具の生地張り替えや差し替えは従来どおりクロップで寄る。
           const isSurface = isSurfacePlaneFinish(o);
-          const cropPx = isSurface ? null : isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
+          // Stage3: 全画面採用モードでは家具もクロップせず全画面送信（クロップ→貼り戻しの境界・見切れを作らない）。
+          const cropPx = isSurface || useFullFrame ? null : isOccluded ? cropForBBox(objBBox) ?? sharedCropPx : sharedCropPx;
           // 【面の開口保持（case B・260718 → 監査対応 F1/F4）】検出した窓・ドア等の開口は、合成でマスクから除外＝元のまま
           // 保持する。モデルには面全体を一様に塗らせ（塗り残しゼロ・③）、開口だけ決定論的に元へ戻す。
           // F1: 除外の発火は「開口が検出されたか」で判定する（isSurfacePlaneFinish 依存をやめる）。開口検出は解析モデルが
@@ -939,8 +948,7 @@ export function AiEditWorkspace({
             // 複数範囲では最終的にこの範囲マスクだけを採用するため、モデルにも「この範囲だけ触る」よう常に指示する。
             // 1-B（面仕上げのみを全画面採用）では合成でポリゴン外を保護しない分、モデル側の「この範囲だけ触る」指示を
             // 常に強制して家具・床・他壁の描き替え（drift）を最大限抑止する（260720）。
-            strictConfine:
-              (surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME) || !!cropPx || !objIsGlobal || multiRegion,
+            strictConfine: useFullFrame || !!cropPx || !objIsGlobal || multiRegion,
             ...(narratives[o.id] ? { placementNarratives: { [o.id]: narratives[o.id] } } : {}),
           };
           const res = await fetch('/api/ai-edit', {
@@ -982,7 +990,8 @@ export function AiEditWorkspace({
           // ＝囲みのすぐ外側に境界線（継ぎ目）を構造的に作らない。モデルは画像“全体”を coherent に再生成しており、
           // 対象面以外（家具・床・他壁）は strictConfine＋プロンプトで保持指示済み。窓・ドアの原画復元は最終段でまとめて
           // 行う（開口だけの復元＝ポリゴン境界の継ぎ目が出ない）。contain の黒帯は避けて cover で返す。
-          if (surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME) {
+          // Stage3（260722）: 面仕上げのみ(1-B)に加え、家具/混在も全画面採用（useFullFrame）＝合成境界・見切れを作らない。
+          if (useFullFrame) {
             const fullFrame =
               mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
             return { url: fullFrame, composited: false };
@@ -1066,13 +1075,30 @@ export function AiEditWorkspace({
       // （別範囲の差し替え）が開口の穴あけで原画に戻され、せっかく置いた家具が消える。仕上げ前の workingBase は
       // 「範囲外＝base・面の窓＝base・窓の手前の家具＝家具」を既に正しく含むため、戻し先として正しい。
       confineBaseForFinish = workingBase;
-      // 【1-B】面仕上げのみの全画面採用では貼り合わせ＝継ぎ目が無いため、仕上げ（継ぎ目消し）パスは不要
-      // （後段 applyAreaEditFinish 内で skipFinishFor1B により自動スキップ）。
-      const skipFinishFor1B = surfaceOnly && ENABLE_AREA_EDIT_SURFACE_FULLFRAME;
+      // 全画面採用（1-B / Stage3）では貼り合わせ＝継ぎ目が無いため、仕上げ（継ぎ目消し）パスは不要で、union 閉じ込めも
+      // 走らない（各 editOneRegion が composited:false）。開口（窓・ドア）だけを最終段でシームレス復元する。この真偽値で
+      // applyAreaEditFinish の「仕上げスキップ」と「開口復元の発火」を制御する（家具/混在も含めて全画面採用に統一）。
+      const skipFinishFor1B = useFullFrame;
       // 検出開口（窓・ドア）は union 閉じ込めの excludeRects と 1-B 開口復元の両方で使う（クリップ→面積→幾何で健全化・260720）。
       const openings = ENABLE_OPENING_PRESERVE
         ? objectsScaled.flatMap((o) => sanitizeDetectedOpenings(openingsMap[o.id], o.placements))
         : [];
+      // 【混在編集の家具保持（Stage3・260722 監査対応）】1-B/Stage3 の開口復元は“原画(baseScaled)”を窓へ貼り戻すため、
+      // 窓の手前に置いた家具（同時に編集した混在ケース）を原画（家具なし）へ戻して消してしまう。家具(非面仕上げ)の範囲に
+      // 重なる開口は復元対象から外す＝手前の家具を保持する。純粋な面仕上げ/家具のみでは全採用/空になり影響しない。
+      const furnitureBBoxes = objectsScaled
+        .filter((o) => !isSurfacePlaneFinish(o))
+        .map((o) => placementsBBox(o.placements))
+        .filter((b): b is NonNullable<typeof b> => b != null);
+      const openingsForRestore =
+        furnitureBBoxes.length === 0
+          ? openings
+          : openings.filter(
+              (op) =>
+                !furnitureBBoxes.some(
+                  (b) => op.x < b.x1 && op.x + op.width > b.x0 && op.y < b.y1 && op.y + op.height > b.y0
+                )
+            );
       // 仕上げ段（naturalize/harmonize → union 閉じ込め → 1-B 開口復元 → 精細化 → フリープラン後処理）に渡すコンテキストを確定。
       // 実行は Gemini 経路を抜けた後の applyAreaEditFinish で行う。ドラフト（候補）は高コスト段を回さず、本番確定でのみ通す（point2）。
       finishCtx = {
@@ -1085,6 +1111,7 @@ export function AiEditWorkspace({
         allPlacements,
         surfaceOnly,
         openings,
+        openingsForRestore,
         keepQuality,
         isFreePlan,
       };
