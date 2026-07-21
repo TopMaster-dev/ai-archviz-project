@@ -2180,7 +2180,35 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
           // Door Arc — 既定は室内側へ開く（部屋重心側＝描画方向に依存しない: 3c）。
           // op.swingFlipX(吊り元 左右) / op.swingFlipY(内外) で手動反転（3e）。
-          if (op.type.startsWith('door')) {
+          // 引き戸（260721 クライアント要望）: 開き戸の円弧ではなく、開口内に2枚の引き戸パネルを別トラック（壁厚方向へ
+          // わずかにずらして）重ねて描く＝2D平面図でも「スライドする戸」と一目で分かる。種別は3D（2枚引き）と連動する。
+          if (op.type === 'door_sliding') {
+            ctx.save();
+            ctx.strokeStyle = isSelected ? '#ffffff' : 'rgba(255,255,255,0.9)';
+            ctx.lineWidth = 2;
+            ctx.lineCap = 'butt';
+            const overlap = Math.min(w * 0.25, 6); // 中央で少し重ねてスライドを表す
+            const off = 2; // 2枚のトラック間オフセット（開口の厚み ±4px 内に収める）
+            // 手前トラックの引き戸（左端 -w から中央を少し越えるところまで）
+            ctx.beginPath();
+            ctx.moveTo(-w, -off);
+            ctx.lineTo(overlap, -off);
+            ctx.stroke();
+            // 奥トラックの引き戸（右端 +w から中央を少し越えるところまで）
+            ctx.beginPath();
+            ctx.moveTo(w, off);
+            ctx.lineTo(-overlap, off);
+            ctx.stroke();
+            // 各パネルの戸尻に小口を立てて「板」に見せる（開口の左右端）
+            ctx.beginPath();
+            ctx.moveTo(-w, -off - 1.5);
+            ctx.lineTo(-w, -off + 1.5);
+            ctx.moveTo(w, off - 1.5);
+            ctx.lineTo(w, off + 1.5);
+            ctx.stroke();
+            ctx.restore();
+          } else if (op.type.startsWith('door')) {
+            // 開き戸: 吊り元と開き方向を2D平面図と連動させる（260611 Sec1）。
             const c = pointsMm.length >= 3 ? polygonCentroidMm(pointsMm) : null;
             // 壁ローカル -y(現状の弧が向く側) が室内側か。dot((dy,-dx), 重心方向)>=0 で室内。
             const localMinusYInterior = c
