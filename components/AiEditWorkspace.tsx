@@ -55,6 +55,7 @@ import {
   ENABLE_SEAMLESS_MEMBRANE,
   ENABLE_AREA_EDIT_FURNITURE_RAW,
   ENABLE_AREA_EDIT_FULLFRAME_ALL,
+  ENABLE_AREA_EDIT_ONESHOT,
   isSurfacePlaneFinish,
 } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
@@ -1050,16 +1051,66 @@ export function AiEditWorkspace({
       let editedHasReplacement = false; // 実際に成功した編集の中に「差し替え（参照画像あり）」が含まれるか＝最終パスの種類選択に使う。
       let failedCount = 0; // 失敗（null）したエリアの数。1件でも成功したうえで一部失敗したら警告を出す（無言失敗の可視化・260715 監査対応）。
       let anyComposited = false; // 1範囲でも「合成マスクで閉じ込め」たか。true のとき最終仕上げも範囲外へ閉じ込める（①②・260717）。
-      for (const o of processOrder) {
-        const r = await editOneRegion(workingBase, o, multiRegion, !!occludedMap[o.id]);
-        if (r) {
-          workingBase = r.url;
-          if (r.composited) anyComposited = true;
-          editedCount += 1;
-          editedRegions += o.placements.length;
-          if (o.imageDataUrl) editedHasReplacement = true;
-        } else {
-          failedCount += 1;
+
+      // 【Stage4・単発複数生成（260722 開発者要望）】複数エリアを“1回の生成”で処理＝逐次生成の drift 累積を無くす。
+      // プロンプトは元から参照画像を番号付きで各領域へ束ねる（buildAiEditReferenceGuide が多オブジェクト対応済）ので、
+      // 全オブジェクトを1回の /api/ai-edit に載せるだけでよい。全画面採用かつ複数オブジェクトのときのみ。失敗時は逐次へ。
+      let oneShotDone = false;
+      if (ENABLE_AREA_EDIT_ONESHOT && useFullFrame && objectsScaled.length >= 2) {
+        try {
+          const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES });
+          // 複数参照を1 body に載せるため、参照画像は「(body上限−base)を参照枚数で割った予算」まで圧縮（Vercel body 上限対策）。
+          const refCount = objectsScaled.filter((o) => !!o.imageDataUrl).length;
+          const refBudget =
+            refCount > 0
+              ? Math.max(400_000, Math.floor((SEND_BODY_MAX_BYTES - dataUrlTransmitBytes(sentBase)) / refCount))
+              : 0;
+          const sentObjects = await Promise.all(
+            objectsScaled.map(async (o) =>
+              o.imageDataUrl
+                ? { ...o, imageDataUrl: await compressDataUrlToBudget(o.imageDataUrl, { maxBytes: refBudget }) }
+                : o
+            )
+          );
+          const res = await fetch('/api/ai-edit', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+            body: JSON.stringify({
+              baseImage: sentBase,
+              objects: sentObjects,
+              aspectRatio,
+              imageSize,
+              learnedHints,
+              strictConfine: true,
+              ...(Object.keys(narratives).length > 0 ? { placementNarratives: narratives } : {}),
+            }),
+          });
+          const data = await res.json();
+          if (data.success && data.url) {
+            void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+            workingBase = await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover');
+            editedCount = objectsScaled.length;
+            editedRegions = objectsScaled.reduce((n, o) => n + o.placements.length, 0);
+            editedHasReplacement = objectsScaled.some((o) => !!o.imageDataUrl);
+            oneShotDone = true; // 全画面1枚を採用＝anyComposited は false のまま（union/仕上げは走らない）。
+          }
+        } catch {
+          /* 単発生成の失敗は従来の逐次ループへフォールバック（生成結果を失わない） */
+        }
+      }
+
+      if (!oneShotDone) {
+        for (const o of processOrder) {
+          const r = await editOneRegion(workingBase, o, multiRegion, !!occludedMap[o.id]);
+          if (r) {
+            workingBase = r.url;
+            if (r.composited) anyComposited = true;
+            editedCount += 1;
+            editedRegions += o.placements.length;
+            if (o.imageDataUrl) editedHasReplacement = true;
+          } else {
+            failedCount += 1;
+          }
         }
       }
       if (editedCount === 0) throw new Error('編集に失敗しました。しばらくして再度お試しください。');
