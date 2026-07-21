@@ -3,6 +3,7 @@ import {
   verifyAdmin,
   getKeyHealth,
   getUsageSummary,
+  getUserUsageHistory,
   testKey,
   findUserStatusByEmail,
   setUserGrace,
@@ -51,7 +52,7 @@ export default async function handler(req: any, res: any) {
   // --- 管理ダッシュボード（メール許可リスト認証）---
   // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
-  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'testkey', 'infra', 'user-status', 'list-requests'];
+  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests'];
   const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request'];
   if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
@@ -63,7 +64,21 @@ export default async function handler(req: any, res: any) {
     }
     if (!admin.ok) return res.status(admin.status).json({ error: admin.error });
     if (action === 'keyhealth') return res.status(200).json({ success: true, keys: getKeyHealth() });
-    if (action === 'usage') return res.status(200).json({ success: true, summary: await getUsageSummary() });
+    if (action === 'usage') {
+      const from = getQueryParam(req, 'from') || null; // 任意の期間フィルタ（ISO・空=全期間）
+      const to = getQueryParam(req, 'to') || null;
+      return res.status(200).json({ success: true, summary: await getUsageSummary({ from, to }) });
+    }
+    // 1ユーザーの利用履歴ドリルダウン（管理者のみ・PII を含む）。
+    if (action === 'user-usage') {
+      const userId = getQueryParam(req, 'userId');
+      if (!userId) return res.status(400).json({ error: 'userId が必要です。' });
+      const from = getQueryParam(req, 'from') || null;
+      const to = getQueryParam(req, 'to') || null;
+      const result = await getUserUsageHistory(userId, { from, to });
+      if (!result.ok) return res.status(400).json({ error: result.reason });
+      return res.status(200).json({ success: true, usage: result });
+    }
     if (action === 'infra') return res.status(200).json({ success: true, infra: await getInfraStatus() });
     if (action === 'testkey') {
       const engine = getEngineParam(req);

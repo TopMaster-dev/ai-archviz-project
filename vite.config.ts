@@ -498,7 +498,7 @@ export default defineConfig(({ mode }) => {
                     if (['whoami', 'keyhealth', 'usage', 'testkey', 'infra'].includes(action)) {
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-                        const { verifyAdmin, getKeyHealth, getUsageSummary, testKey } = await import('./lib/server/adminDashboard.js');
+                        const { verifyAdmin, getKeyHealth, getUsageSummary, getUserUsageHistory, testKey } = await import('./lib/server/adminDashboard.js');
                         const admin = await verifyAdmin(token);
                         if (action === 'whoami') {
                             res.statusCode = 200;
@@ -507,7 +507,20 @@ export default defineConfig(({ mode }) => {
                         if (!admin.ok) { res.statusCode = admin.status; return res.end(JSON.stringify({ error: admin.error })); }
                         res.statusCode = 200;
                         if (action === 'keyhealth') return res.end(JSON.stringify({ success: true, keys: getKeyHealth() }));
-                        if (action === 'usage') return res.end(JSON.stringify({ success: true, summary: await getUsageSummary() }));
+                        if (action === 'usage') {
+                            const from = url0.searchParams.get('from') || null;
+                            const to = url0.searchParams.get('to') || null;
+                            return res.end(JSON.stringify({ success: true, summary: await getUsageSummary({ from, to }) }));
+                        }
+                        if (action === 'user-usage') {
+                            const userId = url0.searchParams.get('userId') || '';
+                            if (!userId) { res.statusCode = 400; return res.end(JSON.stringify({ error: 'userId が必要です。' })); }
+                            const from = url0.searchParams.get('from') || null;
+                            const to = url0.searchParams.get('to') || null;
+                            const result = await getUserUsageHistory(userId, { from, to });
+                            if (!result.ok) { res.statusCode = 400; return res.end(JSON.stringify({ error: result.reason })); }
+                            return res.end(JSON.stringify({ success: true, usage: result }));
+                        }
                         if (action === 'infra') {
                             const { getInfraStatus } = await import('./lib/server/adminInfra.js');
                             return res.end(JSON.stringify({ success: true, infra: await getInfraStatus() }));

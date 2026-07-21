@@ -22,6 +22,8 @@ interface KeyItem {
 }
 interface GroupAgg {
   key: string;
+  /** 表示名（ユーザー別のみ。email か表示名。key は user_id のまま＝ドリルダウン用）。 */
+  label?: string;
   events: number;
   images: number;
   tokens: number;
@@ -37,6 +39,23 @@ interface Summary {
   byUser: GroupAgg[];
   byProject: GroupAgg[];
   note: string;
+}
+interface UsageEvent {
+  createdAt: string | null;
+  feature: string | null;
+  model: string | null;
+  images: number;
+  tokens: number;
+  costUsd: number;
+  costEstimated: boolean;
+}
+interface UserUsageResult {
+  ok: boolean;
+  reason?: string;
+  user: { id: string; email: string | null; displayName: string | null };
+  events: UsageEvent[];
+  totalEvents: number;
+  totalCostUsd: number;
 }
 interface KeyTest {
   engine: string;
@@ -240,7 +259,23 @@ function Card({ children }: { children: React.ReactNode }) {
   return <div className="rounded-xl border border-white/10 bg-neutral-900/70 p-4">{children}</div>;
 }
 
-function GroupTable({ title, rows, note }: { title: string; rows: GroupAgg[]; note?: string }) {
+function GroupTable({
+  title,
+  rows,
+  note,
+  keyHeader = 'キー',
+  onRowClick,
+}: {
+  title: string;
+  rows: GroupAgg[];
+  note?: string;
+  keyHeader?: string;
+  /** 設定するとキー列がクリック可能になり、その行のドリルダウンを開く（ユーザー別で使用）。 */
+  onRowClick?: (row: GroupAgg) => void;
+}) {
+  // 表示名があればそれを、無ければ UUID を短縮表示（誰か分かるように G1）。
+  const shownKey = (r: GroupAgg): string =>
+    r.label ?? (r.key.length > 40 ? `${r.key.slice(0, 8)}…${r.key.slice(-6)}` : r.key);
   return (
     <Card>
       <h3 className="mb-2 text-sm font-bold text-emerald-300">{title}</h3>
@@ -248,7 +283,7 @@ function GroupTable({ title, rows, note }: { title: string; rows: GroupAgg[]; no
         <table className="w-full min-w-[520px] text-xs">
           <thead className="text-neutral-400">
             <tr className="text-left">
-              <th className="py-1 pr-3 font-semibold">キー</th>
+              <th className="py-1 pr-3 font-semibold">{keyHeader}</th>
               <th className="py-1 pr-3 text-right font-semibold">回数</th>
               <th className="py-1 pr-3 text-right font-semibold">画像</th>
               <th className="py-1 pr-3 text-right font-semibold">トークン</th>
@@ -265,8 +300,19 @@ function GroupTable({ title, rows, note }: { title: string; rows: GroupAgg[]; no
             )}
             {rows.map((r) => (
               <tr key={r.key} className="border-t border-white/5">
-                <td className="py-1 pr-3 font-mono text-[11px] break-all text-neutral-200">
-                  {r.key.length > 40 ? `${r.key.slice(0, 8)}…${r.key.slice(-6)}` : r.key}
+                <td className="py-1 pr-3 break-all text-neutral-200">
+                  {onRowClick ? (
+                    <button
+                      type="button"
+                      onClick={() => onRowClick(r)}
+                      title="このユーザーの利用履歴を表示"
+                      className="text-left text-emerald-300 underline decoration-dotted underline-offset-2 hover:text-emerald-200"
+                    >
+                      {shownKey(r)}
+                    </button>
+                  ) : (
+                    <span className={r.label ? 'text-neutral-200' : 'font-mono text-[11px]'}>{shownKey(r)}</span>
+                  )}
                 </td>
                 <td className="py-1 pr-3 text-right tabular-nums">{r.events.toLocaleString('ja-JP')}</td>
                 <td className="py-1 pr-3 text-right tabular-nums">{r.images.toLocaleString('ja-JP')}</td>
@@ -282,6 +328,113 @@ function GroupTable({ title, rows, note }: { title: string; rows: GroupAgg[]; no
       </div>
       {note && <p className="mt-2 text-[11px] text-neutral-500">{note}</p>}
     </Card>
+  );
+}
+
+/** 機能コード（ai_usage_events.feature）を日本語表示に（見やすさのため。未知はそのまま）。 */
+const FEATURE_LABELS: Record<string, string> = {
+  render: 'AIレンダリング',
+  ai_edit: 'AI画像編集',
+  ai_coordinate: 'コーディネート',
+  ai_design: 'AIデザイン提案',
+  agent: 'エージェント相談',
+  export: '高解像度書き出し',
+};
+const featureLabel = (f: string | null): string => (f ? FEATURE_LABELS[f] ?? f : '—');
+
+/** 1ユーザーの利用履歴ドリルダウン（モーダル・G2）。 */
+function UserUsageModal({
+  data,
+  loading,
+  fallbackId,
+  onClose,
+}: {
+  data: UserUsageResult | null;
+  loading: boolean;
+  fallbackId: string;
+  onClose: () => void;
+}) {
+  const title = data?.user.email || data?.user.displayName || fallbackId;
+  return (
+    <div
+      className="fixed inset-0 z-[10050] flex items-start justify-center overflow-y-auto bg-black/70 p-4 sm:p-8"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-3xl rounded-2xl border border-white/10 bg-neutral-900 p-5 shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="truncate text-sm font-bold text-emerald-300">利用履歴</h3>
+            <div className="truncate text-sm font-bold text-white">{title}</div>
+            {data?.user.displayName && data.user.email && (
+              <div className="truncate text-[11px] text-neutral-400">{data.user.displayName}</div>
+            )}
+            <div className="truncate font-mono text-[10px] text-neutral-500">{data?.user.id || fallbackId}</div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="shrink-0 rounded-lg bg-neutral-800 px-3 py-1.5 text-xs text-neutral-200 transition hover:bg-neutral-700"
+          >
+            閉じる
+          </button>
+        </div>
+
+        {loading ? (
+          <p className="mt-4 text-xs text-neutral-400">読み込み中…</p>
+        ) : !data?.ok ? (
+          <p className="mt-4 text-xs text-amber-300">取得に失敗しました{data?.reason ? `（${data.reason}）` : ''}。</p>
+        ) : (
+          <>
+            <div className="mt-3 flex flex-wrap gap-4 text-xs text-neutral-300">
+              <span>合計 <b className="tabular-nums">{data.totalEvents.toLocaleString('ja-JP')}</b> 回</span>
+              <span>概算費用 <b>{yen(data.totalCostUsd)}</b>（{usd(data.totalCostUsd)}）</span>
+            </div>
+            <div className="mt-3 max-h-[55vh] overflow-y-auto scroll-dark rounded-lg border border-white/10">
+              <table className="w-full min-w-[560px] text-xs">
+                <thead className="sticky top-0 bg-neutral-900 text-neutral-400">
+                  <tr className="text-left">
+                    <th className="px-3 py-1.5 font-semibold">日時</th>
+                    <th className="px-3 py-1.5 font-semibold">機能</th>
+                    <th className="px-3 py-1.5 font-semibold">モデル</th>
+                    <th className="px-3 py-1.5 text-right font-semibold">画像</th>
+                    <th className="px-3 py-1.5 text-right font-semibold">トークン</th>
+                    <th className="px-3 py-1.5 text-right font-semibold">概算費用</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.events.length === 0 && (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-2 text-neutral-500">
+                        この期間の利用履歴はありません。
+                      </td>
+                    </tr>
+                  )}
+                  {data.events.map((e, i) => (
+                    <tr key={i} className="border-t border-white/5">
+                      <td className="whitespace-nowrap px-3 py-1.5 text-neutral-300">{fmtDate(e.createdAt)}</td>
+                      <td className="px-3 py-1.5 text-neutral-200">{featureLabel(e.feature)}</td>
+                      <td className="px-3 py-1.5 font-mono text-[10px] break-all text-neutral-400">{e.model ?? '—'}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{e.images.toLocaleString('ja-JP')}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">{e.tokens.toLocaleString('ja-JP')}</td>
+                      <td className="px-3 py-1.5 text-right tabular-nums">
+                        {yen(e.costUsd)}
+                        {e.costEstimated && <span className="ml-1 text-amber-400" title="単価不明">*</span>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="mt-2 text-[11px] text-neutral-500">
+              最新 {data.events.length.toLocaleString('ja-JP')} 件を表示（* は単価不明の概算）。
+            </p>
+          </>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -414,6 +567,64 @@ export function AdminDashboard() {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [infra, setInfra] = useState<InfraStatus | null>(null);
   const [tests, setTests] = useState<Record<string, KeyTest | 'testing'>>({});
+  // 期間フィルタ（G3）: 空=全期間。日付のみ（from は 00:00、to は 23:59:59 を送る）。
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+  // 実際に集計へ反映済みの期間（＝いま表に出ている条件）。ドリルダウンはこちらを使い、
+  // 入力しただけ（未適用）の値との食い違いを防ぐ。
+  const [applied, setApplied] = useState<{ from: string; to: string }>({ from: '', to: '' });
+  const [usageBusy, setUsageBusy] = useState(false);
+  // ユーザー別ドリルダウン（G2）。
+  const [drillId, setDrillId] = useState<string | null>(null);
+  const [drillData, setDrillData] = useState<UserUsageResult | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
+
+  // from/to（日付のみ）を API 用の ISO クエリ文字列へ。日付のみ入力を日の境界へ広げる。空はそのまま空。
+  const rangeParamsFor = (from: string, to: string): string => {
+    const p = new URLSearchParams();
+    if (from) p.set('from', new Date(`${from}T00:00:00`).toISOString());
+    if (to) p.set('to', new Date(`${to}T23:59:59`).toISOString());
+    const s = p.toString();
+    return s ? `&${s}` : '';
+  };
+
+  // 集計を（期間指定で）取得し直す。成功時に applied を確定する。
+  const loadUsage = async (from = fromDate, to = toDate) => {
+    setUsageBusy(true);
+    try {
+      const us = await (await adminFetch(`usage${rangeParamsFor(from, to)}`)).json();
+      setSummary(us?.summary ?? null);
+      setApplied({ from, to });
+    } catch {
+      // 失敗時は既存表示を保持（summary/applied は据え置き）。
+    } finally {
+      setUsageBusy(false);
+    }
+  };
+
+  // ユーザー別行クリック → その人の履歴を取得（表と同じ＝適用済みの期間フィルタを適用）。
+  const openUserDrill = async (row: GroupAgg) => {
+    setDrillId(row.key);
+    setDrillData(null);
+    setDrillLoading(true);
+    const fallback = (reason: string): UserUsageResult => ({
+      ok: false,
+      reason,
+      user: { id: row.key, email: null, displayName: row.label ?? null },
+      events: [],
+      totalEvents: 0,
+      totalCostUsd: 0,
+    });
+    try {
+      const q = `user-usage&userId=${encodeURIComponent(row.key)}${rangeParamsFor(applied.from, applied.to)}`;
+      const j = await (await adminFetch(q)).json();
+      setDrillData(j?.usage ?? fallback(j?.error ?? 'error'));
+    } catch {
+      setDrillData(fallback('通信エラー'));
+    } finally {
+      setDrillLoading(false);
+    }
+  };
 
   useEffect(() => {
     void (async () => {
@@ -547,13 +758,59 @@ export function AdminDashboard() {
         {/* AI利用状況/費用 */}
         <section className="space-y-3">
           <div className="flex items-baseline justify-between">
-            <h2 className="text-sm font-bold text-neutral-200">AI利用状況（直近）</h2>
+            <h2 className="text-sm font-bold text-neutral-200">AI利用状況{fromDate || toDate ? '（指定期間）' : '（直近）'}</h2>
             {summary?.ok && (
               <span className="text-xs text-neutral-400">
                 合計 {summary.totalEvents.toLocaleString('ja-JP')} 回 ・ 概算 {yen(summary.totalCostUsd)}（{usd(summary.totalCostUsd)}）
               </span>
             )}
           </div>
+
+          {/* 期間フィルタ（G3）。空欄は全期間。 */}
+          <Card>
+            <div className="flex flex-wrap items-end gap-2">
+              <label className="text-[11px] text-neutral-400">
+                開始日
+                <input
+                  type="date"
+                  value={fromDate}
+                  max={toDate || undefined}
+                  onChange={(e) => setFromDate(e.target.value)}
+                  className="mt-0.5 block rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white outline-none focus:border-emerald-500/60"
+                />
+              </label>
+              <label className="text-[11px] text-neutral-400">
+                終了日
+                <input
+                  type="date"
+                  value={toDate}
+                  min={fromDate || undefined}
+                  onChange={(e) => setToDate(e.target.value)}
+                  className="mt-0.5 block rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white outline-none focus:border-emerald-500/60"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => void loadUsage()}
+                disabled={usageBusy}
+                className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+              >
+                {usageBusy ? '集計中…' : '適用'}
+              </button>
+              {(fromDate || toDate) && (
+                <button
+                  type="button"
+                  onClick={() => { setFromDate(''); setToDate(''); void loadUsage('', ''); }}
+                  disabled={usageBusy}
+                  className="rounded-lg border border-white/10 px-3 py-1.5 text-xs text-neutral-300 transition hover:bg-white/10 disabled:opacity-40"
+                >
+                  クリア
+                </button>
+              )}
+              <span className="text-[11px] text-neutral-500">空欄は全期間。ユーザー名をクリックすると個別の利用履歴を表示します。</span>
+            </div>
+          </Card>
+
           {!summary?.ok ? (
             <Card>
               <p className="text-xs text-neutral-400">
@@ -563,10 +820,10 @@ export function AdminDashboard() {
             </Card>
           ) : (
             <>
-              <GroupTable title="モデル別" rows={summary.byModel} note={summary.note} />
+              <GroupTable title="モデル別" rows={summary.byModel} keyHeader="モデル" note={summary.note} />
               <div className="grid gap-3 lg:grid-cols-2">
-                <GroupTable title="ユーザー別（上位）" rows={summary.byUser} />
-                <GroupTable title="案件（プロジェクト）別（上位）" rows={summary.byProject} />
+                <GroupTable title="ユーザー別（上位）" rows={summary.byUser} keyHeader="ユーザー" onRowClick={(r) => void openUserDrill(r)} />
+                <GroupTable title="案件（プロジェクト）別（上位）" rows={summary.byProject} keyHeader="プロジェクト" />
               </div>
               <p className="text-[11px] text-neutral-500">
                 * 印は単価不明の行を含む概算。¥は 150円/$ での目安表示です。
@@ -624,6 +881,16 @@ export function AdminDashboard() {
           </div>
         </section>
       </div>
+
+      {/* ユーザー別ドリルダウン（G2） */}
+      {drillId && (
+        <UserUsageModal
+          data={drillData}
+          loading={drillLoading}
+          fallbackId={drillId}
+          onClose={() => { setDrillId(null); setDrillData(null); }}
+        />
+      )}
     </div>
   );
 }

@@ -140,6 +140,8 @@ interface UsageRow {
 
 interface GroupAgg {
   key: string;
+  /** 表示名（ユーザー別のみ設定。email か表示名。key は user_id のまま＝ドリルダウンに使う）。 */
+  label?: string;
   events: number;
   images: number;
   tokens: number;
@@ -171,8 +173,36 @@ export interface UsageSummary {
   note: string;
 }
 
-/** ai_usage_events を集計する（直近分・上限つき）。管理者のみが呼ぶ前提。 */
-export async function getUsageSummary(limit = 10000): Promise<UsageSummary> {
+/** ISO 日時として妥当なら返す（不正は null＝フィルタ無効）。UI からの from/to をそのまま使わないための健全化。 */
+function toIsoOrNull(v: string | null | undefined): string | null {
+  if (!v || !String(v).trim()) return null;
+  const t = new Date(String(v)).getTime();
+  return Number.isFinite(t) ? new Date(t).toISOString() : null;
+}
+
+/** ユーザーID群 → 表示名（email 優先・無ければ表示名）を引く（admin_user_status ビュー・service_role）。 */
+async function resolveUserLabels(
+  sb: ReturnType<typeof supabaseAdmin>,
+  userIds: string[],
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const ids = userIds.filter((id) => id && id !== '(不明)');
+  if (!sb || ids.length === 0) return map;
+  const { data } = await sb.from('admin_user_status').select('id, email, display_name').in('id', ids);
+  for (const p of (data ?? []) as { id: string; email: string | null; display_name: string | null }[]) {
+    const label = (p.email || '').trim() || (p.display_name || '').trim();
+    if (label) map.set(p.id, label);
+  }
+  return map;
+}
+
+/** ai_usage_events を集計する（直近分・上限つき・任意の期間フィルタ）。管理者のみが呼ぶ前提。 */
+export async function getUsageSummary(opts?: {
+  limit?: number;
+  from?: string | null;
+  to?: string | null;
+}): Promise<UsageSummary> {
+  const limit = Math.min(50000, Math.max(1, opts?.limit ?? 10000));
   const empty: UsageSummary = {
     ok: false,
     totalEvents: 0,
@@ -184,11 +214,16 @@ export async function getUsageSummary(limit = 10000): Promise<UsageSummary> {
   };
   const sb = supabaseAdmin();
   if (!sb) return { ...empty, reason: 'server-not-configured' };
-  const { data, error } = await sb
+  const from = toIsoOrNull(opts?.from);
+  const to = toIsoOrNull(opts?.to);
+  let q = sb
     .from('ai_usage_events')
     .select('user_id, project_id, feature, model, image_count, input_tokens, output_tokens, total_tokens')
     .order('created_at', { ascending: false })
     .limit(limit);
+  if (from) q = q.gte('created_at', from);
+  if (to) q = q.lte('created_at', to);
+  const { data, error } = await q;
   if (error) return { ...empty, reason: error.message };
   const rows = (data ?? []) as UsageRow[];
 
@@ -208,16 +243,100 @@ export async function getUsageSummary(limit = 10000): Promise<UsageSummary> {
     addTo(byUser, row.user_id || '(不明)', row, cost);
     addTo(byProject, row.project_id || '(なし)', row, cost);
   }
+  const byUserTop = topN(byUser, 50);
+  // ユーザー別は UUID のままでは誰か分からないので email/表示名を付ける（G1）。key は user_id のまま＝ドリルダウンに使う。
+  const labels = await resolveUserLabels(sb, byUserTop.map((g) => g.key));
+  for (const g of byUserTop) {
+    const lbl = labels.get(g.key);
+    if (lbl) g.label = lbl;
+  }
   return {
     ok: true,
     totalEvents: rows.length,
     totalCostUsd,
     byModel: topN(byModel, 50),
-    byUser: topN(byUser, 50),
+    byUser: byUserTop,
     byProject: topN(byProject, 50),
     note:
       'Gemini（BYOK）の費用は「回数×概算単価」の推定です。専用エンジン（Replicate）は概算単価×回数。実請求は各プロバイダが正。',
   };
+}
+
+// ---- ユーザー別の利用履歴（ドリルダウン・G2）----
+
+export interface UsageEvent {
+  createdAt: string | null;
+  feature: string | null;
+  model: string | null;
+  images: number;
+  tokens: number;
+  costUsd: number;
+  costEstimated: boolean;
+}
+
+export interface UserUsageResult {
+  ok: boolean;
+  reason?: string;
+  user: { id: string; email: string | null; displayName: string | null };
+  events: UsageEvent[];
+  totalEvents: number;
+  totalCostUsd: number;
+}
+
+/** 1ユーザーの AI 利用履歴（イベント一覧＋合計費用）。任意の期間フィルタ。管理者のみが呼ぶ前提。 */
+export async function getUserUsageHistory(
+  userId: string,
+  opts?: { from?: string | null; to?: string | null; limit?: number },
+): Promise<UserUsageResult> {
+  const id = (userId || '').trim();
+  const base = { user: { id, email: null, displayName: null }, events: [] as UsageEvent[], totalEvents: 0, totalCostUsd: 0 };
+  if (!id) return { ok: false, reason: 'user-required', ...base };
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured', ...base };
+  const limit = Math.min(2000, Math.max(1, opts?.limit ?? 500));
+  const from = toIsoOrNull(opts?.from);
+  const to = toIsoOrNull(opts?.to);
+  let q = sb
+    .from('ai_usage_events')
+    .select('created_at, feature, model, image_count, total_tokens')
+    .eq('user_id', id)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+  if (from) q = q.gte('created_at', from);
+  if (to) q = q.lte('created_at', to);
+  const { data, error } = await q;
+  if (error) return { ok: false, reason: error.message, ...base };
+  const rows = (data ?? []) as {
+    created_at: string | null;
+    feature: string | null;
+    model: string | null;
+    image_count: number | null;
+    total_tokens: number | null;
+  }[];
+  let totalCostUsd = 0;
+  const events: UsageEvent[] = rows.map((r) => {
+    const costUsd = estimateEventCostUsd({ model: r.model, imageCount: r.image_count, inputTokens: null, outputTokens: null });
+    totalCostUsd += costUsd;
+    return {
+      createdAt: r.created_at,
+      feature: r.feature,
+      model: r.model,
+      images: Math.max(0, r.image_count ?? 0),
+      tokens: Math.max(0, r.total_tokens ?? 0),
+      costUsd,
+      costEstimated: !hasKnownPrice(r.model),
+    };
+  });
+  // 表示用に email/表示名を引く（PII・管理者のみ）。
+  let email: string | null = null;
+  let displayName: string | null = null;
+  const { data: prof } = await sb.from('admin_user_status').select('id, email, display_name').eq('id', id).limit(1);
+  const p = (prof ?? [])[0] as { id: string; email: string | null; display_name: string | null } | undefined;
+  if (p) {
+    email = p.email;
+    displayName = p.display_name;
+  }
+  return { ok: true, user: { id, email, displayName }, events, totalEvents: events.length, totalCostUsd };
 }
 
 // ---- ユーザーの猶予期間（フリープラン=AIクレジット期限）管理（#4・260715）----
