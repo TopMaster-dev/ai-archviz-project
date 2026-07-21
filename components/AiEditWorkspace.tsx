@@ -285,6 +285,13 @@ export function AiEditWorkspace({
   >(null);
   // 選んだ候補を本番確定（仕上げ Gemini パス）している最中のローディング（point2・260721）。
   const [finalizingCandidate, setFinalizingCandidate] = useState(false);
+  // 候補の“拡大確認”ライトボックス（260722 クライアント要望）: クリック＝即採用だと詳細を見たいだけで確定してしまうため、
+  // 拡大表示（選択とは別操作）を用意する。candidatePick.candidates のインデックス。null で非表示。
+  const [candidateLightbox, setCandidateLightbox] = useState<number | null>(null);
+  // ピッカーが開閉するたびにライトボックスを閉じる（前回のインデックスが残って誤表示するのを防ぐ）。
+  useEffect(() => {
+    setCandidateLightbox(null);
+  }, [candidatePick]);
   // 【生成中の進捗表示（260720 クライアント要望 point3）】3枚生成でロードが長くなり「固まった？」と不安になる問題への対策。
   // 候補は逐次生成（下の候補ループが await 逐次）のため「N/total 完了」を実測でき、完了した候補は届いた順にサムネで
   // 見せられる＝進んでいることが見える＝最大の不安解消。正確な％は生成APIが途中経過を返さないため出さない（作り物にしない）。
@@ -660,11 +667,13 @@ export function AiEditWorkspace({
       // 最終の閉じ込め（範囲外を base へ戻す／開口を除外）。仕上げパスが範囲外へ描いた家具や継ぎ目をここで是正。
       if (anyComposited && allPlacements.length > 0) {
         try {
-          const unionFeather = Math.round(Math.max(baseW, baseH) * (surfaceOnly ? 0.012 : 0.008));
-          const unionDilate = Math.round(Math.max(baseW, baseH) * 0.015);
-          const confined = surfaceOnly
-            ? await harmonizeEditToBase(confineBase, outUrl, allPlacements, baseW, baseH, { applyDilatePx: unionDilate })
-            : outUrl;
+          // 【Stage1・260722】union 境界の“見える線”の主因は露出/WBの段差。面仕上げ限定だったトーンマッチを家具/混在にも
+          // 広げ（confineBase へ境界色を合わせ込む）、フェザー幅も広げて段差を目立たなくする。幾何エッジは内側限定のまま
+          // （featherOutside=surfaceOnly）＝家具のゴースト二重縁は出さない。dilate は家具でやや広げて“見切れ”を緩和し、
+          // 各範囲の per-region 合成（dilate 同幅）と揃えて union で再切断しないようにする。
+          const unionFeather = Math.round(Math.max(baseW, baseH) * 0.012);
+          const unionDilate = Math.round(Math.max(baseW, baseH) * (surfaceOnly ? 0.015 : 0.02));
+          const confined = await harmonizeEditToBase(confineBase, outUrl, allPlacements, baseW, baseH, { applyDilatePx: unionDilate });
           outUrl = await compositeMaskedEdit(
             confineBase,
             confined,
@@ -918,7 +927,10 @@ export function AiEditWorkspace({
           if (!data.success || !data.url) return null;
           void recordAiUsage({ feature: 'ai_edit', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
           const feather = Math.round(Math.max(baseW, baseH) * 0.008);
-          const dilate = Math.round(Math.max(baseW, baseH) * 0.01);
+          // 家具差し替えは dilate をやや広げる（0.01→0.02・Stage1/260722）: 生成された家具が囲みより少し大きいと、囲み線
+          // ぴったりの合成では家具が切れる（クライアント報告の“見切れ”）。少し外側まで採ることで囲みからのはみ出しを救う。
+          // 面仕上げは従来どおり 0.01（面は囲みぴったりで良く、広げると隣接面へにじむため）。union 側も家具は同幅に揃えてある。
+          const dilate = Math.round(Math.max(baseW, baseH) * (isSurface ? 0.01 : 0.02));
           if (cropPx) {
             const fittedCrop = await fitDataUrlToSize(data.url as string, cropPx.sw, cropPx.sh, 'cover');
             const full = await pasteCropIntoBase(base, fittedCrop, cropPx, baseW, baseH);
@@ -2340,15 +2352,23 @@ export function AiEditWorkspace({
           role="dialog"
           aria-modal="true"
         >
-          <div className="flex max-h-[92vh] w-full max-w-6xl flex-col rounded-2xl border border-white/10 bg-[#0c0c0c] p-4 shadow-2xl">
+          {/* 画面いっぱいに大きく（13インチノートでも候補が見やすいように・260722）。候補は2カラムで大きく、
+              「編集前（元画像）」は候補グリッドから外して小さな参照に降格＝候補が列を食い合わない。 */}
+          <div className="flex max-h-[95vh] w-full max-w-[96vw] flex-col rounded-2xl border border-white/10 bg-[#0c0c0c] p-4 shadow-2xl">
             <div className="mb-3 flex items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-bold text-neutral-100">
-                  良い候補を1つ選んでください（{candidatePick.candidates.length}案）
-                </h3>
-                <p className="mt-0.5 text-[11px] text-neutral-500">
-                  コスト削減のため候補は下書き画質で提示しています。選んだ1枚だけを高画質に仕上げます（構図・家具の形はそのまま保たれます）。
-                </p>
+              <div className="flex items-center gap-3">
+                <div>
+                  <h3 className="text-sm font-bold text-neutral-100">
+                    高画質化する画像を1つ選択してください（{candidatePick.candidates.length}案）
+                  </h3>
+                  <p className="mt-0.5 text-[11px] text-neutral-500">
+                    画像をクリックすると拡大表示できます（拡大では確定しません）。よく確認のうえ「この案を採用」で1枚だけを高画質に仕上げます（構図・家具の形は保たれます）。
+                  </p>
+                </div>
+                <div className="hidden shrink-0 overflow-hidden rounded-md border border-white/10 sm:block">
+                  <img src={candidatePick.baseImageDataUrl} alt="編集前" className="block h-16 w-auto" />
+                  <div className="bg-black/40 px-1.5 py-0.5 text-center text-[10px] text-neutral-400">編集前</div>
+                </div>
               </div>
               <button
                 type="button"
@@ -2359,25 +2379,42 @@ export function AiEditWorkspace({
                 キャンセル（採用しない）
               </button>
             </div>
-            <div className="grid grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2 lg:grid-cols-3">
-              <div className="overflow-hidden rounded-lg border border-white/10">
-                <img src={candidatePick.baseImageDataUrl} alt="編集前" className="block h-auto w-full" />
-                <div className="bg-black/40 px-2 py-1.5 text-[11px] text-neutral-400">編集前（元画像）</div>
-              </div>
+            <div className="grid grid-cols-1 gap-3 overflow-y-auto sm:grid-cols-2">
               {candidatePick.candidates.map((c, i) => (
-                <button
+                <div
                   key={i}
-                  type="button"
-                  disabled={finalizingCandidate}
-                  onClick={() => void handleSelectCandidate(c)}
-                  className="group overflow-hidden rounded-lg border-2 border-white/10 text-left transition-colors hover:border-emerald-500 disabled:opacity-50 disabled:pointer-events-none"
+                  className="overflow-hidden rounded-lg border-2 border-white/10 transition-colors hover:border-emerald-500/60"
                 >
-                  <img src={c.url} alt={`候補${i + 1}`} className="block h-auto w-full" />
-                  <div className="flex items-center justify-between bg-black/40 px-2 py-1.5 text-[11px] font-bold text-neutral-200 group-hover:bg-emerald-600/30">
-                    <span>候補 {i + 1}</span>
-                    <span className="text-emerald-300 opacity-0 group-hover:opacity-100">この案を高画質で採用 →</span>
+                  {/* 画像クリック＝拡大確認のみ（採用しない）。誤って確定してしまう問題の解消・260722。 */}
+                  <button
+                    type="button"
+                    onClick={() => setCandidateLightbox(i)}
+                    className="block w-full cursor-zoom-in"
+                    title="クリックで拡大して確認"
+                  >
+                    <img src={c.url} alt={`候補${i + 1}`} className="block h-auto w-full" />
+                  </button>
+                  <div className="flex items-center justify-between gap-2 bg-black/40 px-2 py-1.5">
+                    <span className="text-[12px] font-bold text-neutral-200">候補 {i + 1}</span>
+                    <div className="flex items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setCandidateLightbox(i)}
+                        className="rounded border border-white/10 px-2 py-1 text-[11px] text-neutral-300 hover:bg-white/5"
+                      >
+                        拡大して確認
+                      </button>
+                      <button
+                        type="button"
+                        disabled={finalizingCandidate}
+                        onClick={() => void handleSelectCandidate(c)}
+                        className="rounded bg-emerald-600/90 px-2.5 py-1 text-[11px] font-bold text-white hover:bg-emerald-500 disabled:opacity-50 disabled:pointer-events-none"
+                      >
+                        この案を採用 →
+                      </button>
+                    </div>
                   </div>
-                </button>
+                </div>
               ))}
             </div>
             {finalizingCandidate && (
@@ -2386,6 +2423,70 @@ export function AiEditWorkspace({
                 選んだ案を高画質に仕上げています…
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* 候補の拡大確認ライトボックス（260722）: 画像をじっくり確認してから採用できる。ここでは確定しない。 */}
+      {candidatePick && candidateLightbox !== null && candidatePick.candidates[candidateLightbox] && (
+        <div
+          className="fixed inset-0 z-[9600] flex flex-col bg-black/95 p-3"
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setCandidateLightbox(null)}
+        >
+          <div className="mb-2 flex items-center justify-between text-neutral-200" onClick={(e) => e.stopPropagation()}>
+            <span className="text-sm font-bold">
+              候補 {candidateLightbox + 1} / {candidatePick.candidates.length}（拡大確認）
+            </span>
+            <button
+              type="button"
+              onClick={() => setCandidateLightbox(null)}
+              className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-semibold hover:bg-white/10"
+            >
+              閉じる（選択しない）
+            </button>
+          </div>
+          <div className="flex flex-1 items-center justify-center overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={candidatePick.candidates[candidateLightbox].url}
+              alt={`候補${candidateLightbox + 1}`}
+              className="max-h-full max-w-full object-contain"
+            />
+          </div>
+          <div className="mt-2 flex items-center justify-center gap-3" onClick={(e) => e.stopPropagation()}>
+            <button
+              type="button"
+              onClick={() =>
+                setCandidateLightbox((v) =>
+                  v === null ? v : (v + candidatePick.candidates.length - 1) % candidatePick.candidates.length
+                )
+              }
+              className="rounded-lg border border-white/10 px-3 py-2 text-sm text-neutral-200 hover:bg-white/10"
+            >
+              ← 前の候補
+            </button>
+            <button
+              type="button"
+              disabled={finalizingCandidate}
+              onClick={() => {
+                const chosen = candidatePick.candidates[candidateLightbox];
+                setCandidateLightbox(null);
+                void handleSelectCandidate(chosen);
+              }}
+              className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+            >
+              この案を高画質で採用 →
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                setCandidateLightbox((v) => (v === null ? v : (v + 1) % candidatePick.candidates.length))
+              }
+              className="rounded-lg border border-white/10 px-3 py-2 text-sm text-neutral-200 hover:bg-white/10"
+            >
+              次の候補 →
+            </button>
           </div>
         </div>
       )}
