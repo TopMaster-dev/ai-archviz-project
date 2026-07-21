@@ -33,6 +33,7 @@ import { fitDataUrlToSize, coverCropLossFraction } from '../utils/fitDataUrl.js'
 import { compositeMaskedEdit } from '../utils/compositeMaskedEdit.js';
 import { sanitizeDetectedOpenings } from '../utils/openingRects.js';
 import { harmonizeEditToBase } from '../utils/tonalMatch.js';
+import { membraneHarmonizeEditToBase } from '../utils/seamlessBlend.js';
 import { shouldCompositeAreaEdit, GLOBAL_REGION_COVERAGE } from '../utils/areaEditDecision.js';
 import {
   unionBBoxOfPlacements,
@@ -51,6 +52,7 @@ import {
   ENABLE_KEEP_QUALITY_ENHANCE,
   ENABLE_OPENING_PRESERVE,
   ENABLE_AREA_EDIT_SURFACE_FULLFRAME,
+  ENABLE_SEAMLESS_MEMBRANE,
   isSurfacePlaneFinish,
 } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
@@ -84,6 +86,24 @@ type AreaEditFinishCtx = {
   keepQuality: boolean;
   isFreePlan: boolean;
 };
+
+/**
+ * 合成前の“境界色合わせ”を選ぶ（Stage2・260722）。ON なら membrane（グラデーション合成＝境界で edit の色を base に
+ * 厳密一致させ継ぎ目を根本的に消す。失敗/退化時は tonalMatch へ自動フォールバック）、OFF なら従来の tonalMatch
+ * （領域一律ゲイン）。全合成箇所（各範囲・最終union）の呼び出し口をこの1関数に統一する。
+ */
+function harmonizeForComposite(
+  baseUrl: string,
+  editUrl: string,
+  placements: NormalizedRect[],
+  w: number,
+  h: number,
+  applyDilatePx: number
+): Promise<string> {
+  return ENABLE_SEAMLESS_MEMBRANE
+    ? membraneHarmonizeEditToBase(baseUrl, editUrl, placements, w, h, { applyDilatePx })
+    : harmonizeEditToBase(baseUrl, editUrl, placements, w, h, { applyDilatePx });
+}
 
 function getContainedRect(
   containerW: number,
@@ -673,7 +693,7 @@ export function AiEditWorkspace({
           // 各範囲の per-region 合成（dilate 同幅）と揃えて union で再切断しないようにする。
           const unionFeather = Math.round(Math.max(baseW, baseH) * 0.012);
           const unionDilate = Math.round(Math.max(baseW, baseH) * (surfaceOnly ? 0.015 : 0.02));
-          const confined = await harmonizeEditToBase(confineBase, outUrl, allPlacements, baseW, baseH, { applyDilatePx: unionDilate });
+          const confined = await harmonizeForComposite(confineBase, outUrl, allPlacements, baseW, baseH, unionDilate);
           outUrl = await compositeMaskedEdit(
             confineBase,
             confined,
@@ -937,7 +957,7 @@ export function AiEditWorkspace({
             // 合成マスクは「描いた範囲(o.placements)」で閉じ込める（差し替え・テキスト・削除すべて共通）。クロップは
             // 送っているので文脈は担保・マスク外は base（範囲外は変わらない＝近くの似た家具や壁も保護・上の壁への横線も出ない）。
             // ゲイン補正の適用域を合成の貼り込み域（dilate ぶん膨張）に合わせる＝境界外側の未補正リングを無くす（260720）。
-            const matched = await harmonizeEditToBase(base, full, o.placements, baseW, baseH, { applyDilatePx: dilate });
+            const matched = await harmonizeForComposite(base, full, o.placements, baseW, baseH, dilate);
             // 複数範囲でも少しだけ dilate して合成する＝隣接する範囲どうしの境界に base の細い帯（白線）が
             // 残らないようにする（②・260717）。単一範囲は従来どおり dilate（接地影を少し残す）。
             // 面仕上げ(isSurface)は featherOutside=true で両側フェザー＝囲み外側の硬い境界線を溶かす（point1-A・260720）。
@@ -977,7 +997,7 @@ export function AiEditWorkspace({
             const compFitted =
               mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
             // ゲイン補正の適用域を合成の貼り込み域（dilate 膨張）に合わせて境界外側の未補正リングを無くす（260720）。
-            const matched = await harmonizeEditToBase(base, compFitted, o.placements, baseW, baseH, { applyDilatePx: dilate });
+            const matched = await harmonizeForComposite(base, compFitted, o.placements, baseW, baseH, dilate);
             // 複数範囲でも dilate を効かせ、隣接範囲の境界に base の白線が残るのを防ぐ（②・260717。従来は multiRegion で 0）。
             // 面仕上げは検出した開口(excludeRects)をマスクから除外＝窓・ドアを元のまま保持する（case B・260718）。
             // 面仕上げ(isSurface)は featherOutside=true で両側フェザー＝囲み外側の硬い境界線を溶かす（point1-A・260720）。
