@@ -46,7 +46,7 @@ import {
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
-import { PREVIEW_GEMINI_IMAGE_SIZE } from '../utils/printExportSpec.js';
+import { PREVIEW_GEMINI_IMAGE_SIZE, AREA_EDIT_BASE_MAX_SIDE } from '../utils/printExportSpec.js';
 import {
   ENABLE_HARMONIZE_FLATTEN,
   ENABLE_KEEP_QUALITY_ENHANCE,
@@ -764,7 +764,7 @@ export function AiEditWorkspace({
     setIsSubmitting(true);
     try {
       // 土台（base）は従来どおり直近の画像＝連続編集のワークフローを維持する。
-      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
+      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl), AREA_EDIT_BASE_MAX_SIDE);
       // 「画質を高める」は 2枚目の見本画像を渡す旧方式を廃止（ゴースト原因・260710）。生成後に現在の1枚だけを
       // 精細化する後処理パス（enhanceDetail）に置換したため、ここでは見本画像を一切用意しない。
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
@@ -1346,7 +1346,7 @@ export function AiEditWorkspace({
     setSubmitError(null);
     setIsSubmitting(true);
     try {
-      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl));
+      const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl), AREA_EDIT_BASE_MAX_SIDE);
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
       // in-context反映（row 211/219）: 過去に高評価した傾向をコーディネートにも参考添付（ベストエフォート）。

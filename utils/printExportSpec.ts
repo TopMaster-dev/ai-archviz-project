@@ -69,6 +69,17 @@ export const ENABLE_2K_PREVIEW = true;
 
 export const PREVIEW_GEMINI_IMAGE_SIZE = ENABLE_2K_PREVIEW ? '2K' : '1K';
 
+/**
+ * エリア編集/コーディネートの「土台画像」を縮小する長辺上限（260722・クライアント要望「出力サイズをレンダーと揃え最大2Kに」）。
+ * これらの経路は最終出力を土台(base)の寸法へ fit する（fitDataUrlToSize）ため、土台の長辺が最終サイズを決める。
+ * 従来は既定 2048 で頭打ちだったが、AIレンダリングは Gemini の 2K ネイティブ出力（16:9 で長辺≒2688px）をそのまま保存する
+ * ため、編集経路だけ 2048 に縮んで“レンダーより小さい”状態になっていた。この上限を 2K ネイティブ長辺より上（4K 未満）に
+ * することで、編集/コーディネートもレンダーと同じ最大2Kサイズを維持する。**トークン費用は不変**（imageSize は既に 2K で
+ * 出力トークンは 1K とほぼ同じ・寸法は fit 段の話でトークンに影響しない）。送信は compressDataUrlToBudget でバイト圧縮する
+ * ため Vercel body 上限にも影響しない。留意点＝版履歴/クラウド保存の1枚あたりバイトは増える（レンダー保存と同オーダー）。
+ */
+export const AREA_EDIT_BASE_MAX_SIDE = 3072;
+
 export const EXPORT_GEMINI_IMAGE_SIZE = '4K';
 
 /** 書き出し API 投入前の入力長辺上限（ペイロード緩和） */
