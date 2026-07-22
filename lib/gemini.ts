@@ -595,7 +595,10 @@ export async function generateGeminiImageEdit(
       // 通常編集は 0.25→0.18 に低下（260722 クライアント報告: 候補2・3が指示と大きく外れる件）。温度が高いほど指示から
       // 逸脱した“外れ”候補が出やすい。0.18 は候補間に多少の差は残しつつ、指示外の暴れを抑えるバランス。
       temperature: params.harmonize ? 0.1 : params.naturalize ? 0.15 : params.enhanceDetail ? 0.12 : 0.18,
-      responseModalities: ['TEXT', 'IMAGE'],
+      // 高解像度（2K/4K）では TEXT+IMAGE 同時要求時に生成が途中劣化し「白ぼやけ」する事象があったため、
+      // 実績のあるレンダー/書き出し経路（generateGeminiImage）と同じ画像のみ（['IMAGE']）へ切替える。
+      // 1K は従来どおり ['TEXT','IMAGE']（クライアント承認済みの現行挙動を不変に保つ）。TEXT 出力は元々使っていない。
+      responseModalities: imageSize && imageSize !== '1K' ? ['IMAGE'] : ['TEXT', 'IMAGE'],
       imageConfig: {
         aspectRatio,
         imageSize,

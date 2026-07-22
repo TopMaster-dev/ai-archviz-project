@@ -67,7 +67,7 @@ export function useAiRenderer(options?: UseAiRendererOptions) {
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
         body: JSON.stringify({
           image: previewImage,
-          prompt: 'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。',
+          prompt: 'フォトリアルな建築写真として仕上げてください。光の反射と質感を強調してください。素材の質感と輪郭を鮮明に保ち、全体をぼやけさせたり、のっぺりと平坦にしたりしないでください。',
           aspectRatio,
           imageSize: PREVIEW_GEMINI_IMAGE_SIZE,
           timeOfDay, // ユーザーが設定した時間帯（昼/夕方/夜）をレンダープロンプトへ反映（260717）

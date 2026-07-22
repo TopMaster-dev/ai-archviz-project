@@ -769,9 +769,9 @@ export function AiEditWorkspace({
       // 精細化する後処理パス（enhanceDetail）に置換したため、ここでは見本画像を一切用意しない。
       const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
-      // 生成サイズは動作実績のある AIレンダリングと同じプレビュー用(1K)に揃える。2K のままだと新しい画像
-      // モデル(gemini-3-pro-image-preview)で生成が途中劣化し「白っぽくぼやけた」出力になる事象があった
-      // （AIレンダリングは PREVIEW_GEMINI_IMAGE_SIZE=1K で正常、AIデザイン/編集だけ 2K で異常・260619報告対応）。
+      // 生成サイズは AIレンダリングと共有の PREVIEW_GEMINI_IMAGE_SIZE（既定1K）。2K は過去に編集経路で白ぼやけ報告が
+      // あったが、その一因（['TEXT','IMAGE'] 同時要求）は 2K/4K 時に画像のみへ切替える対策を入れた（lib/gemini.ts）。
+      // 2K 検証は utils/printExportSpec.ts の ENABLE_2K_PREVIEW を true にして実機確認する（既定1Kのまま挙動不変）。
       const imageSize = PREVIEW_GEMINI_IMAGE_SIZE;
 
       // 参照画像は「寸法を2048へ丸め」たうえで「送信サイズ（バイト）予算」まで圧縮する（260718）。
@@ -1242,6 +1242,48 @@ export function AiEditWorkspace({
       setGenProgress(null); // 進捗表示を片付ける（オーバーレイは isSubmitting で閉じるが状態も戻す）。
     }
   }, [activeVersion, versions, draftObjects, onEditSuccess, isFreePlan, projectSession, harmonizeSeams, keepQuality, candidateCount, commitEditResult, applyAreaEditFinish]);
+
+  // 【画質を戻す（精細化・260722 クライアント要望）】編集を重ねてぼやけてきた“今の画像”を、内容を一切変えずに
+  // 1回だけ精細化する（enhanceDetail パスを単体で叩く＝入力1枚なのでゴースト無し）。編集フローとは独立していつでも押せ、
+  // 継ぎ目採用（全画面）にも影響しない。失敗はエラー表示のみで版は作らない。
+  const runEnhanceCurrent = useCallback(async () => {
+    if (!activeVersion || isSubmitting) return;
+    // フリープランのクレジット枯渇/失効時は生成を抑止（他の生成と同じ扱い・row 49/50）。無効/有料/ゲストは通過。
+    const creditMsg = creditBlockMessage(projectSession?.aiCredits);
+    if (creditMsg) {
+      setSubmitError(creditMsg);
+      return;
+    }
+    setSubmitError(null);
+    setSubmitWarning(null);
+    setIsSubmitting(true);
+    try {
+      const src = await ensureDataUrl(activeVersion.outputImageDataUrl);
+      const { w: baseW, h: baseH } = await loadImageNaturalSize(src);
+      const enhanceBase = await compressDataUrlToBudget(src, { maxBytes: SEND_BASE_MAX_BYTES });
+      const eres = await fetch('/api/ai-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+        body: JSON.stringify({
+          baseImage: enhanceBase,
+          enhanceDetail: true,
+          aspectRatio: pickClosestAspectRatio(baseW, baseH),
+          imageSize: PREVIEW_GEMINI_IMAGE_SIZE,
+        }),
+      });
+      const edata = await eres.json();
+      if (!edata.success || !edata.url) {
+        throw new Error(edata.error || '精細化に失敗しました。しばらくして再度お試しください。');
+      }
+      void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+      const fitted = await fitDataUrlToSize(edata.url as string, baseW, baseH, 'cover');
+      commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, fitted);
+    } catch (err: unknown) {
+      setSubmitError(err instanceof Error ? err.message : '精細化に失敗しました。');
+    } finally {
+      setIsSubmitting(false);
+    }
+  }, [activeVersion, isSubmitting, projectSession, commitEditResult]);
 
   // 候補ピッカーで1枚選んだときの“本番確定”（point2・260721）: 選ばれたドラフトそのものを土台に、仕上げ Gemini パス・
   // 精細化・フリープラン後処理を通してから版を作る。ドラフト画像を土台にするので、選んだ構図・家具の形はそのまま保たれる
@@ -2385,6 +2427,19 @@ export function AiEditWorkspace({
                     <span className="block text-neutral-500">生成後に、構図・家具・配置・色を一切変えずに、ぼやけ・のっぺりを抑えて素材の精細感だけを引き上げます。編集を繰り返して画質が落ちてきたときにON（もう一度AIを通すため少し時間がかかります）。</span>
                   </span>
                 </label>
+              )}
+              {/* 画質を戻す（精細化・260722 クライアント要望）: いまの画像を、内容を変えずに1回だけくっきりさせる。
+                  編集を重ねてぼやけたときに、編集せずワンクリックで精細化できる（エリア/コーディネート共通）。 */}
+              {activeVersion && ENABLE_KEEP_QUALITY_ENHANCE && (
+                <button
+                  type="button"
+                  onClick={() => void runEnhanceCurrent()}
+                  disabled={isSubmitting || candidatePick != null}
+                  title="いまの画像を、構図・家具・配置・色を一切変えずに1回だけ精細化します"
+                  className="flex w-full items-center justify-center gap-1.5 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 text-[11px] font-bold text-neutral-100 transition hover:border-emerald-400/60 disabled:opacity-40"
+                >
+                  ✨ 画質を戻す（今の画像を精細化）
+                </button>
               )}
               {/* 複数候補から選ぶ（Option 1・260717）: 生成枚数を選び、実行後に最良の1枚を選ぶ。既定 1。 */}
               {activeTool === 'area' && (
