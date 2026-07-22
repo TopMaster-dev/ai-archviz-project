@@ -22,8 +22,10 @@ interface KeyItem {
 }
 interface GroupAgg {
   key: string;
-  /** 表示名（ユーザー別のみ。email か表示名。key は user_id のまま＝ドリルダウン用）。 */
+  /** 主表示名（ユーザー別＝email/表示名、案件別＝プロジェクト名）。key は id のまま＝ドリルダウン/共有用。 */
   label?: string;
+  /** 副表示（案件別＝作成ユーザー）。 */
+  sublabel?: string;
   events: number;
   images: number;
   tokens: number;
@@ -84,7 +86,8 @@ const KEY_ENGINE: Record<string, 'gemini' | 'replicate'> = {
   'eraser-replicate': 'replicate',
 };
 
-const yen = (usd: number) => `約¥${Math.round(usd * 150).toLocaleString('ja-JP')}`; // 150円/$の概算表示
+const JPY_PER_USD = 160; // 為替の概算表示レート（⑩・時価連動でなく少し高めの固定・要調整）。
+const yen = (usd: number) => `約¥${Math.round(usd * JPY_PER_USD).toLocaleString('ja-JP')}`;
 const usd = (v: number) => `$${v.toFixed(v < 1 ? 4 : 2)}`;
 
 async function adminFetch(action: string, method: 'GET' | 'POST' = 'GET'): Promise<Response> {
@@ -265,6 +268,8 @@ function GroupTable({
   note,
   keyHeader = 'キー',
   onRowClick,
+  onOpen,
+  openingKey,
 }: {
   title: string;
   rows: GroupAgg[];
@@ -272,15 +277,20 @@ function GroupTable({
   keyHeader?: string;
   /** 設定するとキー列がクリック可能になり、その行のドリルダウンを開く（ユーザー別で使用）。 */
   onRowClick?: (row: GroupAgg) => void;
+  /** 設定すると各行に「開く」ボタンを出し、その案件を読み取り専用で開く（案件別で使用・⑤）。 */
+  onOpen?: (row: GroupAgg) => void;
+  /** いま開いている最中の行 key（ボタンを「開いています…」に）。 */
+  openingKey?: string | null;
 }) {
-  // 表示名があればそれを、無ければ UUID を短縮表示（誰か分かるように G1）。
+  // 表示名があればそれを、無ければ UUID を短縮表示（誰か分かるように）。
   const shownKey = (r: GroupAgg): string =>
     r.label ?? (r.key.length > 40 ? `${r.key.slice(0, 8)}…${r.key.slice(-6)}` : r.key);
+  const cols = 5 + (onOpen ? 1 : 0);
   return (
     <Card>
       <h3 className="mb-2 text-sm font-bold text-emerald-300">{title}</h3>
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[520px] text-xs">
+        <table className="w-full text-xs">
           <thead className="text-neutral-400">
             <tr className="text-left">
               <th className="py-1 pr-3 font-semibold">{keyHeader}</th>
@@ -288,19 +298,20 @@ function GroupTable({
               <th className="py-1 pr-3 text-right font-semibold">画像</th>
               <th className="py-1 pr-3 text-right font-semibold">トークン</th>
               <th className="py-1 text-right font-semibold">概算費用</th>
+              {onOpen && <th className="py-1 pl-3 text-right font-semibold">操作</th>}
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={5} className="py-2 text-neutral-500">
+                <td colSpan={cols} className="py-2 text-neutral-500">
                   データがありません（計測開始後に集計されます）。
                 </td>
               </tr>
             )}
             {rows.map((r) => (
-              <tr key={r.key} className="border-t border-white/5">
-                <td className="py-1 pr-3 break-all text-neutral-200">
+              <tr key={r.key} className="border-t border-white/5 align-top">
+                <td className="py-1 pr-3 break-words text-neutral-200">
                   {onRowClick ? (
                     <button
                       type="button"
@@ -313,14 +324,28 @@ function GroupTable({
                   ) : (
                     <span className={r.label ? 'text-neutral-200' : 'font-mono text-[11px]'}>{shownKey(r)}</span>
                   )}
+                  {r.sublabel && <div className="text-[10px] text-neutral-500">作成: {r.sublabel}</div>}
                 </td>
                 <td className="py-1 pr-3 text-right tabular-nums">{r.events.toLocaleString('ja-JP')}</td>
                 <td className="py-1 pr-3 text-right tabular-nums">{r.images.toLocaleString('ja-JP')}</td>
                 <td className="py-1 pr-3 text-right tabular-nums">{r.tokens.toLocaleString('ja-JP')}</td>
                 <td className="py-1 text-right tabular-nums">
                   {yen(r.costUsd)}
-                  {r.costEstimated && <span className="ml-1 text-amber-400" title="単価不明の行を含む">*</span>}
+                  {r.costEstimated && <span className="ml-1 text-amber-400" title="単価未登録の行を含む概算">*</span>}
                 </td>
+                {onOpen && (
+                  <td className="py-1 pl-3 text-right">
+                    <button
+                      type="button"
+                      onClick={() => onOpen(r)}
+                      disabled={openingKey === r.key}
+                      title="この案件を読み取り専用で開く"
+                      className="whitespace-nowrap rounded-md border border-white/10 bg-neutral-800 px-2 py-0.5 text-[11px] text-neutral-200 transition hover:border-emerald-400 disabled:opacity-40"
+                    >
+                      {openingKey === r.key ? '開いています…' : '開く'}
+                    </button>
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -331,14 +356,14 @@ function GroupTable({
   );
 }
 
-/** 機能コード（ai_usage_events.feature）を日本語表示に（見やすさのため。未知はそのまま）。 */
+/** 機能コード（ai_usage_events.feature）を日本語表示に（⑩・5機能を分けて表示）。 */
 const FEATURE_LABELS: Record<string, string> = {
   render: 'AIレンダリング',
-  ai_edit: 'AI画像編集',
+  ai_edit: 'エリア編集', // クライアント確認: 従来「AI画像編集」表記＝エリア編集のこと
   ai_coordinate: 'コーディネート',
-  ai_design: 'AIデザイン提案',
-  agent: 'エージェント相談',
+  agent: 'エージェントに相談',
   export: '高解像度書き出し',
+  ai_design: 'AIデザイン提案', // 参考（利用計測には通常現れない）
 };
 const featureLabel = (f: string | null): string => (f ? FEATURE_LABELS[f] ?? f : '—');
 
@@ -421,7 +446,8 @@ function UserUsageModal({
                       <td className="px-3 py-1.5 text-right tabular-nums">{e.tokens.toLocaleString('ja-JP')}</td>
                       <td className="px-3 py-1.5 text-right tabular-nums">
                         {yen(e.costUsd)}
-                        {e.costEstimated && <span className="ml-1 text-amber-400" title="単価不明">*</span>}
+                        {e.costEstimated && <span className="ml-1 text-amber-400" title="単価未登録">*</span>}
+                        <div className="text-[10px] text-neutral-500">{usd(e.costUsd)}</div>
                       </td>
                     </tr>
                   ))}
@@ -429,7 +455,7 @@ function UserUsageModal({
               </table>
             </div>
             <p className="mt-2 text-[11px] text-neutral-500">
-              最新 {data.events.length.toLocaleString('ja-JP')} 件を表示（* は単価不明の概算）。
+              最新 {data.events.length.toLocaleString('ja-JP')} 件を表示（費用は実測トークン×公式単価の概算。* は単価未登録）。
             </p>
           </>
         )}
@@ -578,6 +604,9 @@ export function AdminDashboard() {
   const [drillId, setDrillId] = useState<string | null>(null);
   const [drillData, setDrillData] = useState<UserUsageResult | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+  // 案件の1クリック閲覧（⑤）。
+  const [openingProjectKey, setOpeningProjectKey] = useState<string | null>(null);
+  const [shareMsg, setShareMsg] = useState<string | null>(null);
 
   // from/to（日付のみ）を API 用の ISO クエリ文字列へ。日付のみ入力を日の境界へ広げる。空はそのまま空。
   const rangeParamsFor = (from: string, to: string): string => {
@@ -623,6 +652,30 @@ export function AdminDashboard() {
       setDrillData(fallback('通信エラー'));
     } finally {
       setDrillLoading(false);
+    }
+  };
+
+  // 案件を読み取り専用で開く（⑤）。共有トークンをサーバで発行/再利用し ?share= を新規タブで開く。
+  // ポップアップブロック回避のため、クリック直後に空タブを開いてから遷移先を差し込む。
+  const openProjectShare = async (row: GroupAgg) => {
+    setShareMsg(null);
+    setOpeningProjectKey(row.key);
+    const win = window.open('about:blank', '_blank');
+    try {
+      const j = await (await adminFetch(`share-project&projectId=${encodeURIComponent(row.key)}`, 'POST')).json();
+      if (j?.success && j?.token) {
+        const url = `${window.location.origin}${window.location.pathname}?share=${encodeURIComponent(j.token)}`;
+        if (win) win.location.href = url;
+        else setShareMsg(`閲覧リンクを発行しました（新規タブがブロックされました）: ${url}`);
+      } else {
+        if (win) win.close();
+        setShareMsg(`案件を開けませんでした（${j?.error ?? 'error'}）。`);
+      }
+    } catch {
+      if (win) win.close();
+      setShareMsg('通信エラーで案件を開けませんでした。');
+    } finally {
+      setOpeningProjectKey(null);
     }
   };
 
@@ -689,7 +742,7 @@ export function AdminDashboard() {
     // #root は overflow:hidden で高さ固定のため、ダッシュボードは自前の縦スクロール領域にする
     // （min-h-screen だと内容がはみ出してスクロールできない・260716 修正）。
     <div className="h-screen overflow-y-auto scroll-dark bg-neutral-950 p-6 text-white">
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="mx-auto max-w-7xl space-y-6">
         <header className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-3">
             <button
@@ -819,16 +872,24 @@ export function AdminDashboard() {
               </p>
             </Card>
           ) : (
-            <>
+            // ⑥⑧: 横スクロールを無くすため、テーブルは全幅で縦に積む（左右2分割をやめる）。
+            <div className="space-y-3">
               <GroupTable title="モデル別" rows={summary.byModel} keyHeader="モデル" note={summary.note} />
-              <div className="grid gap-3 lg:grid-cols-2">
-                <GroupTable title="ユーザー別（上位）" rows={summary.byUser} keyHeader="ユーザー" onRowClick={(r) => void openUserDrill(r)} />
-                <GroupTable title="案件（プロジェクト）別（上位）" rows={summary.byProject} keyHeader="プロジェクト" />
-              </div>
+              <GroupTable title="ユーザー別（上位）" rows={summary.byUser} keyHeader="ユーザー" onRowClick={(r) => void openUserDrill(r)} />
+              <GroupTable
+                title="案件（プロジェクト）別（上位）"
+                rows={summary.byProject}
+                keyHeader="プロジェクト（作成ユーザー）"
+                onOpen={(r) => void openProjectShare(r)}
+                openingKey={openingProjectKey}
+              />
+              {shareMsg && <p className="text-[11px] text-amber-300 break-all">{shareMsg}</p>}
               <p className="text-[11px] text-neutral-500">
-                * 印は単価不明の行を含む概算。¥は 150円/$ での目安表示です。
+                * 印は単価が未登録の行を含む概算。¥は {JPY_PER_USD}円/$ での目安表示です。費用は実測トークン×公式単価で算出
+                （Gemini画像: 入力$2/1M・画像出力$120/1M。1K/2K画像≒$0.134/枚、4K≒$0.24/枚）。専用エンジンは暫定単価×回数。
+                「開く」でその案件を読み取り専用で開けます（共有機能を使わなくても閲覧可）。
               </p>
-            </>
+            </div>
           )}
         </section>
 

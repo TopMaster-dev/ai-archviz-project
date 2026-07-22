@@ -495,10 +495,10 @@ export default defineConfig(({ mode }) => {
                     // 管理ダッシュボード読取（メール許可リスト認証・本番 api/admin/orphan-cleanup.ts と一致・260711）。
                     const url0 = new URL(req.url || '', 'http://x');
                     const action = url0.searchParams.get('action') || '';
-                    if (['whoami', 'keyhealth', 'usage', 'testkey', 'infra'].includes(action)) {
+                    if (['whoami', 'keyhealth', 'usage', 'user-usage', 'share-project', 'testkey', 'infra'].includes(action)) {
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
-                        const { verifyAdmin, getKeyHealth, getUsageSummary, getUserUsageHistory, testKey } = await import('./lib/server/adminDashboard.js');
+                        const { verifyAdmin, getKeyHealth, getUsageSummary, getUserUsageHistory, createOrGetProjectShareToken, testKey } = await import('./lib/server/adminDashboard.js');
                         const admin = await verifyAdmin(token);
                         if (action === 'whoami') {
                             res.statusCode = 200;
@@ -520,6 +520,14 @@ export default defineConfig(({ mode }) => {
                             const result = await getUserUsageHistory(userId, { from, to });
                             if (!result.ok) { res.statusCode = 400; return res.end(JSON.stringify({ error: result.reason })); }
                             return res.end(JSON.stringify({ success: true, usage: result }));
+                        }
+                        if (action === 'share-project') {
+                            if (req.method !== 'POST') { res.statusCode = 405; return res.end(JSON.stringify({ error: 'share-project は POST。' })); }
+                            const projectId = url0.searchParams.get('projectId') || '';
+                            if (!projectId) { res.statusCode = 400; return res.end(JSON.stringify({ error: 'projectId が必要です。' })); }
+                            const result = await createOrGetProjectShareToken(projectId, admin.userId);
+                            if (!result.ok) { res.statusCode = result.reason === 'not-found' ? 404 : 400; return res.end(JSON.stringify({ error: result.reason })); }
+                            return res.end(JSON.stringify({ success: true, token: result.token, reused: result.reused }));
                         }
                         if (action === 'infra') {
                             const { getInfraStatus } = await import('./lib/server/adminInfra.js');

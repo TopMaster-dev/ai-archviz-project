@@ -140,8 +140,10 @@ interface UsageRow {
 
 interface GroupAgg {
   key: string;
-  /** 表示名（ユーザー別のみ設定。email か表示名。key は user_id のまま＝ドリルダウンに使う）。 */
+  /** 主表示名。ユーザー別＝email/表示名、案件別＝プロジェクト名。key は id のまま（ドリルダウン/共有に使う）。 */
   label?: string;
+  /** 副表示（案件別のみ＝作成ユーザーの email/表示名）。 */
+  sublabel?: string;
   events: number;
   images: number;
   tokens: number;
@@ -173,6 +175,9 @@ export interface UsageSummary {
   note: string;
 }
 
+/** 集計・履歴で数える最大イベント件数（直近分の窓）。両者を同じ値にして合計が食い違わないようにする。 */
+const USAGE_SUMMARY_MAX_ROWS = 10000;
+
 /** ISO 日時として妥当なら返す（不正は null＝フィルタ無効）。UI からの from/to をそのまま使わないための健全化。 */
 function toIsoOrNull(v: string | null | undefined): string | null {
   if (!v || !String(v).trim()) return null;
@@ -196,13 +201,34 @@ async function resolveUserLabels(
   return map;
 }
 
+/** 案件ID群 → { プロジェクト名, 作成ユーザー表示名 } を引く（③④・projects + admin_user_status）。 */
+async function resolveProjectLabels(
+  sb: ReturnType<typeof supabaseAdmin>,
+  projectIds: string[],
+): Promise<Map<string, { name: string; owner: string | null }>> {
+  const map = new Map<string, { name: string; owner: string | null }>();
+  const ids = projectIds.filter((id) => id && id !== '(なし)');
+  if (!sb || ids.length === 0) return map;
+  const { data } = await sb.from('projects').select('id, name, owner_id').in('id', ids);
+  const rows = (data ?? []) as { id: string; name: string | null; owner_id: string | null }[];
+  const ownerIds = [...new Set(rows.map((r) => r.owner_id).filter((v): v is string => !!v))];
+  const ownerLabels = await resolveUserLabels(sb, ownerIds);
+  for (const r of rows) {
+    map.set(r.id, {
+      name: (r.name || '').trim() || '(名称未設定)',
+      owner: (r.owner_id && ownerLabels.get(r.owner_id)) || null,
+    });
+  }
+  return map;
+}
+
 /** ai_usage_events を集計する（直近分・上限つき・任意の期間フィルタ）。管理者のみが呼ぶ前提。 */
 export async function getUsageSummary(opts?: {
   limit?: number;
   from?: string | null;
   to?: string | null;
 }): Promise<UsageSummary> {
-  const limit = Math.min(50000, Math.max(1, opts?.limit ?? 10000));
+  const limit = Math.min(50000, Math.max(1, opts?.limit ?? USAGE_SUMMARY_MAX_ROWS));
   const empty: UsageSummary = {
     ok: false,
     totalEvents: 0,
@@ -250,15 +276,25 @@ export async function getUsageSummary(opts?: {
     const lbl = labels.get(g.key);
     if (lbl) g.label = lbl;
   }
+  // 案件別は project_id を「プロジェクト名（作成ユーザー）」に解決する（③④）。key は project_id のまま＝1クリック閲覧に使う。
+  const byProjectTop = topN(byProject, 50);
+  const projLabels = await resolveProjectLabels(sb, byProjectTop.map((g) => g.key));
+  for (const g of byProjectTop) {
+    const pl = projLabels.get(g.key);
+    if (pl) {
+      g.label = pl.name;
+      g.sublabel = pl.owner ?? undefined;
+    }
+  }
   return {
     ok: true,
     totalEvents: rows.length,
     totalCostUsd,
     byModel: topN(byModel, 50),
     byUser: byUserTop,
-    byProject: topN(byProject, 50),
+    byProject: byProjectTop,
     note:
-      'Gemini（BYOK）の費用は「回数×概算単価」の推定です。専用エンジン（Replicate）は概算単価×回数。実請求は各プロバイダが正。',
+      'Gemini（BYOK）の費用は実測トークン×公式単価の推定です（入力$2/1M・画像出力$120/1M 等）。専用エンジンは暫定単価×回数。実請求は各プロバイダが正。',
   };
 }
 
@@ -293,15 +329,17 @@ export async function getUserUsageHistory(
   if (!id) return { ok: false, reason: 'user-required', ...base };
   const sb = supabaseAdmin();
   if (!sb) return { ok: false, reason: 'server-not-configured', ...base };
-  const limit = Math.min(2000, Math.max(1, opts?.limit ?? 500));
+  // 表示は最新 displayLimit 件だが、合計（件数・費用）は集計側と同じ窓（USAGE_SUMMARY_MAX_ROWS）で数える。
+  // ＝ユーザー行の合計とドリルダウンの合計が食い違わない（表示件数だけを絞る）。
+  const displayLimit = Math.min(2000, Math.max(1, opts?.limit ?? 500));
   const from = toIsoOrNull(opts?.from);
   const to = toIsoOrNull(opts?.to);
   let q = sb
     .from('ai_usage_events')
-    .select('created_at, feature, model, image_count, total_tokens')
+    .select('created_at, feature, model, image_count, input_tokens, output_tokens, total_tokens')
     .eq('user_id', id)
     .order('created_at', { ascending: false })
-    .limit(limit);
+    .limit(USAGE_SUMMARY_MAX_ROWS);
   if (from) q = q.gte('created_at', from);
   if (to) q = q.lte('created_at', to);
   const { data, error } = await q;
@@ -311,22 +349,36 @@ export async function getUserUsageHistory(
     feature: string | null;
     model: string | null;
     image_count: number | null;
+    input_tokens: number | null;
+    output_tokens: number | null;
     total_tokens: number | null;
   }[];
+  // 合計はウィンドウ内の全件で算出（集計側と一致）。
   let totalCostUsd = 0;
-  const events: UsageEvent[] = rows.map((r) => {
-    const costUsd = estimateEventCostUsd({ model: r.model, imageCount: r.image_count, inputTokens: null, outputTokens: null });
-    totalCostUsd += costUsd;
-    return {
-      createdAt: r.created_at,
-      feature: r.feature,
+  for (const r of rows) {
+    totalCostUsd += estimateEventCostUsd({
       model: r.model,
-      images: Math.max(0, r.image_count ?? 0),
-      tokens: Math.max(0, r.total_tokens ?? 0),
-      costUsd,
-      costEstimated: !hasKnownPrice(r.model),
-    };
-  });
+      imageCount: r.image_count,
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+    });
+  }
+  const totalEvents = rows.length;
+  // 一覧表示は最新 displayLimit 件のみ（トークン従量で算出＝集計側と同一の estimateEventCostUsd）。
+  const events: UsageEvent[] = rows.slice(0, displayLimit).map((r) => ({
+    createdAt: r.created_at,
+    feature: r.feature,
+    model: r.model,
+    images: Math.max(0, r.image_count ?? 0),
+    tokens: Math.max(0, r.total_tokens ?? 0),
+    costUsd: estimateEventCostUsd({
+      model: r.model,
+      imageCount: r.image_count,
+      inputTokens: r.input_tokens,
+      outputTokens: r.output_tokens,
+    }),
+    costEstimated: !hasKnownPrice(r.model),
+  }));
   // 表示用に email/表示名を引く（PII・管理者のみ）。
   let email: string | null = null;
   let displayName: string | null = null;
@@ -336,7 +388,63 @@ export async function getUserUsageHistory(
     email = p.email;
     displayName = p.display_name;
   }
-  return { ok: true, user: { id, email, displayName }, events, totalEvents: events.length, totalCostUsd };
+  return { ok: true, user: { id, email, displayName }, events, totalEvents, totalCostUsd };
+}
+
+// ---- 案件を運営が1クリックで閲覧（⑤・既存の ?share= 読み取り専用ビューアを再利用）----
+
+export type ProjectShareResult =
+  | { ok: true; token: string; reused: boolean }
+  | { ok: false; reason: string };
+
+/**
+ * 対象プロジェクトの閲覧用トークンを取得（無ければ発行）。運営が共有機能を使わずに該当案件を開くための土台。
+ * 既存の有効な共有トークン（未失効・未期限切れ・view）があれば再利用し、無ければ管理者名義で1件作成する。
+ * service_role なので RLS を跨いで任意ユーザーの案件に対して発行できる（管理者のみ到達・読み取り専用）。
+ */
+export async function createOrGetProjectShareToken(
+  projectId: string,
+  adminUserId: string,
+): Promise<ProjectShareResult> {
+  const pid = (projectId || '').trim();
+  if (!pid) return { ok: false, reason: 'project-required' };
+  const sb = supabaseAdmin();
+  if (!sb) return { ok: false, reason: 'server-not-configured' };
+  // 対象案件の存在（未削除）を確認。存在しなければ発行しない。
+  const { data: proj, error: pErr } = await sb
+    .from('projects')
+    .select('id')
+    .eq('id', pid)
+    .is('deleted_at', null)
+    .limit(1)
+    .maybeSingle();
+  if (pErr) return { ok: false, reason: pErr.message };
+  if (!proj) return { ok: false, reason: 'not-found' };
+  // 既存の有効トークンを再利用（行の増殖を避ける）。未失効・未期限切れ・view のみ。
+  const nowIso = new Date().toISOString();
+  const { data: existing } = await sb
+    .from('project_shares')
+    .select('token, expires_at')
+    .eq('project_id', pid)
+    .eq('revoked', false)
+    .eq('permission', 'view')
+    .order('created_at', { ascending: false })
+    .limit(10);
+  const live = ((existing ?? []) as { token: string; expires_at: string | null }[]).find(
+    (s) => !s.expires_at || s.expires_at > nowIso,
+  );
+  if (live?.token) return { ok: true, token: live.token, reused: true };
+  // 無ければ管理者名義で新規発行（token は既定でランダム生成）。
+  // 運営が閲覧するための一時トークンなので短い有効期限を付け、公開リンクが恒久的に残らないようにする
+  // （閲覧はその場で開く用途・再度「開く」で自動再発行。所有者に不可視・失効不能な恒久トークンを残さない）。
+  const expiresIso = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1時間で失効
+  const { data: ins, error: insErr } = await sb
+    .from('project_shares')
+    .insert({ project_id: pid, created_by: adminUserId, permission: 'view', expires_at: expiresIso })
+    .select('token')
+    .single();
+  if (insErr) return { ok: false, reason: insErr.message };
+  return { ok: true, token: (ins as { token: string }).token, reused: false };
 }
 
 // ---- ユーザーの猶予期間（フリープラン=AIクレジット期限）管理（#4・260715）----

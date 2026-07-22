@@ -4,6 +4,7 @@ import {
   getKeyHealth,
   getUsageSummary,
   getUserUsageHistory,
+  createOrGetProjectShareToken,
   testKey,
   findUserStatusByEmail,
   setUserGrace,
@@ -53,7 +54,7 @@ export default async function handler(req: any, res: any) {
   // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
   const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests'];
-  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request'];
+  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request', 'share-project'];
   if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
@@ -110,6 +111,15 @@ export default async function handler(req: any, res: any) {
       const result = await listRegistrationRequests(status);
       if (!result.ok) return res.status(400).json({ error: result.reason });
       return res.status(200).json({ success: true, requests: result.requests });
+    }
+    // ⑤（WRITE）: 対象案件の閲覧用トークンを取得/発行し、運営が ?share= で1クリック閲覧できるようにする。必ず POST。
+    if (action === 'share-project') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'share-project は POST。' });
+      const projectId = getQueryParam(req, 'projectId');
+      if (!projectId) return res.status(400).json({ error: 'projectId が必要です。' });
+      const result = await createOrGetProjectShareToken(projectId, admin.userId);
+      if (!result.ok) return res.status(result.reason === 'not-found' ? 404 : 400).json({ error: result.reason });
+      return res.status(200).json({ success: true, token: result.token, reused: result.reused });
     }
     // #2（WRITE）: リクエスト承認（招待リンク送信）／却下。必ず POST。
     if (action === 'approve-request') {
