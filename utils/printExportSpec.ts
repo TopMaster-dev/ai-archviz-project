@@ -59,10 +59,13 @@ export const PREVIEW_RENDER_MAX_SIDE = 1600;
  * 【重要】2K は過去に「編集経路」で生成が途中劣化し白っぽくぼやける事象があった（gemini-3-pro-image-preview のモデル挙動）。
  * その一因は編集経路だけ responseModalities が ['TEXT','IMAGE'] だったことと推定され、2K/4K 時は実績のあるレンダー/書き出し
  * 経路と同じ画像のみ（['IMAGE']）へ自動で切替える（lib/gemini.ts）。**実機で白ぼやけが出ないことを確認してから true を既定化**すること。
- * false（既定）のときは 1K のままで、クライアント承認済みの現行挙動（継ぎ目なし）を一切変えない。
+ * false のときは 1K のままで、クライアント承認済みの現行挙動（継ぎ目なし）を一切変えない。
  * ※2K でも Gemini の出力トークンは 1K とほぼ同じ（≒1,120 トークン）＝費用はほぼ不変（4K のみ約2倍）。
+ * 【260722・クライアント要望で 2K を有効化＝検証モード】まず開発者の自アカウント/検証環境で AIレンダリング・
+ * エリア編集・コーディネートを数枚生成し「白ぼやけが出ないこと」を目視確認してから本番でクライアントに使わせること。
+ * 白ぼやけが再発したら本フラグを false に戻して再デプロイ（他は一切変更不要・1行で即ロールバック）。
  */
-export const ENABLE_2K_PREVIEW = false;
+export const ENABLE_2K_PREVIEW = true;
 
 export const PREVIEW_GEMINI_IMAGE_SIZE = ENABLE_2K_PREVIEW ? '2K' : '1K';
 
