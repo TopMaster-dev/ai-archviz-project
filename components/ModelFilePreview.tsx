@@ -1,7 +1,7 @@
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import React, { Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { Bounds, OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
+import { OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { Box } from 'lucide-react';
 import { ModelRoot } from './ModelRoot.js';
 import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
@@ -73,6 +73,58 @@ function MeasureOnLoad({
 /** 上下補正(90°刻み)を適用した後の見かけ寸法（X軸90/270°で Y↔Z が入れ替わる）。 */
 function applyUprightToSize(sz: RawSize, uprightXDeg: number): RawSize {
   return normalizeUprightXDeg(uprightXDeg) % 180 === 90 ? { x: sz.x, y: sz.z, z: sz.y } : sz;
+}
+
+/**
+ * プレビュー表示の正規化＋接地（260724・クライアント要望）。モデルの実寸に依存せず、常に「最大辺＝TARGET_SIZE」に
+ * スケールして一定サイズで見せ、底面を y=0（床グリッド上）へ・X/Z中心を原点へ合わせる。これで巨大/極小モデルでも
+ * 見た目の大きさが揃い、グリッドが常に画面内に入る。回転（上下/前後）を内側グループで適用したうえで world バウンディングを
+ * 計測するので、回転後の姿勢でも正しく接地する。回転や差し替えのたびに再計測する。
+ */
+const PREVIEW_TARGET_SIZE = 2.6;
+function NormalizedModel({
+  root,
+  uprightRad,
+  yawRad,
+  children,
+}: {
+  root: THREE.Object3D;
+  uprightRad: number;
+  yawRad: number;
+  children?: React.ReactNode;
+}) {
+  const ref = useRef<THREE.Group>(null);
+  useLayoutEffect(() => {
+    const g = ref.current;
+    if (!g) return;
+    // いったん等倍・原点へ戻してから、回転込みの素の world バウンディングを計測する。
+    g.scale.setScalar(1);
+    g.position.set(0, 0, 0);
+    g.updateWorldMatrix(true, true);
+    const box = new THREE.Box3().setFromObject(g);
+    if (box.isEmpty()) return;
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (!(maxDim > 0) || !Number.isFinite(maxDim)) return;
+    // 最大辺を TARGET_SIZE に揃える＝実寸に依らず一定サイズ。
+    g.scale.setScalar(PREVIEW_TARGET_SIZE / maxDim);
+    g.updateWorldMatrix(true, true);
+    // スケール後にもう一度計測し、X/Z中心を原点・底面を y=0（床）へ。
+    const box2 = new THREE.Box3().setFromObject(g);
+    const center = box2.getCenter(new THREE.Vector3());
+    g.position.set(-center.x, -box2.min.y, -center.z);
+  }, [root, uprightRad, yawRad]);
+  return (
+    <group ref={ref}>
+      {/* 配置と同順で：外側ヨー(Y)→内側 上下補正(X・ジオメトリ焼込相当)。 */}
+      <group rotation={[0, yawRad, 0]}>
+        <group rotation={[uprightRad, 0, 0]}>
+          <primitive object={root} />
+          {children}
+        </group>
+      </group>
+    </group>
+  );
 }
 
 export function ModelFilePreview({
@@ -159,50 +211,43 @@ export function ModelFilePreview({
 
   return (
     <div className={`relative overflow-hidden bg-neutral-800 ${className ?? ''}`}>
-      {/* 小さなプレビューなので dpr は控えめに（エディタの 3D Canvas と同時表示になるため GPU メモリ負荷を抑える）。 */}
-      <Canvas camera={{ position: [2.4, 1.8, 2.4], fov: 45 }} dpr={[1, 1.5]} gl={{ antialias: true }}>
+      {/* 小さなプレビューなので dpr は控えめに（エディタの 3D Canvas と同時表示になるため GPU メモリ負荷を抑える）。
+          カメラ・ターゲットは固定。モデル側を NormalizedModel で常に一定サイズ（最大辺=TARGET_SIZE）へ正規化して接地するので、
+          実寸に依らず見た目の大きさが揃い、床グリッドも常に画面内に入る（260724・クライアント要望）。 */}
+      <Canvas camera={{ position: [2.7, 2.2, 2.7], fov: 45 }} dpr={[1, 1.5]} gl={{ antialias: true }}>
         <ambientLight intensity={1.3} />
         <directionalLight position={[5, 10, 5]} intensity={1.4} />
         <directionalLight position={[-5, 2, -5]} intensity={0.4} />
         <Suspense fallback={null}>
-          {/* Bounds が単位差やモデルの向きを含めカメラを自動フィットする。 */}
           <PreviewErrorBoundary key={url.full} onError={() => setFailed(true)}>
-            <Bounds fit clip margin={1.2}>
-              {/* 配置と同順で：外側ヨー(Y)→内側 上下補正(X・ジオメトリ焼込相当)。 */}
-              <group rotation={[0, yawRad, 0]}>
-                <group rotation={[uprightRad, 0, 0]}>
-                  <ModelRoot url={url.full}>
-                    {(root, format) => (
-                      <>
-                        <primitive object={root} />
-                        <MeasureOnLoad
-                          root={root}
-                          format={format}
-                          uprightXDeg={uprightXDeg}
-                          onMeasured={handleMeasured}
-                          onSuggestYaw={onSuggestYaw}
-                        />
-                      </>
-                    )}
-                  </ModelRoot>
-                </group>
-              </group>
-            </Bounds>
+            <ModelRoot url={url.full}>
+              {(root, format) => (
+                <NormalizedModel root={root} uprightRad={uprightRad} yawRad={yawRad}>
+                  <MeasureOnLoad
+                    root={root}
+                    format={format}
+                    uprightXDeg={uprightXDeg}
+                    onMeasured={handleMeasured}
+                    onSuggestYaw={onSuggestYaw}
+                  />
+                </NormalizedModel>
+              )}
+            </ModelRoot>
           </PreviewErrorBoundary>
         </Suspense>
-        {/* 床面グリッド（どこが床か＝上下の基準）。Bounds の外に置きモデルのフィットに影響させない（260723・④）。 */}
+        {/* 床面グリッド（どこが床か＝上下の基準）。正規化で底面が y=0 に接地するのでモデルはこの上に立つ（260723/260724・④）。 */}
         {showGuides && (
           <Grid
             position={[0, 0, 0]}
             infiniteGrid
-            cellSize={0.1}
+            cellSize={0.25}
             cellThickness={0.5}
-            cellColor="#4b5563"
+            cellColor="#3f4650"
             sectionSize={1}
             sectionThickness={1}
             sectionColor="#6b7280"
-            fadeDistance={14}
-            fadeStrength={1.5}
+            fadeDistance={20}
+            fadeStrength={1}
             followCamera={false}
           />
         )}
@@ -214,6 +259,7 @@ export function ModelFilePreview({
         )}
         <OrbitControls
           makeDefault
+          target={[0, 1, 0]}
           enablePan={interactive}
           enableZoom={interactive}
           autoRotate={!interactive}
