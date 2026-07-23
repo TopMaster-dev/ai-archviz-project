@@ -762,41 +762,39 @@ export function UploadPanel({
                     />
                   </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2.5">
-                  <div>
-                    <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
-                    <input
-                      type="number"
-                      min={0}
-                      step={1}
-                      inputMode="numeric"
-                      value={pmPrice}
-                      onChange={(e) => setPmPrice(e.target.value)}
-                      placeholder="例: 45000"
-                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
-                    />
-                  </div>
-                  <div>
-                    {/* 取り込み単位（③）。左のプレビューに選択単位での実寸(W×D×H)を表示。 */}
-                    <label className="mb-1 block text-[10px] text-neutral-400">取り込み単位</label>
-                    <select
-                      value={pmUnit}
-                      onChange={(e) => setPmUnit(e.target.value as ModelUnit)}
-                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
-                    >
-                      {MODEL_UNIT_OPTIONS.map((o) => (
-                        <option key={o.value} value={o.value}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                <div>
+                  <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step={1}
+                    inputMode="numeric"
+                    value={pmPrice}
+                    onChange={(e) => setPmPrice(e.target.value)}
+                    placeholder="例: 45000"
+                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                  />
                 </div>
               </div>
             </div>
             <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
               ※モデルが実寸と違うサイズで表示される場合は、元データの単位（㎜/㎝/m など）を選ぶと正しい寸法で取り込めます。左のプレビューに選択単位での寸法が表示されます。取り込み後もサイズは編集できます。
             </p>
+            {/* 取り込み単位（③）。説明文の直下に配置（260724・クライアント要望＝金額の隣から移動）。 */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-neutral-400">取り込み単位</span>
+              <select
+                value={pmUnit}
+                onChange={(e) => setPmUnit(e.target.value as ModelUnit)}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 outline-none focus:border-emerald-500"
+              >
+                {MODEL_UNIT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             {/* 取り込み向き（①）。上下=ジオメトリ焼込、前後=配置ヨー、自動=最大縦面を壁側(奥)へ。 */}
             <div className="mt-3 flex flex-wrap items-center gap-2">
               <span className="text-[10px] font-bold text-neutral-400">向き</span>
