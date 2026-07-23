@@ -506,6 +506,22 @@ export function AiEditWorkspace({
       r.readAsDataURL(file);
     });
 
+  // ドラッグ&ドロップで画像を読み込む（260724・クライアント要望①・Gemini のように画像をドロップして読み込む）。
+  // どのゾーンをドラッグ中かを示すハイライト用キーと、dataTransfer から最初の画像を取り出して cb へ渡す共通処理。
+  const [dropActive, setDropActive] = useState<string | null>(null);
+  const handleImageDrop = async (e: React.DragEvent, cb: (url: string) => void) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropActive(null);
+    const f = Array.from(e.dataTransfer.files ?? []).find((x) => x.type.startsWith('image/'));
+    if (!f) return;
+    try {
+      cb(await readFileAsDataUrl(f));
+    } catch {
+      /* 読み込み失敗は無視（UI は保持） */
+    }
+  };
+
   const onPickStyleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
     e.target.value = '';
@@ -1602,7 +1618,18 @@ export function AiEditWorkspace({
         </div>
         <div className="flex-1 flex items-center justify-center pt-32 sm:pt-20">
           {photoOnly ? (
-            <div className="flex flex-col items-center gap-4 text-center">
+            // 写真アップロードの空状態。ボタンに加え、枠内へ画像をドラッグ&ドロップでも読み込める（260724①）。
+            <div
+              className={`flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed p-8 text-center transition ${
+                dropActive === 'base' ? 'border-emerald-400 bg-emerald-500/10' : 'border-white/10'
+              }`}
+              onDragOver={(e) => {
+                e.preventDefault();
+                if (dropActive !== 'base') setDropActive('base');
+              }}
+              onDragLeave={() => setDropActive((k) => (k === 'base' ? null : k))}
+              onDrop={(e) => void handleImageDrop(e, (url) => setCropSrc(url))}
+            >
               <p className="text-sm text-neutral-300">写真をアップロードして、AI画像編集を始めましょう。</p>
               <input
                 ref={baseInputRef}
@@ -1620,7 +1647,7 @@ export function AiEditWorkspace({
                 写真をアップロード
               </button>
               <p className="text-[11px] text-neutral-500">
-                JPEG / PNG。アップロード後、AIデザイン・エリア編集・書き出しがご利用いただけます。
+                JPEG / PNG。ここに画像をドラッグ&ドロップでも読み込めます。アップロード後、AIデザイン・エリア編集・書き出しがご利用いただけます。
               </p>
             </div>
           ) : (
@@ -2249,16 +2276,27 @@ export function AiEditWorkspace({
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
-                        {/* 参照画像: サムネ＋選択ボタン */}
+                        {/* 参照画像: サムネ＋選択ボタン（サムネ枠へ画像をドラッグ&ドロップでも読み込める・260724①） */}
                         <div className="flex items-center gap-2">
                           <div
-                            className="w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center"
+                            className={`w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center transition ${
+                              dropActive === o.id ? 'ring-2 ring-emerald-400 border-emerald-400' : ''
+                            }`}
                             style={{ borderColor: pal.border }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              if (dropActive !== o.id) setDropActive(o.id);
+                            }}
+                            onDragLeave={() => setDropActive((k) => (k === o.id ? null : k))}
+                            onDrop={(e) => void handleImageDrop(e, (url) => onUpdateObjectImage(o.id, url))}
+                            title="画像をここにドラッグ&ドロップでも読み込めます"
                           >
                             {objectImageDataUrl ? (
-                              <img src={objectImageDataUrl} alt="" className="w-full h-full object-cover" />
+                              <img src={objectImageDataUrl} alt="" className="w-full h-full object-cover pointer-events-none" />
                             ) : (
-                              <span className="text-[9px] font-bold text-neutral-400 px-1">no image</span>
+                              <span className="text-[9px] font-bold text-neutral-400 px-1 pointer-events-none">
+                                {dropActive === o.id ? 'ドロップ' : 'no image'}
+                              </span>
                             )}
                           </div>
                           <div className="flex flex-wrap gap-1">

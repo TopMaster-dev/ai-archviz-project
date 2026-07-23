@@ -35,6 +35,7 @@ import * as THREE from 'three';
 
 import { useAiRenderer } from './hooks/useAiRenderer.js';
 import { useAiEditSession } from './hooks/useAiEditSession.js';
+import { useBackdropClose } from './hooks/useBackdropClose.js';
 import { AiEditWorkspace } from './components/AiEditWorkspace.js';
 import { ThrottledColorInput } from './components/ThrottledColorInput.js';
 import { ModeToggleBar } from './components/ModeToggleBar.js';
@@ -2038,6 +2039,8 @@ const App: React.FC = () => {
     pendingYawTouchedRef.current = false;
     latestSuggestedYawRef.current = 0;
   };
+  // 背景クリックで閉じる際、プレビューのドラッグ回転を背景外で離しても閉じないようにする（260724・不具合対応）。
+  const modelPopupBackdrop = useBackdropClose(closeModelPopup);
   // ファイル選択時はアップロードせず、情報入力ポップアップを開く（データ名称はファイル名で初期化）。
   const handleModelFileUpload = useCallback((file: File | undefined) => {
     if (modelUploadInputRef.current) modelUploadInputRef.current.value = '';
@@ -3639,7 +3642,7 @@ const App: React.FC = () => {
 
       {/* 3Dモデルの情報入力ポップアップ（260630・建材と同じく、ファイル選択後に入力＋確認してから追加）。 */}
       {pendingModelFile && (
-        <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4" onClick={closeModelPopup} role="dialog" aria-modal="true">
+        <div className="fixed inset-0 z-[9000] flex items-center justify-center bg-black/60 p-4" {...modelPopupBackdrop} role="dialog" aria-modal="true">
           <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>

@@ -3,6 +3,7 @@ import { Settings, Image as ImageIcon, HelpCircle, ShieldCheck } from 'lucide-re
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { fetchIsAdmin, openAdminDashboard } from '../lib/admin/adminClient.js';
 import { useProjectSessionContext } from '../lib/project/projectSessionContext.js';
+import { useBackdropClose } from '../hooks/useBackdropClose.js';
 import { createShareLink, getDeletedProjects, purgeProject } from '../lib/db/projects.js';
 import type { DeletedProjectSummary, ProjectSummary } from '../lib/db/types.js';
 import { UploadPanel } from './UploadPanel.js';
@@ -231,6 +232,12 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
   useEffect(() => {
     if (shouldShowSurveyPrompt()) setShowSurvey(true);
   }, []);
+  // 背景クリックで閉じる際、入力欄内のドラッグ選択を背景外で離しても閉じないようにする（260724・不具合対応）。
+  const newProjectBackdrop = useBackdropClose(() => setCreatingNew(false));
+  const surveyBackdrop = useBackdropClose(() => {
+    markSurveyPrompted();
+    setShowSurvey(false);
+  });
 
   const openProject = async (id: string) => {
     if (id !== projectId) await switchProject(id);
@@ -302,7 +309,13 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               }}
               onKeyDown={(e) => {
                 e.stopPropagation();
+                // 日本語IMEの変換確定Enter（isComposing / keyCode 229）では確定しない＝入力中に編集欄が消える不具合を防ぐ（260724）。
+                if (e.nativeEvent.isComposing || e.keyCode === 229) return;
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') {
+                  setNameDraft(p.name); // 取り消し（編集前の名称へ戻す）
+                  (e.target as HTMLInputElement).blur();
+                }
               }}
               className="w-full rounded border border-neutral-700 bg-neutral-950 px-2 py-1 text-sm outline-none focus:border-emerald-500"
             />
@@ -650,7 +663,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
       {creatingNew && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={() => setCreatingNew(false)}
+          {...newProjectBackdrop}
         >
           <div
             className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-2xl border border-white/10 bg-neutral-900 p-8 shadow-2xl"
@@ -773,7 +786,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           role="dialog"
           aria-modal="true"
           aria-labelledby="survey-title"
-          onClick={() => { markSurveyPrompted(); setShowSurvey(false); }}
+          {...surveyBackdrop}
         >
           <div
             className="w-full max-w-md rounded-2xl border border-white/10 bg-neutral-900 p-6 shadow-2xl"

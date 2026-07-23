@@ -28,6 +28,7 @@ import {
 import { useProjectStore } from '../lib/store/projectStore.js';
 import { useConfirm } from './ConfirmDialog.js';
 import { ModelFilePreview } from './ModelFilePreview.js';
+import { useBackdropClose } from '../hooks/useBackdropClose.js';
 import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from '../utils/modelUnit.js';
 import { normalizeUprightXDeg, normalizeYawDeg } from '../utils/modelOrientation.js';
 
@@ -278,6 +279,8 @@ export function UploadPanel({
     pmYawTouchedRef.current = false;
     pmLatestSuggestedYawRef.current = 0;
   };
+  // 背景クリックで閉じる際、プレビューのドラッグ回転を背景外で離しても閉じないようにする（260724・不具合対応）。
+  const modelPopupBackdrop = useBackdropClose(cancelPendingModel);
   const confirmPendingModel = async () => {
     const pending = pendingModel;
     if (!pending) return;
@@ -719,7 +722,7 @@ export function UploadPanel({
 
       {/* 3Dモデルの情報入力ポップアップ（260630）。エディタの 3Dモデルポップアップと同一。 */}
       {pendingModel && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onClick={cancelPendingModel}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" {...modelPopupBackdrop}>
           <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="3Dモデルの情報入力">
             <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
