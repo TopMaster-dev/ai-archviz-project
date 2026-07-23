@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import {
@@ -28,6 +28,8 @@ import {
 import { useProjectStore } from '../lib/store/projectStore.js';
 import { useConfirm } from './ConfirmDialog.js';
 import { ModelFilePreview } from './ModelFilePreview.js';
+import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from '../utils/modelUnit.js';
+import { normalizeUprightXDeg, normalizeYawDeg } from '../utils/modelOrientation.js';
 
 /**
  * 削除したテクスチャを壁/床/天井などに割り当て済みなら、その割当を既定（null）へ戻す。
@@ -141,6 +143,17 @@ export function UploadPanel({
   const [pmBrand, setPmBrand] = useState('');
   const [pmModelNumber, setPmModelNumber] = useState('');
   const [pmPrice, setPmPrice] = useState('');
+  // 取り込み単位・向き（③①・260717→260723 ホーム展開。エディタのアップロードポップアップと同一仕様に統一）。
+  const [pmUnit, setPmUnit] = useState<ModelUnit>('auto');
+  const [pmUprightXDeg, setPmUprightXDeg] = useState(0); // 上下補正（X軸0/90/180/270°・ジオメトリ焼込）。
+  const [pmYawDeg, setPmYawDeg] = useState(0); // 前後ヨー（配置rotation[1]）。
+  const pmYawTouchedRef = useRef(false); // 手動でヨーを触ったら自動推定で上書きしない。
+  const pmLatestSuggestedYawRef = useRef(0); // プレビューが推定した最新の壁向きヨー（「壁向きを自動」用）。
+  const handleSuggestPmYaw = useCallback((deg: number) => {
+    const y = normalizeYawDeg(deg);
+    pmLatestSuggestedYawRef.current = y;
+    if (!pmYawTouchedRef.current) setPmYawDeg(y);
+  }, []);
 
   const modelInputRef = useRef<HTMLInputElement | null>(null);
   const textureInputRef = useRef<HTMLInputElement | null>(null);
@@ -250,9 +263,21 @@ export function UploadPanel({
     setPmBrand('');
     setPmModelNumber('');
     setPmPrice('');
+    setPmUnit('auto');
+    setPmUprightXDeg(0);
+    setPmYawDeg(0);
+    pmYawTouchedRef.current = false;
+    pmLatestSuggestedYawRef.current = 0;
     setPendingModel({ file });
   };
-  const cancelPendingModel = () => setPendingModel(null);
+  const cancelPendingModel = () => {
+    setPendingModel(null);
+    setPmUnit('auto');
+    setPmUprightXDeg(0);
+    setPmYawDeg(0);
+    pmYawTouchedRef.current = false;
+    pmLatestSuggestedYawRef.current = 0;
+  };
   const confirmPendingModel = async () => {
     const pending = pendingModel;
     if (!pending) return;
@@ -266,6 +291,17 @@ export function UploadPanel({
     if (brand) metadata.brand = brand;
     if (modelNumber) metadata.modelNumber = modelNumber;
     if (price !== undefined) metadata.price = price;
+    // 取り込み単位（③）: 明示単位なら幾何プリスケール f_U を metadata に保存（配置/計測で実寸化）。
+    if (pmUnit !== 'auto') {
+      metadata.modelUnit = pmUnit;
+      const gscale = unitGeometryScale(pmUnit);
+      if (gscale != null) metadata.modelUnitScale = gscale;
+    }
+    // 取り込み向き（①）: 上下=ジオメトリ焼込(modelUprightXDeg)、前後=配置ヨー(forwardYawDeg)。0 は保存しない。
+    const upright = normalizeUprightXDeg(pmUprightXDeg);
+    if (upright !== 0) metadata.modelUprightXDeg = upright;
+    const yaw = normalizeYawDeg(pmYawDeg);
+    if (yaw !== 0) metadata.forwardYawDeg = yaw;
     const ok = await doUpload(pending.file, 'model', metadata);
     if (ok) setPendingModel(null); // 成功時のみ閉じる（失敗時は入力を保ったまま再試行できる）
   };
@@ -684,11 +720,18 @@ export function UploadPanel({
       {/* 3Dモデルの情報入力ポップアップ（260630）。エディタの 3Dモデルポップアップと同一。 */}
       {pendingModel && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4" onClick={cancelPendingModel}>
-          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="3Dモデルの情報入力">
+          <div className="w-full max-w-3xl rounded-2xl border border-white/10 bg-[#0c0c0c] p-5 shadow-2xl" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="3Dモデルの情報入力">
             <h3 className="text-base font-bold text-neutral-100">3Dモデルの情報を入力してください。</h3>
             <p className="mt-1 text-[11px] text-neutral-400">※入力した内容は見積もりに反映されます（すべて任意）。</p>
-            <div className="mt-4 flex gap-4">
-              <ModelFilePreview file={pendingModel.file} className="h-28 w-28 shrink-0 rounded-lg border border-white/10" />
+            <div className="mt-4 flex flex-col gap-4 sm:flex-row">
+              <ModelFilePreview
+                file={pendingModel.file}
+                unit={pmUnit}
+                uprightXDeg={pmUprightXDeg}
+                yawDeg={pmYawDeg}
+                onSuggestYaw={handleSuggestPmYaw}
+                className="h-64 w-full shrink-0 rounded-lg border border-white/10 sm:w-64"
+              />
               <div className="grid flex-1 grid-cols-1 gap-2.5 self-center">
                 <div>
                   <label className="mb-1 block text-[10px] text-neutral-400">データ名称（任意）</label>
@@ -719,21 +762,75 @@ export function UploadPanel({
                     />
                   </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
-                  <input
-                    type="number"
-                    min={0}
-                    step={1}
-                    inputMode="numeric"
-                    value={pmPrice}
-                    onChange={(e) => setPmPrice(e.target.value)}
-                    placeholder="例: 45000"
-                    className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
-                  />
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+                    <input
+                      type="number"
+                      min={0}
+                      step={1}
+                      inputMode="numeric"
+                      value={pmPrice}
+                      onChange={(e) => setPmPrice(e.target.value)}
+                      placeholder="例: 45000"
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    />
+                  </div>
+                  <div>
+                    {/* 取り込み単位（③）。左のプレビューに選択単位での実寸(W×D×H)を表示。 */}
+                    <label className="mb-1 block text-[10px] text-neutral-400">取り込み単位</label>
+                    <select
+                      value={pmUnit}
+                      onChange={(e) => setPmUnit(e.target.value as ModelUnit)}
+                      className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                    >
+                      {MODEL_UNIT_OPTIONS.map((o) => (
+                        <option key={o.value} value={o.value}>
+                          {o.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
                 </div>
               </div>
             </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-neutral-500">
+              ※モデルが実寸と違うサイズで表示される場合は、元データの単位（㎜/㎝/m など）を選ぶと正しい寸法で取り込めます。左のプレビューに選択単位での寸法が表示されます。取り込み後もサイズは編集できます。
+            </p>
+            {/* 取り込み向き（①）。上下=ジオメトリ焼込、前後=配置ヨー、自動=最大縦面を壁側(奥)へ。 */}
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-neutral-400">向き</span>
+              <button
+                type="button"
+                onClick={() => setPmUprightXDeg((d) => normalizeUprightXDeg(d + 90))}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:border-emerald-500 hover:text-white"
+              >
+                縦に回転（{normalizeUprightXDeg(pmUprightXDeg)}°）
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  pmYawTouchedRef.current = true;
+                  setPmYawDeg((d) => normalizeYawDeg(d + 90));
+                }}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:border-emerald-500 hover:text-white"
+              >
+                横に回転（{normalizeYawDeg(pmYawDeg)}°）
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  pmYawTouchedRef.current = false;
+                  setPmYawDeg(normalizeYawDeg(pmLatestSuggestedYawRef.current));
+                }}
+                className="rounded-lg border border-emerald-600/60 bg-emerald-600/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-600/25"
+              >
+                壁向きを自動
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] leading-relaxed text-neutral-500">
+              ※「縦に回転」で寝ている/上下逆のモデルを立て、「横に回転」で正面の向きを調整できます。「壁向きを自動」で最も広い面を壁側（奥）へ向けます。取り込み後も回転できます。左のプレビューはドラッグで回転・拡大でき、軸ギズモと床グリッドで前後・上下を確認できます。
+            </p>
             {busy ? (
               <p className="mt-3 inline-flex items-center gap-1.5 text-[11px] text-emerald-300"><Loader2 className="h-3.5 w-3.5 animate-spin" />アップロード中…</p>
             ) : msg ? (

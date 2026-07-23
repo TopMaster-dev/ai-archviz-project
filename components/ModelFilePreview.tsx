@@ -1,7 +1,7 @@
 import React, { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import * as THREE from 'three';
 import { Canvas } from '@react-three/fiber';
-import { Bounds, OrbitControls } from '@react-three/drei';
+import { Bounds, OrbitControls, Grid, GizmoHelper, GizmoViewport } from '@react-three/drei';
 import { Box } from 'lucide-react';
 import { ModelRoot } from './ModelRoot.js';
 import { exoticNormalizeScale, type ModelFormat } from '../utils/modelFormat.js';
@@ -81,7 +81,9 @@ export function ModelFilePreview({
   unit = 'auto',
   uprightXDeg = 0,
   yawDeg = 0,
-  onSuggestYaw
+  onSuggestYaw,
+  interactive = true,
+  showGuides = true
 }: {
   file: File;
   className?: string;
@@ -93,6 +95,10 @@ export function ModelFilePreview({
   yawDeg?: number;
   /** 壁側面(背面)を向けるための推定ヨー(度)を親へ通知（自動推定・①）。 */
   onSuggestYaw?: (yawDeg: number) => void;
+  /** ドラッグで視点回転/ズームできるか（260723・クライアント「位置変更」＝操作可能に）。false は従来の自動回転サムネ。 */
+  interactive?: boolean;
+  /** 前後上下が分かる視覚ガイド（XYZ軸ギズモ＋床グリッド）を出すか（260723・クライアント要望）。 */
+  showGuides?: boolean;
 }) {
   // ローダの形式判定用に拡張子を fragment(#glb 等)で付与（blob: URL は拡張子を持たないため）。
   const url = useMemo(() => {
@@ -184,7 +190,35 @@ export function ModelFilePreview({
             </Bounds>
           </PreviewErrorBoundary>
         </Suspense>
-        <OrbitControls makeDefault enablePan={false} enableZoom={false} autoRotate autoRotateSpeed={3} />
+        {/* 床面グリッド（どこが床か＝上下の基準）。Bounds の外に置きモデルのフィットに影響させない（260723・④）。 */}
+        {showGuides && (
+          <Grid
+            position={[0, 0, 0]}
+            infiniteGrid
+            cellSize={0.1}
+            cellThickness={0.5}
+            cellColor="#4b5563"
+            sectionSize={1}
+            sectionThickness={1}
+            sectionColor="#6b7280"
+            fadeDistance={14}
+            fadeStrength={1.5}
+            followCamera={false}
+          />
+        )}
+        {/* XYZ 軸ギズモ（右上）。Y=上・Z=前後・X=左右がひと目で分かる。クリックで各面へスナップも可（260723・④）。 */}
+        {showGuides && (
+          <GizmoHelper alignment="top-right" margin={[44, 44]}>
+            <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="#ffffff" />
+          </GizmoHelper>
+        )}
+        <OrbitControls
+          makeDefault
+          enablePan={interactive}
+          enableZoom={interactive}
+          autoRotate={!interactive}
+          autoRotateSpeed={3}
+        />
       </Canvas>
       {/* 選択単位・向きでの実寸(幅×奥行×高さ)。単位/上下を変えると即時に更新される（③④①・260717）。 */}
       {dimText && (
