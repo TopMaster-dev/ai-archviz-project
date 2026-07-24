@@ -251,10 +251,11 @@ export function ModelFilePreview({
             followCamera={false}
           />
         )}
-        {/* XYZ 軸ギズモ（右上）。Y=上・Z=前後・X=左右がひと目で分かる。クリックで各面へスナップも可（260723・④）。 */}
+        {/* 軸ギズモ（右上）。専門的な XYZ ではなく素人にも分かる「右/上/前」表記に（260724・クライアント要望②）。
+            X(赤)=左右→右・Y(緑)=上下→上・Z(青)=前後→前。反対側（左/下/後）は各軸の逆側。クリックで各面へスナップ可。 */}
         {showGuides && (
           <GizmoHelper alignment="top-right" margin={[44, 44]}>
-            <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labelColor="#ffffff" />
+            <GizmoViewport axisColors={['#ef4444', '#22c55e', '#3b82f6']} labels={['右', '上', '前']} labelColor="#ffffff" />
           </GizmoHelper>
         )}
         <OrbitControls
@@ -266,9 +267,11 @@ export function ModelFilePreview({
           autoRotateSpeed={3}
         />
       </Canvas>
-      {/* 選択単位・向きでの実寸(幅×奥行×高さ)。単位/上下を変えると即時に更新される（③④①・260717）。 */}
+      {/* 選択単位・向きでの実寸(幅×奥行×高さ)。単位/上下を変えると即時に更新される（③④①・260717）。
+          小さくて見づらいとの指摘（260724・クライアント要望③）に対応し、下部の帯を大きく・くっきり表示する。 */}
       {dimText && (
-        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/65 px-1 py-0.5 text-center text-[8px] font-semibold leading-tight text-neutral-100">
+        <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-black/80 px-2 py-1.5 text-center text-sm font-bold leading-tight text-white">
+          <span className="text-[10px] font-semibold text-neutral-300">サイズ </span>
           {dimText}
         </div>
       )}

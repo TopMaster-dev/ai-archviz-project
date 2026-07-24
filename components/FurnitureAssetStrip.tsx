@@ -12,7 +12,7 @@ export type FurnitureAssetStripProps = {
   selectedAssetCategory: string | null;
   onSelectedAssetCategoryChange: (category: string | null) => void;
   onPickItem: (item: FurnitureAssetStripItem) => void;
-  renderThumbnail: (item: Pick<FurnitureAssetStripItem, 'url' | 'name'>) => React.ReactNode;
+  renderThumbnail: (item: Pick<FurnitureAssetStripItem, 'url' | 'name' | 'modelUprightXDeg'>) => React.ReactNode;
   /** 家具カタログ API の読み込み状態 */
   fetchStatus: FurnitureCatalogFetchStatus;
   /** fetchStatus が error のとき表示する短いメッセージ */

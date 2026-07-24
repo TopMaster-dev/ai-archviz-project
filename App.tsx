@@ -213,7 +213,10 @@ const scheduleIdleTask = (task: () => void, fallbackDelayMs = 220) => {
     return () => window.clearTimeout(id);
 };
 
-export const requestThumbnail = (url: string) => {
+// URL→取り込み上下補正(度)。サムネイル生成時にプレビューと同じ向き補正を適用するため保持する（260724・④）。
+const thumbnailUprightByUrl = new Map<string, number>();
+export const requestThumbnail = (url: string, uprightXDeg = 0) => {
+    thumbnailUprightByUrl.set(url, uprightXDeg); // 早期return前に常に最新の向きを記録。
     if (
         globalThumbnailCache[url] ||
         thumbnailFailedUrls.has(url) ||
@@ -231,21 +234,27 @@ export const requestThumbnail = (url: string) => {
     thumbnailEnqueueTimers.set(url, timerId);
 };
 
-const ModelThumbnailInner = ({ url, onRender }: { url: string, onRender: (dataUrl: string) => void }) => {
+const ModelThumbnailInner = ({ url, uprightXDeg = 0, onRender }: { url: string, uprightXDeg?: number, onRender: (dataUrl: string) => void }) => {
     // glTF/FBX/OBJ を ModelRoot で読み込み、サムネイル描画は ModelThumbnailScene が担う。
-    return <ModelRoot url={url}>{(scene) => <ModelThumbnailScene scene={scene} onRender={onRender} />}</ModelRoot>;
+    return <ModelRoot url={url}>{(scene) => <ModelThumbnailScene scene={scene} uprightXDeg={uprightXDeg} onRender={onRender} />}</ModelRoot>;
 };
 
-const ModelThumbnailScene = ({ scene, onRender }: { scene: THREE.Object3D, onRender: (dataUrl: string) => void }) => {
+const ModelThumbnailScene = ({ scene, uprightXDeg = 0, onRender }: { scene: THREE.Object3D, uprightXDeg?: number, onRender: (dataUrl: string) => void }) => {
     const { gl, scene: threeScene, camera } = useThree();
 
     const cloned = useMemo(() => {
         const c = scene.clone();
-        const box = new THREE.Box3().setFromObject(c);
+        // 取り込みの上下補正（縦に回転）をサムネイルにも反映＝プレビューで立てたモデルが一覧でも立つ（260724・クライアント要望④）。
+        // 補正を先に適用してから、回転後のバウンディングで中央寄せ・スケールする。
+        const upright = new THREE.Group();
+        upright.rotation.x = (normalizeUprightXDeg(uprightXDeg) * Math.PI) / 180;
+        upright.add(c);
+        upright.updateWorldMatrix(true, true);
+        const box = new THREE.Box3().setFromObject(upright);
         const center = box.getCenter(new THREE.Vector3());
-        c.position.set(-center.x, -center.y, -center.z);
+        upright.position.set(-center.x, -center.y, -center.z);
         const wrapper = new THREE.Group();
-        wrapper.add(c);
+        wrapper.add(upright);
         wrapper.rotation.y = Math.PI + Math.PI / 6;
         wrapper.rotation.x = Math.PI / 12;
         const sphere = new THREE.Sphere();
@@ -257,7 +266,7 @@ const ModelThumbnailScene = ({ scene, onRender }: { scene: THREE.Object3D, onRen
         // ローダ既定マテリアルで描かれる（クレイ一色ではなくなる）。※既存のクレイ済みキャッシュPNGは
         // CLOUDINARY_THUMBNAIL_FOLDER のバージョンを上げて無効化し、カラーで再生成させる。
         return wrapper;
-    }, [scene]);
+    }, [scene, uprightXDeg]);
 
     useEffect(() => {
         if (cloned) {
@@ -373,7 +382,7 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
                 <directionalLight position={[5, 10, 5]} intensity={1.5} />
                 <Suspense fallback={null}>
                     <ThumbnailErrorBoundary key={currentUrl} onError={() => dequeueCurrent('error')}>
-                        <ModelThumbnailInner url={currentUrl} onRender={handleRender} />
+                        <ModelThumbnailInner url={currentUrl} uprightXDeg={thumbnailUprightByUrl.get(currentUrl) ?? 0} onRender={handleRender} />
                     </ThumbnailErrorBoundary>
                 </Suspense>
             </Canvas>
@@ -381,7 +390,7 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
     );
 };
 
-const ModelThumbnail = ({ url, name }: { url?: string, name?: string }) => {
+const ModelThumbnail = ({ url, name, uprightXDeg = 0 }: { url?: string, name?: string, uprightXDeg?: number }) => {
     // URLが未定義の場合はクラッシュを防ぎ、代わりのアイコンを表示する
     if (!url) return <div className="w-full h-full flex items-center justify-center bg-neutral-800"><span className="text-[10px] font-black text-neutral-500">{name?.charAt(0) || '?'}</span></div>;
 
@@ -409,7 +418,7 @@ const ModelThumbnail = ({ url, name }: { url?: string, name?: string }) => {
                 onError={(e) => {
                     // 画像が見つからない(404)場合のみ、バックグラウンドでの生成キューに登録
                     if (imgSrc === staticImageUrl) {
-                        requestThumbnail(url);
+                        requestThumbnail(url, uprightXDeg);
                         e.currentTarget.style.display = 'none';
                         if (e.currentTarget.nextElementSibling) e.currentTarget.nextElementSibling.classList.remove('hidden');
                     }
@@ -673,7 +682,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                 >
                   <div className="flex items-start gap-2 mb-2">
                     <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center text-neutral-500 shrink-0 border border-white/10 overflow-hidden">
-                      <ModelThumbnail url={f.modelUrl} name={f.customName || f.name || f.type} />
+                      <ModelThumbnail url={f.modelUrl} name={f.customName || f.name || f.type} uprightXDeg={f.modelUprightXDeg} />
                     </div>
                     <div className="min-w-0 flex-1">
                       <div className={`text-[8px] font-black uppercase truncate ${isHighlighted ? 'text-emerald-400' : 'text-neutral-500'}`}>{f.customBrand || f.type || 'FURNITURE'}</div>
@@ -3997,7 +4006,7 @@ const App: React.FC = () => {
                                 selectedAssetCategory={selectedAssetCategory}
                                 onSelectedAssetCategoryChange={setSelectedAssetCategory}
                                 onPickItem={handleAddFurniture}
-                                renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} />}
+                                renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} />}
                                 fetchStatus={furnitureCatalogFetchStatus}
                                 fetchErrorMessage={furnitureCatalogErrorText}
                                 onUploadModel={handleUploadModelClick}
@@ -4996,6 +5005,7 @@ const App: React.FC = () => {
                                                     <ModelThumbnail
                                                         url={activeItem.modelUrl}
                                                         name={(activeItem as any).customName || activeItem.name || activeItem.type}
+                                                        uprightXDeg={activeItem.modelUprightXDeg}
                                                     />
                                                 </div>
                                                 <div className="flex-1 min-w-0 flex flex-col gap-2">
@@ -5171,7 +5181,7 @@ const App: React.FC = () => {
                                         selectedAssetCategory={selectedAssetCategory}
                                         onSelectedAssetCategoryChange={setSelectedAssetCategory}
                                         onPickItem={handleAddFurniture}
-                                        renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} />}
+                                        renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} />}
                                         fetchStatus={furnitureCatalogFetchStatus}
                                         fetchErrorMessage={furnitureCatalogErrorText}
                                         onUploadModel={handleUploadModelClick}
