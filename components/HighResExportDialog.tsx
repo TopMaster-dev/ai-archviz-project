@@ -5,25 +5,15 @@ import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import {
-  describePixelAspect,
   EXPORT_GEMINI_IMAGE_SIZE,
-  EXPORT_PRESETS_16_9,
-  EXPORT_PREVIEW_DESCRIPTION,
-  EXPORT_PREVIEW_LABEL,
-  EXPORT_PREVIEW_OPTION_ID,
   EXPORT_RENDER_INPUT_MAX_SIDE,
-  exportPaperFooterLines,
-  exportPresetFooterLines,
   exportPresetsForRatio,
-  exportPreviewFooterLines,
   type ExportPreset16x9,
 } from '../utils/printExportSpec.js';
 import { pickClosestCropRatio } from '../utils/cropToAspect.js';
 import { aspectLabelForKey, ratioValueForKey } from '../utils/renderAspect.js';
-import { paperPixelDims, type PaperOrientation, type PaperSize } from '../utils/paperExport.js';
-import { resizeDataUrlToSize } from '../utils/resizeDataUrl.js';
 import { fitDataUrlToSize } from '../utils/fitDataUrl.js';
-import { applyFreePlanOutputLimits } from '../utils/freePlanImage.js';
+import { matchOverallColorToReference } from '../utils/colorMatch.js';
 import {
   ENABLE_FREE_PLAN_HIRES_DL_LIMIT,
   FREE_PLAN_HIRES_DL_PER_MONTH,
@@ -31,19 +21,8 @@ import {
   incrementHiResDownloadCount,
   isOverHiResLimit,
 } from '../utils/freePlanHiResLimit.js';
-import { buildPreviewFileName, buildHiResFileName, buildPaperFileName } from '../utils/exportFileName.js';
-
-// 用紙サイズ書き出し（第3段 260703）。対応比率で生成した画像を用紙枠へ余白付きで配置する。
-const PAPER_PRESETS: { paper: PaperSize; dpi: number; label: string }[] = [
-  { paper: 'A3', dpi: 300, label: 'A3・300dpi（大判プレゼン）' },
-  { paper: 'A4', dpi: 300, label: 'A4・300dpi（標準）' },
-];
-
-const PRESET_COUNT = EXPORT_PRESETS_16_9.length;
-const PAPER_COUNT = PAPER_PRESETS.length;
-// 選択肢の並び: [dpiプリセット×PRESET_COUNT][用紙×PAPER_COUNT][プレビュー]。
-const PAPER_START = PRESET_COUNT;
-const PREVIEW_INDEX = PRESET_COUNT + PAPER_COUNT;
+import { applyFreePlanOutputLimits } from '../utils/freePlanImage.js';
+import { buildPreviewFileName, buildHiResFileName } from '../utils/exportFileName.js';
 
 type Props = {
   open: boolean;
@@ -54,12 +33,16 @@ type Props = {
   /** 高解像度DL月次制限の判定用（260624）。プラン種別とログインユーザーID。 */
   plan?: string | null;
   userId?: string | null;
-  /** プレビューPNGの書き出しファイル名に使うプロジェクト名（260625）。 */
+  /** 書き出しファイル名に使うプロジェクト名（260625）。 */
   projectName?: string | null;
 };
 
 /** 書き出し完了後に保持するダウンロード対象（再ダウンロード用・260625 #4）。 */
 type ExportResult = { url: string; fileName: string; kind: 'preview' | 'hiRes' };
+
+// 書き出しの選択肢を「高解像度画像（最高解像度＋AI高精細化）」「プレビュー画像（そのまま）」の2択に整理（260725・クライアント要望）。
+// 複数DPI・用紙(A3/A4)の選択は廃止（DPIはトークン消費が変わらないため常に最高解像度に固定・用紙の白帯はパースの見栄えを損なうため削除）。
+type ExportMode = 'hires' | 'preview';
 
 export function HighResExportDialog({
   open,
@@ -76,52 +59,38 @@ export function HighResExportDialog({
   const showHiResLimit = ENABLE_FREE_PLAN_HIRES_DL_LIMIT && isFreePlan;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [selectedIndex, setSelectedIndex] = useState(PREVIEW_INDEX);
+  // 既定は「高解像度画像」（AI高精細化オン）。テストマーケでは高精細を既定にする（クライアント要望・260725）。
+  const [mode, setMode] = useState<ExportMode>('hires');
   const [sourceNatural, setSourceNatural] = useState<{ w: number; h: number } | null>(null);
   const [sourceNaturalLoading, setSourceNaturalLoading] = useState(false);
-  // #4: 書き出し完了後のダウンロード対象を保持し、保存をキャンセルしても再ダウンロードできるようにする
-  // （高コストな高解像度の再レンダを無駄にしない）。
+  // #4: 書き出し完了後のダウンロード対象を保持し、保存をキャンセルしても再ダウンロードできるようにする。
   const [result, setResult] = useState<ExportResult | null>(null);
-  // 高解像書き出しの方式（260724・クライアント要望＝DL画像が画面と色/絵柄が変わる不具合対策）。
-  // 既定 false=「忠実拡大」: プレビュー画素を高品質補間で拡大＝色・内容が画面と完全一致（再生成しない）。
-  // true=「AI高精細化」: 従来の Gemini img2img。細部を補完するが色や絵柄が変わる場合がある（明示的な opt-in）。
-  const [aiEnhance, setAiEnhance] = useState(false);
 
-  // 書き出し比率は「元画像の実寸から最も近い対応比率」で決める（第2段 260703）。
-  // 3Dレンダ由来なら選択したレンダ比率に、写真編集由来なら（第1段の）クロップ比率に自然に一致する。
-  // 読み込み前は 16:9 相当（従来どおり）。
+  // 書き出し比率は「元画像の実寸から最も近い対応比率」で決める（読込前は 16:9）。
   const exportRatioKey = sourceNatural
     ? pickClosestCropRatio(sourceNatural.w, sourceNatural.h).key
     : '16:9';
-  const presets = useMemo(
-    () => exportPresetsForRatio(ratioValueForKey(exportRatioKey)),
+  // 最高解像度プリセット（一択）。exportPresetsForRatio は dpi 降順（先頭=300dpi=最高解像度）。
+  const hiResPreset: ExportPreset16x9 = useMemo(
+    () => exportPresetsForRatio(ratioValueForKey(exportRatioKey))[0]!,
     [exportRatioKey],
   );
 
-  const isPreview = selectedIndex === PREVIEW_INDEX;
-  const isPaper = selectedIndex >= PAPER_START && selectedIndex < PREVIEW_INDEX;
-  const dpiPreset: ExportPreset16x9 | null =
-    !isPreview && !isPaper ? (presets[selectedIndex] ?? presets[0]!) : null;
-  const paperPreset = isPaper ? (PAPER_PRESETS[selectedIndex - PAPER_START] ?? PAPER_PRESETS[0]!) : null;
-  // 用紙の向きは「生成に使う対応比率」から決める（横長比率→横向き用紙）。exportRatioKey は sourceNatural から
-  // 導かれるが、読込前/失敗時も 16:9 にフォールバックし、生成される画像の向きと必ず一致する（正方は縦向き扱い）。
-  const paperOrientation: PaperOrientation = ratioValueForKey(exportRatioKey) > 1 ? 'landscape' : 'portrait';
-  const paperRatioLabel = paperOrientation === 'landscape' ? '1.414 : 1' : '1 : 1.414';
-  const paperDims = paperPreset ? paperPixelDims(paperPreset.paper, paperPreset.dpi, paperOrientation) : null;
+  const isPreview = mode === 'preview';
 
   useEffect(() => {
     if (open) {
-      setSelectedIndex(PREVIEW_INDEX);
+      setMode('hires');
       setResult(null);
       setError(null);
     }
   }, [open]);
 
-  // プリセット変更時は前回のダウンロード結果をクリア（別設定の古い結果を再ダウンロードさせない）。
+  // モード変更時は前回のダウンロード結果をクリア（別設定の古い結果を再ダウンロードさせない）。
   useEffect(() => {
     setResult(null);
     setError(null);
-  }, [selectedIndex]);
+  }, [mode]);
 
   useEffect(() => {
     if (!open || !sourceImageDataUrl) {
@@ -143,25 +112,11 @@ export function HighResExportDialog({
     img.src = sourceImageDataUrl;
   }, [open, sourceImageDataUrl]);
 
-  const width = isPreview ? (sourceNatural?.w ?? 0) : isPaper ? (paperDims?.w ?? 0) : dpiPreset!.width;
-  const height = isPreview ? (sourceNatural?.h ?? 0) : isPaper ? (paperDims?.h ?? 0) : dpiPreset!.height;
+  const width = isPreview ? (sourceNatural?.w ?? 0) : hiResPreset.width;
+  const height = isPreview ? (sourceNatural?.h ?? 0) : hiResPreset.height;
   const contentAspectLabel = aspectLabelForKey(exportRatioKey);
-  const aspectLabel = isPaper ? `${paperPreset!.paper}（${paperRatioLabel}）` : contentAspectLabel;
-  // 用紙は「用紙比率 / 内側の画像比率」を示す（ピクセル実比の丸めで汚い表記になるのを避ける）。
-  const aspectDesc = isPaper
-    ? `画像 ${contentAspectLabel}`
-    : width > 0 && height > 0
-      ? describePixelAspect(width, height)
-      : '—';
-
-  const footerLines = isPreview
-    ? exportPreviewFooterLines()
-    : isPaper
-      ? exportPaperFooterLines(paperPreset!.paper, contentAspectLabel, paperDims ?? { w: 0, h: 0 }, paperRatioLabel)
-      : exportPresetFooterLines(dpiPreset!, contentAspectLabel);
 
   // #4: 保持済みの result を使ってダウンロードをトリガー（再生成・API 呼び出し・カウント消費なし）。
-  // ブラウザの「保存ダイアログ」をキャンセルしても、これで何度でも保存し直せる。
   const triggerDownload = (res: ExportResult) => {
     try {
       const a = document.createElement('a');
@@ -178,15 +133,13 @@ export function HighResExportDialog({
       setError('書き出す画像がありません。');
       return;
     }
-    setError(null);
-    // 履歴がURL（クラウド保存）の場合に備え、書き出し前に base64 データURL化（DL/canvas 用）。失敗時は元の値。
     const src = await ensureDataUrl(sourceImageDataUrl);
 
     if (isPreview) {
-      // プレビューは再生成しない＝即時。結果を保持してダイアログは閉じない（再ダウンロード可能・#4）。
+      // プレビューは再生成せず、いまの画像をそのまま PNG 保存（即時・色/内容は画面と完全一致）。
       const previewResult: ExportResult = {
         url: src,
-        fileName: buildPreviewFileName(projectName), // 日付＋プロジェクト名＋.png
+        fileName: buildPreviewFileName(projectName),
         kind: 'preview',
       };
       setResult(previewResult);
@@ -197,58 +150,33 @@ export function HighResExportDialog({
 
     setBusy(true);
     try {
-      // 目標ピクセルとファイル名（方式に依らず共通）。
-      const target = isPaper
-        ? (paperDims ?? paperPixelDims(paperPreset!.paper, paperPreset!.dpi, paperOrientation))
-        : { w: dpiPreset!.width, h: dpiPreset!.height };
-      const fileName = isPaper
-        ? buildPaperFileName(projectName, {
-            paper: paperPreset!.paper,
-            dpi: paperPreset!.dpi,
-            width: target.w,
-            height: target.h,
-          })
-        : buildHiResFileName(projectName, { dpi: dpiPreset!.dpi, width: target.w, height: target.h });
-
-      let url: string;
-      if (aiEnhance) {
-        // 【AI高精細化（opt-in）】構図・色を変えない「精細化」専用経路（enhanceDetail）を使う（260724・クライアント解析に基づく）。
-        // 旧実装は /api/render（初回レンダリング用 proVisualizerPrompt・温度0.2）に乗っており、「フラットなベースにGI/影を
-        // ゼロから描き込む」「窓色から時間帯を推論」等の再レンダリング指示が働いて色味/細部がズレていた。
-        // /api/ai-edit の enhanceDetail は buildEnhanceDetailPrompt＋温度0.12＝「構図・色・光は変えず、質感と輪郭のキレだけ
-        // 引き上げる」ため、画面と色・形状を保ったまま鮮明に高解像度化できる（両立）。
-        const inputImage = await downscaleDataUrlIfNeeded(src, EXPORT_RENDER_INPUT_MAX_SIDE);
-        const res = await fetch('/api/ai-edit', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-          body: JSON.stringify({
-            baseImage: inputImage,
-            enhanceDetail: true,
-            aspectRatio: exportRatioKey,
-            imageSize: EXPORT_GEMINI_IMAGE_SIZE,
-          }),
-        });
-        const data = await res.json();
-        if (!data.success) throw new Error(data.error || '書き出しに失敗しました');
-        void recordAiUsage({ feature: 'export', usage: data.usage, model: data.model, imageCount: 1 });
-        const g = data.url as string;
-        url = isPaper
-          ? await fitDataUrlToSize(g, target.w, target.h, 'contain', '#ffffff')
-          : await resizeDataUrlToSize(g, target.w, target.h);
-        // フリープラン: 今月の無償高解像度DL超過時は透かし合成（AI生成のときのみ・260624）。
-        if (isOverHiResLimit(userId, isFreePlan)) {
-          url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
-        }
-        incrementHiResDownloadCount(userId, isFreePlan); // AI生成1回につき1回だけ消費（再DLは非消費）。
-      } else {
-        // 【忠実拡大（既定）】プレビュー画素を高品質補間で拡大＝色・内容が画面と完全一致（再生成しない・API不使用）。
-        // 'cover' はアスペクト維持（プリセット比率は src 比率と同一なのでクロップ損失≈0）。用紙は白余白 contain。
-        url = isPaper
-          ? await fitDataUrlToSize(src, target.w, target.h, 'contain', '#ffffff')
-          : await fitDataUrlToSize(src, target.w, target.h, 'cover');
+      const p = hiResPreset; // 最高解像度（一択）
+      const fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
+      // 【高解像度画像＝AI高精細化】構図・色を変えない精細化専用経路（enhanceDetail・温度0.12・buildEnhanceDetailPrompt）。
+      // 初回レンダ用 proVisualizerPrompt の再ライティングを避け、色/形を保ったまま鮮明に高解像度化する（260724）。
+      const inputImage = await downscaleDataUrlIfNeeded(src, EXPORT_RENDER_INPUT_MAX_SIDE);
+      const res = await fetch('/api/ai-edit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+        body: JSON.stringify({
+          baseImage: inputImage,
+          enhanceDetail: true,
+          aspectRatio: exportRatioKey,
+          imageSize: EXPORT_GEMINI_IMAGE_SIZE,
+        }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || '書き出しに失敗しました');
+      void recordAiUsage({ feature: 'export', usage: data.usage, model: data.model, imageCount: 1 });
+      let g = data.url as string;
+      // 全体の色味をプレビューへ合わせる（AI精細化のわずかな色被り/WBズレを決定論で補正・260725 クライアント要望）。
+      g = await matchOverallColorToReference(g, src);
+      let url = await fitDataUrlToSize(g, p.width, p.height, 'cover');
+      // フリープラン: 今月の無償高解像度DL超過時は透かし合成（AI生成のときのみ・260624）。
+      if (isOverHiResLimit(userId, isFreePlan)) {
+        url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
       }
-
-      // #4: 結果を保持し、保存をキャンセルしても再ダウンロードできるようにする（ダイアログは閉じない）。
+      incrementHiResDownloadCount(userId, isFreePlan); // AI生成1回につき1回だけ消費（再DLは非消費）。
       const exportResult: ExportResult = { url, fileName, kind: 'hiRes' };
       setResult(exportResult);
       triggerDownload(exportResult);
@@ -262,16 +190,15 @@ export function HighResExportDialog({
 
   if (!open) return null;
 
-  const pixelSummary =
-    (isPreview || isPaper) && sourceNaturalLoading ? (
-      <span className="text-neutral-500">読み込み中…</span>
-    ) : width > 0 && height > 0 ? (
-      <span className="text-white font-mono">
-        {width} × {height}
-      </span>
-    ) : (
-      <span className="text-neutral-500">—</span>
-    );
+  const pixelSummary = isPreview && sourceNaturalLoading ? (
+    <span className="text-neutral-500">読み込み中…</span>
+  ) : width > 0 && height > 0 ? (
+    <span className="text-white font-mono">
+      {width} × {height}
+    </span>
+  ) : (
+    <span className="text-neutral-500">—</span>
+  );
 
   return (
     <div className="fixed inset-0 z-[10002] flex items-center justify-center bg-black/75 p-4">
@@ -299,140 +226,89 @@ export function HighResExportDialog({
           )}
           {!result && (
             <>
-          <p className="text-[10px] text-neutral-500 leading-relaxed">
-            高解像（300–150 dpi 相当）と用紙サイズ（A3/A4）は、いま画面に表示されているプレビュー画像をそのまま高品質に拡大して書き出します（色・内容は画面と同一）。用紙は対応比率の画像を用紙枠へ余白付きで配置します。ぼやけを抑えて鮮明にしたい場合は下の「AIで高精細化する」をオンにできます（構図・色は維持したまま質感と輪郭を精細化します）。
-          </p>
-          <div className="space-y-2">
-            {presets.map((p, i) => (
-              <label
-                key={p.id}
-                className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                  i === selectedIndex
-                    ? 'border-emerald-500/50 bg-emerald-950/30'
-                    : 'border-white/10 bg-black/30 hover:border-white/20'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="exportPreset"
-                  className="mt-0.5"
-                  checked={i === selectedIndex}
-                  onChange={() => setSelectedIndex(i)}
-                  disabled={busy || sourceNaturalLoading}
-                />
-                <span>
-                  <span className="text-white font-bold">{p.dpi} dpi</span>
-                  <span className="block text-neutral-400 mt-0.5">{p.label}</span>
-                  <span className="font-mono text-neutral-500">
-                    {p.width} × {p.height} px
-                  </span>
-                </span>
-              </label>
-            ))}
-            <p className="pt-1 text-[9px] font-black uppercase tracking-widest text-neutral-500">用紙サイズ（余白付き）</p>
-            {PAPER_PRESETS.map((pp, j) => {
-              const idx = PAPER_START + j;
-              const dims = paperPixelDims(pp.paper, pp.dpi, paperOrientation);
-              return (
+              <p className="text-[10px] text-neutral-500 leading-relaxed">
+                書き出し方法を選んでください。「高解像度画像」は最高解像度で、AIが構図・色を維持したまま鮮明に仕上げます。「プレビュー画像」はいま画面の画像をそのまま保存します（再生成なし）。
+              </p>
+              <div className="space-y-2">
+                {/* 高解像度画像（最高解像度＋AI高精細化・既定） */}
                 <label
-                  key={pp.paper}
                   className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                    idx === selectedIndex
+                    !isPreview
                       ? 'border-emerald-500/50 bg-emerald-950/30'
                       : 'border-white/10 bg-black/30 hover:border-white/20'
                   }`}
                 >
                   <input
                     type="radio"
-                    name="exportPreset"
+                    name="exportMode"
                     className="mt-0.5"
-                    checked={idx === selectedIndex}
-                    onChange={() => setSelectedIndex(idx)}
+                    checked={!isPreview}
+                    onChange={() => setMode('hires')}
                     disabled={busy || sourceNaturalLoading}
                   />
                   <span>
-                    <span className="text-white font-bold">{pp.paper}</span>
-                    <span className="block text-neutral-400 mt-0.5">{pp.label}</span>
+                    <span className="text-white font-bold">高解像度画像</span>
+                    <span className="block text-neutral-400 mt-0.5">最高解像度でAIが精細化（構図・色は維持）</span>
                     <span className="font-mono text-neutral-500">
-                      {sourceNaturalLoading ? '読み込み中…' : `${dims.w} × ${dims.h} px`}
+                      {hiResPreset.width} × {hiResPreset.height} px
                     </span>
                   </span>
                 </label>
-              );
-            })}
-            <label
-              key={EXPORT_PREVIEW_OPTION_ID}
-              className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                isPreview
-                  ? 'border-emerald-500/50 bg-emerald-950/30'
-                  : 'border-white/10 bg-black/30 hover:border-white/20'
-              }`}
-            >
-              <input
-                type="radio"
-                name="exportPreset"
-                className="mt-0.5"
-                checked={isPreview}
-                onChange={() => setSelectedIndex(PREVIEW_INDEX)}
-                disabled={busy}
-              />
-              <span>
-                <span className="text-white font-bold">{EXPORT_PREVIEW_LABEL}</span>
-                <span className="block text-neutral-400 mt-0.5">{EXPORT_PREVIEW_DESCRIPTION}</span>
-                <span className="font-mono text-neutral-500">
-                  {sourceNaturalLoading
-                    ? '読み込み中…'
-                    : sourceNatural
-                      ? `${sourceNatural.w} × ${sourceNatural.h} px`
-                      : '—'}
-                </span>
-              </span>
-            </label>
-          </div>
-          {/* AI高精細化トグル（260724・既定オフ＝忠実拡大でDL画像を画面と一致させる）。プレビュー選択時は無関係なので非表示。 */}
-          {!isPreview && (
-            <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2 cursor-pointer">
-              <input
-                type="checkbox"
-                className="mt-0.5 accent-emerald-500"
-                checked={aiEnhance}
-                onChange={(e) => setAiEnhance(e.target.checked)}
-                disabled={busy || sourceNaturalLoading}
-              />
-              <span className="text-[11px] leading-snug text-neutral-300">
-                <span className="font-bold text-neutral-100">AIで高精細化する（任意）</span>
-                <span className="block text-neutral-500">
-                  構図・色・光は維持したまま、素材の質感と輪郭の鮮明さだけをAIで引き上げます（ぼやけ低減）。
-                  <span className="text-neutral-400">ごくわずかに細部の見え方が変わる場合があります。</span>
-                  画面の画素をそのまま保存したい場合はオフのまま（既定＝忠実拡大・API不使用）。
-                </span>
-              </span>
-            </label>
-          )}
-          <div className="space-y-1">
-            <p>
-              <span className="text-neutral-500 font-bold">選択中の出力ピクセル</span> {pixelSummary}
-            </p>
-            <p>
-              <span className="text-neutral-500 font-bold">縦横比</span> {aspectLabel} / {aspectDesc}
-            </p>
-          </div>
-          <ul className="list-disc list-inside space-y-1 text-neutral-400 leading-relaxed">
-            {footerLines.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          {/* フリープランの高解像度DL月次制限（260624）。プレビュー保存は対象外。 */}
-          {showHiResLimit &&
-            (hiResLeft > 0 ? (
-              <p className="text-[11px] font-bold text-neutral-400">
-                高解像ダウンロード 残り {hiResLeft} / {FREE_PLAN_HIRES_DL_PER_MONTH} 回（今月・無料プラン。プレビュー保存は対象外）
-              </p>
-            ) : (
-              <p className="text-[11px] font-bold leading-relaxed text-amber-300">
-                今月の無料高解像ダウンロード（{FREE_PLAN_HIRES_DL_PER_MONTH}回）を使い切りました。これ以降の高解像書き出しには「フリープラン サンプル」透かしが入ります。アップグレードで透かしなしに。
-              </p>
-            ))}
+                {/* プレビュー画像（そのまま保存・再生成なし） */}
+                <label
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                    isPreview
+                      ? 'border-emerald-500/50 bg-emerald-950/30'
+                      : 'border-white/10 bg-black/30 hover:border-white/20'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    className="mt-0.5"
+                    checked={isPreview}
+                    onChange={() => setMode('preview')}
+                    disabled={busy}
+                  />
+                  <span>
+                    <span className="text-white font-bold">プレビュー画像</span>
+                    <span className="block text-neutral-400 mt-0.5">いま画面の画像をそのまま保存（再生成なし・即時）</span>
+                    <span className="font-mono text-neutral-500">
+                      {sourceNaturalLoading
+                        ? '読み込み中…'
+                        : sourceNatural
+                          ? `${sourceNatural.w} × ${sourceNatural.h} px`
+                          : '—'}
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div className="space-y-1">
+                <p>
+                  <span className="text-neutral-500 font-bold">選択中の出力ピクセル</span> {pixelSummary}
+                </p>
+                <p>
+                  <span className="text-neutral-500 font-bold">縦横比</span> {contentAspectLabel}
+                </p>
+              </div>
+              <ul className="list-disc list-inside space-y-1 text-neutral-400 leading-relaxed">
+                <li>アプリ内の表示は低解像のままです。印刷にはダウンロード画像を使用してください。</li>
+                {!isPreview && (
+                  <li>高解像度画像はAIで精細化するため、生成に少し時間がかかります（構図・色はプレビューを維持します）。</li>
+                )}
+                <li>最終出力は印刷所・DTP の指定に合わせてください。</li>
+              </ul>
+              {/* フリープランの高解像度DL月次制限（260624）。プレビュー保存は対象外。 */}
+              {showHiResLimit &&
+                (hiResLeft > 0 ? (
+                  <p className="text-[11px] font-bold text-neutral-400">
+                    高解像ダウンロード 残り {hiResLeft} / {FREE_PLAN_HIRES_DL_PER_MONTH} 回（今月・無料プラン。プレビュー保存は対象外）
+                  </p>
+                ) : (
+                  <p className="text-[11px] font-bold leading-relaxed text-amber-300">
+                    今月の無料高解像ダウンロード（{FREE_PLAN_HIRES_DL_PER_MONTH}回）を使い切りました。これ以降の高解像書き出しには「フリープラン サンプル」透かしが入ります。アップグレードで透かしなしに。
+                  </p>
+                ))}
             </>
           )}
           {error && <p className="text-red-400 break-words">{error}</p>}
