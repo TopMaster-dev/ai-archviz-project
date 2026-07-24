@@ -57,7 +57,6 @@ import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 import { applyFurniturePatch, resolveMoveMembers, applyGroupRotation, computeGroupCentroidXZ, type Vec2XZ } from '../utils/furnitureGroupMove.js';
 import { solidRectsForSegment } from '../utils/wallOpeningTiling.js';
 import { toggleBeamSelection } from '../utils/beamSelection.js';
-import { UPLOAD_FURNITURE_TYPE } from '../lib/uploadsCatalog.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -2021,7 +2020,11 @@ const GLTFFurniture: React.FC<{
                                 isSelected={isSelected}
                                 captureStep={captureStep}
                                 alignTop={item.ceilingMount}
-                                colored={item.type === UPLOAD_FURNITURE_TYPE}
+                                // 配置した3Dモデルは常に本来の色/テクスチャで表示する（260724・クライアント要望）。
+                                // 従来はアップロード品のみ colored=true でカタログ(Cloudinary)品はクレイ(白)固定だったが、
+                                // サムネイルは既にカラー化済みで表示が食い違っていた。ClayModel は __origMat を全メッシュで退避しており、
+                                // マテリアルが無いメッシュのみクレイへフォールバックするため安全（マスク/エリア編集は先行分岐で従来どおり白/黒）。
+                                colored={true}
                                 unitScale={item.modelUnitScale}
                                 uprightXDeg={item.modelUprightXDeg}
                             />
