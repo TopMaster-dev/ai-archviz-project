@@ -2337,7 +2337,7 @@ export function AiEditWorkspace({
                             </div>
                             {/* ドロップ可能を明示（UIになじむ淡いエメラルド・260724②）。カード内どこでもドロップ可。 */}
                             <span className="text-[10px] font-semibold text-emerald-300/70">
-                              またはこのカードへドラッグ＆ドロップ
+                              または画像ファイルをドラッグ＆ドロップ
                             </span>
                           </div>
                         </div>
