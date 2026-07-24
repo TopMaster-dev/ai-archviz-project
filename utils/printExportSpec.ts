@@ -126,7 +126,7 @@ export function exportPresetFooterLines(preset: ExportPreset16x9, aspectLabel?: 
   const ratioText = aspectLabel ?? describePixelAspect(preset.width, preset.height);
   return [
     `A3 長辺（420mm）を ${preset.dpi}dpi としたときの長辺ピクセル（約 ${longEdge}px）に相当する ${ratioText} です。`,
-    'プレビュー画像を高品質に拡大します（色・内容は画面と同一。元が低解像度のときは拡大により細部がやわらかくなることがあります）。「AIで高精細化」オン時のみAIで細部を補完します（画面と少し変わる場合あり）。',
+    'プレビュー画像を高品質に拡大します（色・内容は画面と同一。元が低解像度のときは拡大により細部がやわらかくなることがあります）。「AIで高精細化」オン時は、構図・色を維持したままAIで質感と輪郭を精細化します（ぼやけ低減）。',
     'アプリ内の表示は低解像のままです。印刷にはダウンロード画像を使用してください。',
     '最終出力は印刷所・DTP の指定に合わせてください。',
   ];

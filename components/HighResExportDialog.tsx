@@ -12,7 +12,6 @@ import {
   EXPORT_PREVIEW_LABEL,
   EXPORT_PREVIEW_OPTION_ID,
   EXPORT_RENDER_INPUT_MAX_SIDE,
-  EXPORT_UPSCALE_PROMPT,
   exportPaperFooterLines,
   exportPresetFooterLines,
   exportPresetsForRatio,
@@ -213,14 +212,18 @@ export function HighResExportDialog({
 
       let url: string;
       if (aiEnhance) {
-        // 【AI高精細化（opt-in）】従来の Gemini img2img。細部を補完するが色/絵柄が変わる場合がある。
+        // 【AI高精細化（opt-in）】構図・色を変えない「精細化」専用経路（enhanceDetail）を使う（260724・クライアント解析に基づく）。
+        // 旧実装は /api/render（初回レンダリング用 proVisualizerPrompt・温度0.2）に乗っており、「フラットなベースにGI/影を
+        // ゼロから描き込む」「窓色から時間帯を推論」等の再レンダリング指示が働いて色味/細部がズレていた。
+        // /api/ai-edit の enhanceDetail は buildEnhanceDetailPrompt＋温度0.12＝「構図・色・光は変えず、質感と輪郭のキレだけ
+        // 引き上げる」ため、画面と色・形状を保ったまま鮮明に高解像度化できる（両立）。
         const inputImage = await downscaleDataUrlIfNeeded(src, EXPORT_RENDER_INPUT_MAX_SIDE);
-        const res = await fetch('/api/render', {
+        const res = await fetch('/api/ai-edit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
           body: JSON.stringify({
-            image: inputImage,
-            prompt: EXPORT_UPSCALE_PROMPT, // 構図を保つ img2img プロンプト（それでも再生成のため差異は出る）。
+            baseImage: inputImage,
+            enhanceDetail: true,
             aspectRatio: exportRatioKey,
             imageSize: EXPORT_GEMINI_IMAGE_SIZE,
           }),
@@ -297,7 +300,7 @@ export function HighResExportDialog({
           {!result && (
             <>
           <p className="text-[10px] text-neutral-500 leading-relaxed">
-            高解像（300–150 dpi 相当）と用紙サイズ（A3/A4）は、いま画面に表示されているプレビュー画像をそのまま高品質に拡大して書き出します（色・内容は画面と同一）。用紙は対応比率の画像を用紙枠へ余白付きで配置します。細部をAIで補完したい場合は下の「AIで高精細化する」をオンにできます（画面と色・絵柄が少し変わる場合があります）。
+            高解像（300–150 dpi 相当）と用紙サイズ（A3/A4）は、いま画面に表示されているプレビュー画像をそのまま高品質に拡大して書き出します（色・内容は画面と同一）。用紙は対応比率の画像を用紙枠へ余白付きで配置します。ぼやけを抑えて鮮明にしたい場合は下の「AIで高精細化する」をオンにできます（構図・色は維持したまま質感と輪郭を精細化します）。
           </p>
           <div className="space-y-2">
             {presets.map((p, i) => (
@@ -399,9 +402,9 @@ export function HighResExportDialog({
               <span className="text-[11px] leading-snug text-neutral-300">
                 <span className="font-bold text-neutral-100">AIで高精細化する（任意）</span>
                 <span className="block text-neutral-500">
-                  細部をAIで補完してより鮮明にしますが、
-                  <span className="text-amber-300">色味や絵柄が画面と少し変わる場合があります</span>
-                  。画面と同じ見た目で保存したい場合はオフのままにしてください（既定＝忠実拡大）。
+                  構図・色・光は維持したまま、素材の質感と輪郭の鮮明さだけをAIで引き上げます（ぼやけ低減）。
+                  <span className="text-neutral-400">ごくわずかに細部の見え方が変わる場合があります。</span>
+                  画面の画素をそのまま保存したい場合はオフのまま（既定＝忠実拡大・API不使用）。
                 </span>
               </span>
             </label>
