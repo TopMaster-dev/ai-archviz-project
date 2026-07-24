@@ -83,6 +83,10 @@ export function HighResExportDialog({
   // #4: 書き出し完了後のダウンロード対象を保持し、保存をキャンセルしても再ダウンロードできるようにする
   // （高コストな高解像度の再レンダを無駄にしない）。
   const [result, setResult] = useState<ExportResult | null>(null);
+  // 高解像書き出しの方式（260724・クライアント要望＝DL画像が画面と色/絵柄が変わる不具合対策）。
+  // 既定 false=「忠実拡大」: プレビュー画素を高品質補間で拡大＝色・内容が画面と完全一致（再生成しない）。
+  // true=「AI高精細化」: 従来の Gemini img2img。細部を補完するが色や絵柄が変わる場合がある（明示的な opt-in）。
+  const [aiEnhance, setAiEnhance] = useState(false);
 
   // 書き出し比率は「元画像の実寸から最も近い対応比率」で決める（第2段 260703）。
   // 3Dレンダ由来なら選択したレンダ比率に、写真編集由来なら（第1段の）クロップ比率に自然に一致する。
@@ -194,57 +198,57 @@ export function HighResExportDialog({
 
     setBusy(true);
     try {
-      const inputImage = await downscaleDataUrlIfNeeded(
-        src,
-        EXPORT_RENDER_INPUT_MAX_SIDE
-      );
-      const res = await fetch('/api/render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify({
-          image: inputImage,
-          // 第3段: プレビュー画像の構図を忠実に保つ img2img 用プロンプト（創作し直さない）。
-          prompt: EXPORT_UPSCALE_PROMPT,
-          // 生成は常に「対応比率」で行う。用紙は生成後に枠へ収める（Gemini は用紙比率を直接生成不可）。
-          aspectRatio: exportRatioKey,
-          imageSize: EXPORT_GEMINI_IMAGE_SIZE,
-        }),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || '書き出しに失敗しました');
-      // トークン計測（row 58・無効時は no-op）。高解像度書き出しも生成1回。
-      void recordAiUsage({ feature: 'export', usage: data.usage, model: data.model, imageCount: 1 });
-      let url = data.url as string;
-      // 用紙: 対応比率の生成画像を用紙枠へ contain（白余白）で配置。dpi プリセット: 目標ピクセルへリサイズ。
-      let fileName: string;
-      if (isPaper) {
-        const pd = paperDims ?? paperPixelDims(paperPreset!.paper, paperPreset!.dpi, paperOrientation);
-        url = await fitDataUrlToSize(url, pd.w, pd.h, 'contain', '#ffffff');
-        fileName = buildPaperFileName(projectName, {
-          paper: paperPreset!.paper,
-          dpi: paperPreset!.dpi,
-          width: pd.w,
-          height: pd.h,
+      // 目標ピクセルとファイル名（方式に依らず共通）。
+      const target = isPaper
+        ? (paperDims ?? paperPixelDims(paperPreset!.paper, paperPreset!.dpi, paperOrientation))
+        : { w: dpiPreset!.width, h: dpiPreset!.height };
+      const fileName = isPaper
+        ? buildPaperFileName(projectName, {
+            paper: paperPreset!.paper,
+            dpi: paperPreset!.dpi,
+            width: target.w,
+            height: target.h,
+          })
+        : buildHiResFileName(projectName, { dpi: dpiPreset!.dpi, width: target.w, height: target.h });
+
+      let url: string;
+      if (aiEnhance) {
+        // 【AI高精細化（opt-in）】従来の Gemini img2img。細部を補完するが色/絵柄が変わる場合がある。
+        const inputImage = await downscaleDataUrlIfNeeded(src, EXPORT_RENDER_INPUT_MAX_SIDE);
+        const res = await fetch('/api/render', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+          body: JSON.stringify({
+            image: inputImage,
+            prompt: EXPORT_UPSCALE_PROMPT, // 構図を保つ img2img プロンプト（それでも再生成のため差異は出る）。
+            aspectRatio: exportRatioKey,
+            imageSize: EXPORT_GEMINI_IMAGE_SIZE,
+          }),
         });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || '書き出しに失敗しました');
+        void recordAiUsage({ feature: 'export', usage: data.usage, model: data.model, imageCount: 1 });
+        const g = data.url as string;
+        url = isPaper
+          ? await fitDataUrlToSize(g, target.w, target.h, 'contain', '#ffffff')
+          : await resizeDataUrlToSize(g, target.w, target.h);
+        // フリープラン: 今月の無償高解像度DL超過時は透かし合成（AI生成のときのみ・260624）。
+        if (isOverHiResLimit(userId, isFreePlan)) {
+          url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
+        }
+        incrementHiResDownloadCount(userId, isFreePlan); // AI生成1回につき1回だけ消費（再DLは非消費）。
       } else {
-        const p = dpiPreset!;
-        url = await resizeDataUrlToSize(url, p.width, p.height);
-        fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
+        // 【忠実拡大（既定）】プレビュー画素を高品質補間で拡大＝色・内容が画面と完全一致（再生成しない・API不使用）。
+        // 'cover' はアスペクト維持（プリセット比率は src 比率と同一なのでクロップ損失≈0）。用紙は白余白 contain。
+        url = isPaper
+          ? await fitDataUrlToSize(src, target.w, target.h, 'contain', '#ffffff')
+          : await fitDataUrlToSize(src, target.w, target.h, 'cover');
       }
-      // フリープラン: 今月の無償高解像度DL（3回）超過時は、解像度は維持したまま透かしのみ合成（260624）。
-      if (isOverHiResLimit(userId, isFreePlan)) {
-        url = await applyFreePlanOutputLimits(url, Number.MAX_SAFE_INTEGER);
-      }
-      // #4: 高コストな再レンダ結果を保持し、保存をキャンセルしても再ダウンロードできるようにする（ダイアログは閉じない）。
-      const exportResult: ExportResult = {
-        url,
-        fileName,
-        kind: 'hiRes',
-      };
+
+      // #4: 結果を保持し、保存をキャンセルしても再ダウンロードできるようにする（ダイアログは閉じない）。
+      const exportResult: ExportResult = { url, fileName, kind: 'hiRes' };
       setResult(exportResult);
       triggerDownload(exportResult);
-      // 消費はレンダー1回につき1回だけ（再ダウンロードでは消費しない・成功時のみ）。
-      incrementHiResDownloadCount(userId, isFreePlan);
       onExported?.();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');
@@ -293,7 +297,7 @@ export function HighResExportDialog({
           {!result && (
             <>
           <p className="text-[10px] text-neutral-500 leading-relaxed">
-            高解像（300–150 dpi 相当）と用紙サイズ（A3/A4）はクラウド API で高精細化してから書き出します（構図は維持）。用紙は対応比率の画像を用紙枠へ余白付きで配置します。プレビュー用は再生成しません。
+            高解像（300–150 dpi 相当）と用紙サイズ（A3/A4）は、いま画面に表示されているプレビュー画像をそのまま高品質に拡大して書き出します（色・内容は画面と同一）。用紙は対応比率の画像を用紙枠へ余白付きで配置します。細部をAIで補完したい場合は下の「AIで高精細化する」をオンにできます（画面と色・絵柄が少し変わる場合があります）。
           </p>
           <div className="space-y-2">
             {presets.map((p, i) => (
@@ -382,6 +386,26 @@ export function HighResExportDialog({
               </span>
             </label>
           </div>
+          {/* AI高精細化トグル（260724・既定オフ＝忠実拡大でDL画像を画面と一致させる）。プレビュー選択時は無関係なので非表示。 */}
+          {!isPreview && (
+            <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2 cursor-pointer">
+              <input
+                type="checkbox"
+                className="mt-0.5 accent-emerald-500"
+                checked={aiEnhance}
+                onChange={(e) => setAiEnhance(e.target.checked)}
+                disabled={busy || sourceNaturalLoading}
+              />
+              <span className="text-[11px] leading-snug text-neutral-300">
+                <span className="font-bold text-neutral-100">AIで高精細化する（任意）</span>
+                <span className="block text-neutral-500">
+                  細部をAIで補完してより鮮明にしますが、
+                  <span className="text-amber-300">色味や絵柄が画面と少し変わる場合があります</span>
+                  。画面と同じ見た目で保存したい場合はオフのままにしてください（既定＝忠実拡大）。
+                </span>
+              </span>
+            </label>
+          )}
           <div className="space-y-1">
             <p>
               <span className="text-neutral-500 font-bold">選択中の出力ピクセル</span> {pixelSummary}
