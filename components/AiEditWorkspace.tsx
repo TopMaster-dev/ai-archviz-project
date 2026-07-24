@@ -2248,8 +2248,20 @@ export function AiEditWorkspace({
                     <li
                       key={o.id}
                       onClick={() => onActiveObjectChange(o.id === activeObjectId ? null : o.id)}
-                      className={`rounded-lg border p-2 text-xs transition-colors ${
-                        isActiveObject ? 'ring-1' : ''
+                      // 【ドロップ判定をカード全体へ拡大（260724②・クライアント要望＝ノートPCでも当てやすく）】カードのどこへ
+                      // ドラッグ&ドロップしても参照画像を読み込む。dragleave はカード外へ出たときだけ解除（子要素間移動で誤解除しない）。
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        if (dropActive !== o.id) setDropActive(o.id);
+                      }}
+                      onDragLeave={(e) => {
+                        if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                          setDropActive((k) => (k === o.id ? null : k));
+                        }
+                      }}
+                      onDrop={(e) => void handleImageDrop(e, (url) => onUpdateObjectImage(o.id, url))}
+                      className={`relative rounded-lg border p-2 text-xs transition-colors ${
+                        dropActive === o.id ? 'ring-2 ring-emerald-400' : isActiveObject ? 'ring-1' : ''
                       }`}
                       style={{
                         borderColor: isActiveObject ? pal.border : 'rgba(255,255,255,0.1)',
@@ -2257,6 +2269,12 @@ export function AiEditWorkspace({
                         boxShadow: isActiveObject ? `inset 0 0 0 1px ${pal.border}33` : undefined,
                       }}
                     >
+                      {/* ドラッグ中はカード全体に「ここにドロップ」の破線オーバーレイ（pointer-events-none でドロップは透過）。 */}
+                      {dropActive === o.id && (
+                        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-lg border-2 border-dashed border-emerald-400 bg-emerald-500/15 text-[12px] font-bold text-emerald-100">
+                          ここに画像をドロップ
+                        </div>
+                      )}
                       {/* 縦積みレイアウト（260630・クライアントUI準拠）: ヘッダ→画像→指示文→範囲リストをカード幅いっぱいに。 */}
                       <div className="cursor-pointer space-y-1.5">
                         {/* ヘッダ: 領域件数（左）＋削除（右）をカード幅いっぱいに */}
@@ -2276,56 +2294,51 @@ export function AiEditWorkspace({
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
-                        {/* 参照画像: サムネ＋選択ボタン（サムネ枠へ画像をドラッグ&ドロップでも読み込める・260724①） */}
+                        {/* 参照画像: サムネ＋選択ボタン。ドロップ判定はカード全体(li)に持たせた（260724②）＝どこへ落としても読み込む。 */}
                         <div className="flex items-center gap-2">
                           <div
-                            className={`w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center transition ${
-                              dropActive === o.id ? 'ring-2 ring-emerald-400 border-emerald-400' : ''
-                            }`}
+                            className="w-14 h-14 rounded overflow-hidden border shrink-0 bg-black/40 flex items-center justify-center"
                             style={{ borderColor: pal.border }}
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              if (dropActive !== o.id) setDropActive(o.id);
-                            }}
-                            onDragLeave={() => setDropActive((k) => (k === o.id ? null : k))}
-                            onDrop={(e) => void handleImageDrop(e, (url) => onUpdateObjectImage(o.id, url))}
-                            title="画像をここにドラッグ&ドロップでも読み込めます"
                           >
                             {objectImageDataUrl ? (
                               <img src={objectImageDataUrl} alt="" className="w-full h-full object-cover pointer-events-none" />
                             ) : (
-                              <span className="text-[9px] font-bold text-neutral-400 px-1 pointer-events-none">
-                                {dropActive === o.id ? 'ドロップ' : 'no image'}
-                              </span>
+                              <span className="text-[9px] font-bold text-neutral-400 px-1 pointer-events-none">no image</span>
                             )}
                           </div>
-                          <div className="flex flex-wrap gap-1">
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                // Keep card selection stable when opening file picker.
-                                onActiveObjectChange(o.id);
-                                setObjectImageTargetId(o.id);
-                                objectInputRef.current?.click();
-                              }}
-                              className="flex items-center justify-center gap-1 px-2 py-1 rounded border border-white/15 text-[10px] font-bold hover:bg-white/5"
-                            >
-                              <ImagePlus className="w-3.5 h-3.5" />
-                              画像を選択
-                            </button>
-                            {objectImageDataUrl ? (
+                          <div className="flex flex-col gap-1">
+                            <div className="flex flex-wrap gap-1">
                               <button
                                 type="button"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  onUpdateObjectImage(o.id, null);
+                                  // Keep card selection stable when opening file picker.
+                                  onActiveObjectChange(o.id);
+                                  setObjectImageTargetId(o.id);
+                                  objectInputRef.current?.click();
                                 }}
-                                className="px-2 py-1 rounded border border-white/15 text-[10px] font-bold hover:bg-white/5"
+                                className="flex items-center justify-center gap-1 px-2 py-1 rounded border border-white/15 text-[10px] font-bold hover:bg-white/5"
                               >
-                                画像を外す
+                                <ImagePlus className="w-3.5 h-3.5" />
+                                画像を選択
                               </button>
-                            ) : null}
+                              {objectImageDataUrl ? (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    onUpdateObjectImage(o.id, null);
+                                  }}
+                                  className="px-2 py-1 rounded border border-white/15 text-[10px] font-bold hover:bg-white/5"
+                                >
+                                  画像を外す
+                                </button>
+                              ) : null}
+                            </div>
+                            {/* ドロップ可能を明示（UIになじむ淡いエメラルド・260724②）。カード内どこでもドロップ可。 */}
+                            <span className="text-[10px] font-semibold text-emerald-300/70">
+                              またはこのカードへドラッグ＆ドロップ
+                            </span>
                           </div>
                         </div>
                         {/* 指示プロンプト（カード幅いっぱい） */}
