@@ -2335,13 +2335,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ctx.fillText(drawText, 0, labelY);
           }
 
+          // 前方向マーカー: モデルの前面（+depth＝ワールド+Z＝プレビューのギズモ「前」）へ向ける（260725・クライアント要望②で反転修正）。
+          // 従来は -halfD（-depth＝-Z＝背面）を指しており、プレビューで設定した前と 2D の矢印が前後逆だった。
+          // ワールド対応: 2Dキャンバスの下(+y)=ワールド+Z（furniturePositionToMm）。ギズモの「前」=+Z なので +halfD 側が前。
           ctx.beginPath();
-          ctx.moveTo(0, -halfD);
-          ctx.lineTo(0, -halfD - arrowLen);
-          ctx.moveTo(0, -halfD - arrowLen);
-          ctx.lineTo(-arrowHead * 0.7, -halfD - arrowLen + arrowHead);
-          ctx.moveTo(0, -halfD - arrowLen);
-          ctx.lineTo(arrowHead * 0.7, -halfD - arrowLen + arrowHead);
+          ctx.moveTo(0, halfD);
+          ctx.lineTo(0, halfD + arrowLen);
+          ctx.moveTo(0, halfD + arrowLen);
+          ctx.lineTo(-arrowHead * 0.7, halfD + arrowLen - arrowHead);
+          ctx.moveTo(0, halfD + arrowLen);
+          ctx.lineTo(arrowHead * 0.7, halfD + arrowLen - arrowHead);
           ctx.strokeStyle = isSelected ? '#f59e0b' : '#c4b5fd';
           ctx.lineWidth = isSelected ? 2 : 1.4;
           ctx.stroke();

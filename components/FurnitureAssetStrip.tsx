@@ -12,7 +12,7 @@ export type FurnitureAssetStripProps = {
   selectedAssetCategory: string | null;
   onSelectedAssetCategoryChange: (category: string | null) => void;
   onPickItem: (item: FurnitureAssetStripItem) => void;
-  renderThumbnail: (item: Pick<FurnitureAssetStripItem, 'url' | 'name' | 'modelUprightXDeg'>) => React.ReactNode;
+  renderThumbnail: (item: Pick<FurnitureAssetStripItem, 'url' | 'name' | 'modelUprightXDeg' | 'forwardYawDeg'>) => React.ReactNode;
   /** 家具カタログ API の読み込み状態 */
   fetchStatus: FurnitureCatalogFetchStatus;
   /** fetchStatus が error のとき表示する短いメッセージ */
@@ -162,7 +162,14 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
                   title={item.name}
                 >
                   <div className="absolute inset-0 opacity-80 group-hover:opacity-100 group-hover:scale-110 transition-all duration-500">
-                    {renderThumbnail({ url: item.url, name: item.name })}
+                    {/* 取り込み向き（上下 modelUprightXDeg・前後 forwardYawDeg）をサムネイル生成へ渡す（260725・クライアント要望③）。
+                        従来は url/name だけを渡しており、向きが反映されず倒れ/背面のままだった。 */}
+                    {renderThumbnail({
+                      url: item.url,
+                      name: item.name,
+                      modelUprightXDeg: item.modelUprightXDeg,
+                      forwardYawDeg: item.forwardYawDeg,
+                    })}
                   </div>
                   <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity">
                     <span className="text-2xl font-black text-emerald-400 drop-shadow-md">+</span>
