@@ -7,7 +7,10 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateAgentReply, generateGeminiImage, resolveAgentModel, GEMINI_IMAGE_MODEL, type AgentChatMessage, type AgentAttachment } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, generateVisionProductReply, resolveAgentModel, resolveAgentModelForTier, GEMINI_IMAGE_MODEL, type AgentChatMessage, type AgentAttachment } from './lib/gemini.js';
+import { analyzeAgentRequest } from './lib/agentRouting.js';
+import { resolveAttachmentMime, parseDataUrl, isBase64DataUrl } from './lib/agentAttachments.js';
+import { parseVisionWebDetection, buildVisionFindingsText } from './lib/visionProductSearch.js';
 import type { AgentCatalogEntry } from './types.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
@@ -263,7 +266,7 @@ export default defineConfig(({ mode }) => {
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキーが見つかりません。' }));
                         }
-                        const parsed = JSON.parse(body) as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[] };
+                        const parsed = JSON.parse(body) as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[]; projectContext?: unknown };
                         const messages: AgentChatMessage[] = Array.isArray(parsed.messages)
                             ? parsed.messages
                                   .filter(
@@ -277,18 +280,107 @@ export default defineConfig(({ mode }) => {
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: 'メッセージが必要です。' }));
                         }
-                        // 本番 api/agent.ts と同様に catalog/files を渡し、recommendations も返す（dev/prod 一致・1a のWeb検索提案もdevで機能）。
+                        // 本番 api/agent.ts と同じ受理条件（base64のみ・件数/容量上限）＋ルールベース振り分け（260725 ①）を dev でも再現（dev/prod 一致）。
+                        const MAX_FILES = 10; const MAX_TOTAL_B64 = 18 * 1024 * 1024;
+                        const files: AgentAttachment[] = [];
+                        let totalB64 = 0; let hasNonImageDoc = false; let hasImageFile = false;
+                        if (Array.isArray(parsed.files)) {
+                            for (const f of parsed.files as unknown[]) {
+                                if (files.length >= MAX_FILES) break;
+                                if (!f || typeof f !== 'object') continue;
+                                const dataUrl = typeof (f as { dataUrl?: unknown }).dataUrl === 'string' ? (f as { dataUrl: string }).dataUrl : '';
+                                if (!isBase64DataUrl(dataUrl)) continue;
+                                totalB64 += dataUrl.length;
+                                if (totalB64 > MAX_TOTAL_B64) break;
+                                const name = typeof (f as { name?: unknown }).name === 'string' ? (f as { name: string }).name : undefined;
+                                const mime = resolveAttachmentMime(name, parseDataUrl(dataUrl).mimeType);
+                                if (mime.startsWith('image/')) hasImageFile = true; else hasNonImageDoc = true;
+                                files.push({ name, dataUrl });
+                            }
+                        }
+                        const catalog = Array.isArray(parsed.catalog)
+                            ? (parsed.catalog as unknown[]).filter((c): c is AgentCatalogEntry => !!c && typeof c === 'object' && typeof (c as { name?: unknown }).name === 'string').slice(0, 80)
+                            : [];
+                        const lastUserText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+                        const hasGroundingImage = typeof parsed.imageDataUrl === 'string' && parsed.imageDataUrl.length > 0;
+                        const route = analyzeAgentRequest({
+                            text: lastUserText,
+                            fileCount: files.length,
+                            totalAttachmentBytes: Math.round(totalB64 * 0.75),
+                            hasNonImageDoc,
+                            hasImage: hasGroundingImage || hasImageFile,
+                        });
+                        const model = resolveAgentModelForTier(route.tier);
+                        const projectContext = typeof parsed.projectContext === 'string' && parsed.projectContext.trim() ? parsed.projectContext.trim().slice(0, 2000) : undefined;
                         const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
                             messages,
                             imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : null,
-                            catalog: Array.isArray(parsed.catalog) ? parsed.catalog : undefined,
-                            files: Array.isArray(parsed.files) ? parsed.files : undefined,
+                            catalog,
+                            files,
+                            model,
+                            useSearch: route.useSearch,
+                            projectContext,
                         });
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model: resolveAgentModel() }));
+                        return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model, route: { tier: route.tier, useSearch: route.useSearch } }));
                     } catch (e: any) {
                         console.error('agent local error:', e);
+                        res.statusCode = 500;
+                        res.setHeader('Content-Type', 'application/json');
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            // --- Local Vision Product Search（画像から商品を特定・②・260725）。本番 api/visionProductSearch.ts のローカル版。 ---
+            if (req.url === '/api/visionProductSearch' && req.method === 'POST') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    try {
+                        const visionKey = (process.env.GOOGLE_VISION_API_KEY || process.env.GOOGLE_CLOUD_VISION_API_KEY || process.env.VISION_API_KEY || env.GOOGLE_VISION_API_KEY || env.GOOGLE_CLOUD_VISION_API_KEY || env.VISION_API_KEY || '').trim();
+                        res.setHeader('Content-Type', 'application/json');
+                        if (!visionKey) {
+                            res.statusCode = 200;
+                            return res.end(JSON.stringify({ success: false, disabled: true, error: '画像からの商品特定機能は現在無効です。' }));
+                        }
+                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
+                        const geminiKey = extractGeminiApiKey(rawApiKey);
+                        if (!geminiKey) {
+                            res.statusCode = 400;
+                            return res.end(JSON.stringify({ success: false, error: 'Gemini APIキーが見つかりません。' }));
+                        }
+                        const parsed = JSON.parse(body) as { imageDataUrl?: unknown; prompt?: unknown };
+                        const imageDataUrl = typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : '';
+                        const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim().slice(0, 500) : '';
+                        const { base64, mimeType } = parseDataUrl(imageDataUrl);
+                        if (!base64 || !mimeType.startsWith('image/')) {
+                            res.statusCode = 400;
+                            return res.end(JSON.stringify({ success: false, error: '有効な画像が必要です。' }));
+                        }
+                        if (base64.length > 8 * 1024 * 1024) { // 本番 api/visionProductSearch.ts と同じ 8MB 上限
+                            res.statusCode = 400;
+                            return res.end(JSON.stringify({ success: false, error: '画像が大きすぎます。縮小して再度お試しください。' }));
+                        }
+                        const visionRes = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(visionKey)}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ requests: [{ image: { content: base64 }, features: [{ type: 'WEB_DETECTION', maxResults: 15 }] }] }),
+                        });
+                        if (!visionRes.ok) {
+                            res.statusCode = 502;
+                            return res.end(JSON.stringify({ success: false, error: `画像解析に失敗しました (${visionRes.status})` }));
+                        }
+                        const findings = parseVisionWebDetection(await visionRes.json());
+                        const { reply, recommendations, usage } = await generateVisionProductReply(geminiKey, {
+                            imageDataUrl, prompt, visionFindingsText: buildVisionFindingsText(findings), model: resolveAgentModel(),
+                        });
+                        res.statusCode = 200;
+                        return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model: resolveAgentModel(), visionPages: findings.pages.slice(0, 5) }));
+                    } catch (e: any) {
+                        console.error('visionProductSearch local error:', e);
                         res.statusCode = 500;
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(JSON.stringify({ success: false, error: e.message }));

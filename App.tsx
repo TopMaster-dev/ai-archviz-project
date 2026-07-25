@@ -58,6 +58,7 @@ import { listUserUploads, uploadUserFile, checkStorageCapacity, updateUserUpload
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
+import { buildAgentProjectSummary } from './lib/agentProjectContext.js';
 import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
 
 // カメラ視点プリセットは per-project でストア（＝Supabase の projects.data）へ永続化する（260703）。
@@ -3193,6 +3194,63 @@ const App: React.FC = () => {
     estimatePayload.furniture.length > 0 ||
     estimatePayload.aiItems.length > 0;
 
+  // エージェントへ渡す「現在のプロジェクト情報」の要約（260725 ①）。部屋の寸法・家具・建材・予算をまとめる。
+  // 床面積/概形は getRoomTransform の mPoints（メートル単位）から算出。何も無ければ null（文脈を付けない）。
+  const agentProjectSummary = useMemo(() => {
+    try {
+      const mPoints = sketchPoints.length >= 3 ? getRoomTransform(sketchPoints).mPoints : [];
+      let floorAreaM2: number | null = null;
+      let roomWidthM: number | null = null;
+      let roomDepthM: number | null = null;
+      if (mPoints.length >= 3) {
+        let area2 = 0;
+        let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+        for (let i = 0; i < mPoints.length; i += 1) {
+          const a = mPoints[i];
+          const b = mPoints[(i + 1) % mPoints.length];
+          area2 += a.x * b.z - b.x * a.z;
+          minX = Math.min(minX, a.x); maxX = Math.max(maxX, a.x);
+          minZ = Math.min(minZ, a.z); maxZ = Math.max(maxZ, a.z);
+        }
+        floorAreaM2 = Math.abs(area2) / 2;
+        roomWidthM = maxX - minX;
+        roomDepthM = maxZ - minZ;
+      }
+      const furniture = furnitureItems.map((f) => ({
+        name: (f.customName || f.name || f.type || '家具') as string,
+        count: 1,
+        widthMm: f.footprint2d?.width,
+        depthMm: f.footprint2d?.depth,
+      }));
+      const seenMat = new Set<string>();
+      const materials: { surface: string; name: string }[] = [];
+      for (const [mesh, product] of Object.entries(selections)) {
+        const name = typeof (product as { name?: unknown } | null)?.name === 'string' ? (product as { name: string }).name.trim() : '';
+        if (!name || seenMat.has(name)) continue;
+        seenMat.add(name);
+        const lower = mesh.toLowerCase();
+        const surface =
+          lower.includes('floor') || mesh.includes('床') ? '床'
+          : lower.includes('ceil') || mesh.includes('天井') ? '天井'
+          : lower.includes('wall') || mesh.includes('壁') ? '壁'
+          : '面';
+        materials.push({ surface, name });
+      }
+      return buildAgentProjectSummary({
+        floorAreaM2,
+        roomWidthM,
+        roomDepthM,
+        ceilingHeightMm: roomHeight,
+        wallCount: sketchPoints.length,
+        furniture,
+        materials,
+        budgetYen: grandTotal,
+      });
+    } catch {
+      return null;
+    }
+  }, [sketchPoints, roomHeight, furnitureItems, selections, grandTotal]);
+
   const [estimateExportBusy, setEstimateExportBusy] = useState(false);
 
   // 見積書PDFの先頭に載せる「現在表示中の画像」を書き出し時に取得（3h・260720）。
@@ -5509,6 +5567,7 @@ const App: React.FC = () => {
                         onRemovePlacementAt={aiEditSession.removePlacementAt}
                         estimatePanel={activeKind === 'photo' ? null : renderEstimatePanel(true)}
                         agentCatalog={agentCatalog}
+                        agentProjectSummary={agentProjectSummary}
                         onAddEstimateItem={handleAddAgentRecommendation}
                         onOpenGuide={() => setEditorOnboardingOpen(true)}
                         photoOnly={activeKind === 'photo'}

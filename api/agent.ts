@@ -1,7 +1,11 @@
-import { generateAgentReply, resolveAgentModel, type AgentAttachment, type AgentChatMessage } from '../lib/gemini.js';
-import { isBase64DataUrl } from '../lib/agentAttachments.js';
+import { generateAgentReply, resolveAgentModelForTier, type AgentAttachment, type AgentChatMessage } from '../lib/gemini.js';
+import { isBase64DataUrl, resolveAttachmentMime, parseDataUrl } from '../lib/agentAttachments.js';
+import { analyzeAgentRequest } from '../lib/agentRouting.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 import type { AgentCatalogEntry } from '../types.js';
+
+/** プロジェクト文脈テキストの上限（トークン暴走防止）。 */
+const MAX_PROJECT_CONTEXT = 2000;
 
 /**
  * AIエージェント相談エンドポイント（管理表 row 208/214・プランA）。
@@ -30,7 +34,7 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });
     }
 
-    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown; files?: unknown };
+    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown; files?: unknown; projectContext?: unknown };
     const messages: AgentChatMessage[] = Array.isArray(body.messages)
       ? body.messages
           .filter(
@@ -57,8 +61,11 @@ export default async function handler(req: any, res: any) {
     const MAX_FILES = 10;
     const MAX_TOTAL_B64 = 18 * 1024 * 1024; // Gemini inline 上限(~20MB)手前で頭打ち
     const files: AgentAttachment[] = [];
+    // ルールベース振り分け（260725 ①）用の客観指標。
+    let totalB64 = 0;
+    let hasNonImageDoc = false;
+    let hasImageFile = false;
     if (Array.isArray(body.files)) {
-      let total = 0;
       for (const f of body.files as unknown[]) {
         if (files.length >= MAX_FILES) break;
         if (!f || typeof f !== 'object') continue;
@@ -66,19 +73,46 @@ export default async function handler(req: any, res: any) {
         const dataUrl = typeof rec.dataUrl === 'string' ? rec.dataUrl : '';
         // MIME 部が空の `data:;base64,`（拡張子で判定するコード/テキストファイル）も受理する。
         if (!isBase64DataUrl(dataUrl)) continue;
-        total += dataUrl.length;
-        if (total > MAX_TOTAL_B64) break;
-        files.push({ name: typeof rec.name === 'string' ? rec.name : undefined, dataUrl });
+        totalB64 += dataUrl.length;
+        if (totalB64 > MAX_TOTAL_B64) break;
+        const name = typeof rec.name === 'string' ? rec.name : undefined;
+        const mime = resolveAttachmentMime(name, parseDataUrl(dataUrl).mimeType);
+        if (mime.startsWith('image/')) hasImageFile = true;
+        else hasNonImageDoc = true; // 画像以外（PDF/テキスト/コード/音声/動画）は重い入力＝Pro 寄せの指標
+        files.push({ name, dataUrl });
       }
     }
+
+    // プロジェクト文脈（部屋の寸法・家具・建材・予算など）。クライアントが組み立てて渡す（260725 ①）。
+    const projectContext =
+      typeof body.projectContext === 'string' && body.projectContext.trim()
+        ? body.projectContext.trim().slice(0, MAX_PROJECT_CONTEXT)
+        : undefined;
+
+    // ルールベース振り分け（260725 ①）: 最新ユーザー発話＋添付の客観指標だけで Flash/Pro と検索要否を決める。
+    const lastUserText = [...messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+    const hasGroundingImage = typeof body.imageDataUrl === 'string' && body.imageDataUrl.length > 0;
+    const route = analyzeAgentRequest({
+      text: lastUserText,
+      fileCount: files.length,
+      totalAttachmentBytes: Math.round(totalB64 * 0.75), // b64 文字数→生バイト概算
+      hasNonImageDoc,
+      hasImage: hasGroundingImage || hasImageFile,
+    });
+    const model = resolveAgentModelForTier(route.tier);
 
     const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
       messages,
       imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : null,
       catalog,
       files,
+      model,
+      useSearch: route.useSearch,
+      projectContext,
     });
-    return res.status(200).json({ success: true, reply, recommendations, usage, model: resolveAgentModel() });
+    return res
+      .status(200)
+      .json({ success: true, reply, recommendations, usage, model, route: { tier: route.tier, useSearch: route.useSearch } });
   } catch (e: any) {
     console.error('agent error:', e);
     res.status(500).json({ success: false, error: e.message });

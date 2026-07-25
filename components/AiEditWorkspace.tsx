@@ -216,6 +216,8 @@ type Props = {
   onUploadBaseImage?: (dataUrl: string) => void;
   /** AIエージェントへ渡す家具カタログ（推薦候補・Tier2 260620）。 */
   agentCatalog?: AgentCatalogEntry[];
+  /** エージェントへ渡す現在のプロジェクト情報の要約（部屋の寸法・家具・建材・予算・260725 ①）。 */
+  agentProjectSummary?: string | null;
   /** エージェント推薦を概算見積もりへ追加する（Tier2）。 */
   onAddEstimateItem?: (rec: AgentRecommendation) => void;
   /** 使い方ガイドを開く（260624: AI画像編集にも「?」を出し、2D/3D 同様に見返せるように）。 */
@@ -264,6 +266,7 @@ export function AiEditWorkspace({
   exitToHomeBusy = false,
   onUploadBaseImage,
   agentCatalog,
+  agentProjectSummary,
   onAddEstimateItem,
   onOpenGuide,
 }: Props) {
@@ -2429,6 +2432,7 @@ export function AiEditWorkspace({
                     if (!o) setActiveTool('area');
                   }}
                   catalog={agentCatalog}
+                  projectSummary={agentProjectSummary}
                   onAddEstimateItem={onAddEstimateItem}
                 />
               </div>

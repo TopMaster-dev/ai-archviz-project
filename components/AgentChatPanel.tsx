@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Check, Copy, FileText, Loader2, MessageCircle, Paperclip, Send, X, Plus } from 'lucide-react';
+import { Check, Copy, FileText, Loader2, MessageCircle, Paperclip, Search, Send, X, Plus } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
@@ -79,12 +79,18 @@ function loadStoredChat(projectId: string | null | undefined): ChatMessage[] {
   }
 }
 
+/** 画像から商品を特定する機能（Cloud Vision・②）を表示するか（env フラグ・260725）。 */
+const VISION_PRODUCT_SEARCH_ENABLED =
+  ((import.meta as unknown as { env?: Record<string, string | undefined> }).env?.VITE_ENABLE_VISION_PRODUCT_SEARCH ?? '') ===
+  'true';
+
 export function AgentChatPanel({
   imageDataUrl,
   projectId,
   open,
   onOpenChange,
   catalog,
+  projectSummary,
   onAddEstimateItem,
   inline = false,
 }: {
@@ -94,6 +100,8 @@ export function AgentChatPanel({
   onOpenChange: (open: boolean) => void;
   /** エージェントへ渡す家具カタログ（推薦候補・Tier2 260620）。 */
   catalog?: AgentCatalogEntry[];
+  /** ユーザーの現在のプロジェクト情報（部屋の寸法・家具・建材・予算の要約・260725 ①）。 */
+  projectSummary?: string | null;
   /** 推薦を見積もりへ追加する（Tier2）。未指定なら「見積に追加」ボタンを出さない。 */
   onAddEstimateItem?: (rec: AgentRecommendation) => void;
   /** 右レール内にタブとしてインライン表示する（260624）。false=従来のフローティング。 */
@@ -110,6 +118,8 @@ export function AgentChatPanel({
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   // 読み込み中の件数（FileReader は非同期のため、選択直後に「読み込み中…」を出して即時フィードバックする・260702）。
   const [readingCount, setReadingCount] = useState(0);
+  // 「画像から商品を特定して探す」モード（②・Cloud Vision・260725）。ON のとき送信は Vision 経路へ。
+  const [visionMode, setVisionMode] = useState(false);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -162,6 +172,38 @@ export function AgentChatPanel({
     try {
       // 履歴がURL（クラウド保存）の場合に備え、サーバへ渡す前に base64 データURL化（画像グラウンディング維持・260619）。
       const grounding = imageDataUrl ? await ensureDataUrl(imageDataUrl) : null;
+      // 商品を解決して assistant 吹き出しへ反映する共通処理（通常/Vision 経路で共有）。
+      const appendAssistant = (data: { reply?: unknown; recommendations?: unknown }) => {
+        const recs: AgentRecommendation[] = Array.isArray(data.recommendations)
+          ? (data.recommendations as unknown[]).filter(
+              (r): r is AgentRecommendation =>
+                !!r && typeof r === 'object' && typeof (r as { name?: unknown }).name === 'string',
+            )
+          : [];
+        setMessages((prev) => [
+          ...prev,
+          { role: 'assistant', content: String(data.reply ?? ''), recommendations: recs.length ? recs : undefined },
+        ]);
+      };
+
+      // ②「画像から商品を特定して探す」モード（Cloud Vision 経路・260725）。
+      // 使う画像は「添付した画像」を優先し、無ければ現在のグラウンディング画像。
+      const attachedImage = filesToSend.find(isImageFile);
+      const visionImage = attachedImage?.dataUrl || grounding || null;
+      if (visionMode && VISION_PRODUCT_SEARCH_ENABLED && visionImage) {
+        const res = await fetch('/api/visionProductSearch', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+          body: JSON.stringify({ imageDataUrl: visionImage, prompt: content }),
+        });
+        const data = await res.json();
+        if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');
+        if (!data.success) throw new Error(data.error || '商品の特定に失敗しました');
+        void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
+        appendAssistant(data);
+        return;
+      }
+
       const res = await fetch('/api/agent', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
@@ -169,6 +211,7 @@ export function AgentChatPanel({
           messages: next.slice(-12).map((m) => ({ role: m.role, content: m.content })),
           imageDataUrl: grounding,
           catalog,
+          projectContext: projectSummary || undefined,
           files: filesToSend.map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
         }),
       });
@@ -178,16 +221,7 @@ export function AgentChatPanel({
       const imageCount = (grounding ? 1 : 0) + filesToSend.filter(isImageFile).length;
       void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount });
       // Tier2: 推薦はサーバ側でカタログ実データへ解決済み（index ずれ・捏造防止）。型のみ軽く検証。
-      const recs: AgentRecommendation[] = Array.isArray(data.recommendations)
-        ? (data.recommendations as unknown[]).filter(
-            (r): r is AgentRecommendation =>
-              !!r && typeof r === 'object' && typeof (r as { name?: unknown }).name === 'string',
-          )
-        : [];
-      setMessages((prev) => [
-        ...prev,
-        { role: 'assistant', content: String(data.reply ?? ''), recommendations: recs.length ? recs : undefined },
-      ]);
+      appendAssistant(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');
     } finally {
@@ -339,7 +373,7 @@ export function AgentChatPanel({
           className="w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white outline-none focus:border-emerald-500"
         />
         {attachmentsPanel}
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
             onClick={() => attachInputRef.current?.click()}
@@ -348,7 +382,29 @@ export function AgentChatPanel({
             <Paperclip className="h-4 w-4" />
             ファイルを添付
           </button>
+          {/* ②「画像から商品を特定して探す」モード切替（Cloud Vision・env フラグ時のみ表示・260725）。 */}
+          {VISION_PRODUCT_SEARCH_ENABLED && (
+            <button
+              type="button"
+              aria-pressed={visionMode}
+              onClick={() => setVisionMode((v) => !v)}
+              title="添付画像または現在の画像から、写っている商品を特定して実在商品を探します"
+              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-bold transition ${
+                visionMode
+                  ? 'border-emerald-500 bg-emerald-600/20 text-emerald-200'
+                  : 'border-white/10 bg-black/40 text-neutral-200 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Search className="h-4 w-4" />
+              画像から商品を特定{visionMode ? '：ON' : ''}
+            </button>
+          )}
         </div>
+        {VISION_PRODUCT_SEARCH_ENABLED && visionMode && (
+          <p className="text-[10px] leading-relaxed text-emerald-300/90">
+            画像から商品を特定して探します。特定したい対象（例:「このソファ」）を記入し、対象の画像を添付するか、現在表示中の画像を使います。画像が無い場合は通常のチャットとして送信されます。
+          </p>
+        )}
         <button
           type="button"
           onClick={() => void send()}
@@ -473,7 +529,7 @@ export function AgentChatPanel({
                             {rec.reason && (
                               <div className="mt-0.5 text-[10px] leading-relaxed text-neutral-500">{rec.reason}</div>
                             )}
-                            {rec.productUrl && /^https?:\/\//i.test(rec.productUrl) && (
+                            {rec.productUrl && /^https?:\/\//i.test(rec.productUrl) ? (
                               <a
                                 href={rec.productUrl}
                                 target="_blank"
@@ -481,6 +537,18 @@ export function AgentChatPanel({
                                 className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
                               >
                                 商品ページ ↗
+                              </a>
+                            ) : (
+                              // URLが無い/無効な場合の保険（260725 ①c）: メーカー+商品名+品番で Google 検索へ。
+                              <a
+                                href={`https://www.google.com/search?q=${encodeURIComponent(
+                                  [rec.brand, rec.name, rec.modelNumber].filter(Boolean).join(' '),
+                                )}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
+                              >
+                                Google で検索 ↗
                               </a>
                             )}
                           </div>
