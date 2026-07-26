@@ -13,6 +13,7 @@ import {
   rejectRegistrationRequest,
 } from '../../lib/server/adminDashboard.js';
 import { getInfraStatus } from '../../lib/server/adminInfra.js';
+import { signOfficial3dUpload } from '../../lib/server/cloudinarySign.js';
 
 // 運用者向け管理エンドポイント。Vercel Hobby の関数数上限(12/12)のため、ここに以下を相乗りさせる（260711）:
 //  - 既定（action なし）: 孤児 AI生成画像の掃除。CRON_SECRET（Authorization: Bearer）で保護。?execute=1 で実削除。
@@ -54,7 +55,7 @@ export default async function handler(req: any, res: any) {
   // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
   const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests'];
-  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request', 'share-project'];
+  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request', 'share-project', 'sign-3d-upload'];
   if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
@@ -81,6 +82,14 @@ export default async function handler(req: any, res: any) {
       return res.status(200).json({ success: true, usage: result });
     }
     if (action === 'infra') return res.status(200).json({ success: true, infra: await getInfraStatus() });
+    // 公式3Dモデルの Cloudinary 署名付き直アップロード用の署名を発行（①・260726）。必ず POST（署名の使い回し抑止）。
+    // API Secret はサーバ内のみ。返すのは cloud_name/api_key/timestamp/signature/upload_preset のみ。
+    if (action === 'sign-3d-upload') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'sign-3d-upload は POST。' });
+      const signed = signOfficial3dUpload();
+      if (!signed.ok) return res.status(500).json({ error: signed.error });
+      return res.status(200).json({ success: true, ...signed });
+    }
     if (action === 'testkey') {
       const engine = getEngineParam(req);
       if (engine !== 'gemini' && engine !== 'replicate') {

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { getSupabase } from '../../lib/db/supabaseClient.js';
 import { exitAdminDashboard } from '../../lib/admin/adminClient.js';
@@ -260,6 +260,106 @@ function GraceManagerCard() {
 
 function Card({ children }: { children: React.ReactNode }) {
   return <div className="rounded-xl border border-white/10 bg-neutral-900/70 p-4">{children}</div>;
+}
+
+/**
+ * 公式3Dモデルを Cloudinary（3d_assets）へアップロードする（①・260726）。
+ * サーバ（sign-3d-upload）で署名を発行し、ブラウザから Cloudinary へ直送する（署名付き直アップロード）。
+ * API Secret はサーバ内のみ。保存先フォルダは Upload Preset「3d_assets upload」が固定する（3D は raw）。
+ */
+function OfficialModelUploadCard() {
+  const [file, setFile] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [result, setResult] = useState<{ publicId: string; url: string } | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const ACCEPT = '.glb,.gltf,.fbx,.obj';
+  const isAccepted = (name: string) => /\.(glb|gltf|fbx|obj)$/i.test(name);
+
+  const upload = async () => {
+    if (!file) return;
+    if (!isAccepted(file.name)) {
+      setMsg('対応形式は FBX / GLB / GLTF / OBJ です。');
+      return;
+    }
+    setBusy(true);
+    setMsg(null);
+    setResult(null);
+    try {
+      // 1) サーバで署名発行（API Secret はサーバ内のみ）。
+      const signRes = await adminFetch('sign-3d-upload', 'POST');
+      const sign = await signRes.json().catch(() => null);
+      if (!signRes.ok || !sign?.success) {
+        setMsg(`署名の取得に失敗しました（${sign?.error ?? signRes.status}）。`);
+        return;
+      }
+      // 2) ブラウザ → Cloudinary へ直アップロード（raw）。folder は preset が固定するため送らない。
+      const form = new FormData();
+      form.append('file', file);
+      form.append('api_key', sign.apiKey);
+      form.append('timestamp', String(sign.timestamp));
+      form.append('signature', sign.signature);
+      form.append('upload_preset', sign.uploadPreset);
+      const up = await fetch(`https://api.cloudinary.com/v1_1/${encodeURIComponent(sign.cloudName)}/raw/upload`, {
+        method: 'POST',
+        body: form,
+      });
+      const upJson = await up.json().catch(() => null);
+      if (!up.ok || !upJson?.public_id) {
+        setMsg(`アップロードに失敗しました（${upJson?.error?.message ?? up.status}）。`);
+        return;
+      }
+      setResult({ publicId: String(upJson.public_id), url: String(upJson.secure_url ?? '') });
+      setMsg('アップロードしました。家具カタログ（/api/furniture）に反映されます（エディタの再読込で反映）。サムネイルは初回表示時に自動生成されます。');
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = '';
+    } catch {
+      setMsg('通信エラーが発生しました。');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Card>
+      <h3 className="mb-1 text-sm font-bold text-emerald-300">公式3Dモデルのアップロード（Cloudinary）</h3>
+      <p className="mb-3 text-[11px] leading-relaxed text-neutral-500">
+        FBX / GLB / GLTF / OBJ を公式カタログ（Cloudinary の <span className="font-mono">3d_assets</span>）へ直接アップロードします。
+        ブラウザから Cloudinary へ直送し、署名はサーバ側で発行します（API Secret はクライアントに露出しません）。
+        アップロード後、家具カタログ（<span className="font-mono">/api/furniture</span>）に表示・反映されます。
+        ※一般ユーザーのアップロードは Supabase 管理で、この公式領域とは分離されています。
+      </p>
+      <div className="flex flex-wrap items-center gap-2">
+        <input
+          ref={inputRef}
+          type="file"
+          accept={ACCEPT}
+          onChange={(e) => {
+            setFile(e.target.files?.[0] ?? null);
+            setResult(null);
+            setMsg(null);
+          }}
+          className="text-xs text-neutral-300 file:mr-2 file:rounded-md file:border-0 file:bg-neutral-800 file:px-3 file:py-1.5 file:text-neutral-200 hover:file:bg-neutral-700"
+        />
+        <button
+          type="button"
+          onClick={() => void upload()}
+          disabled={busy || !file}
+          className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+        >
+          {busy ? 'アップロード中…' : 'アップロード'}
+        </button>
+      </div>
+      {file && !busy && (
+        <p className="mt-2 text-[11px] text-neutral-400">
+          選択中: {file.name}（{(file.size / 1024 / 1024).toFixed(1)}MB）
+        </p>
+      )}
+      {result && <p className="mt-2 break-all text-[11px] text-emerald-300">保存済み public_id: {result.publicId}</p>}
+      {msg && <p className="mt-2 text-[11px] text-neutral-400">{msg}</p>}
+    </Card>
+  );
 }
 
 function GroupTable({
@@ -896,6 +996,7 @@ export function AdminDashboard() {
         {/* 運営操作: 登録リクエストの承認（#2）＋ユーザーの猶予期間管理（#4） */}
         <section className="space-y-3">
           <h2 className="text-sm font-bold text-neutral-200">運営操作</h2>
+          <OfficialModelUploadCard />
           <RegistrationRequestsCard />
           <GraceManagerCard />
         </section>

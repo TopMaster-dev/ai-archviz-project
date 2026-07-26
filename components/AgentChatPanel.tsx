@@ -191,10 +191,11 @@ export function AgentChatPanel({
       const attachedImage = filesToSend.find(isImageFile);
       const visionImage = attachedImage?.dataUrl || grounding || null;
       if (visionMode && VISION_PRODUCT_SEARCH_ENABLED && visionImage) {
-        const res = await fetch('/api/visionProductSearch', {
+        // 画像から商品を特定する専用モード。Hobby の関数上限に配慮し /api/agent へ相乗り（mode で分岐・260726）。
+        const res = await fetch('/api/agent', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-          body: JSON.stringify({ imageDataUrl: visionImage, prompt: content }),
+          body: JSON.stringify({ mode: 'vision-product', imageDataUrl: visionImage, prompt: content }),
         });
         const data = await res.json();
         if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');

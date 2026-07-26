@@ -7,10 +7,10 @@ import { getFurnitureCatalog } from './lib/furnitureCatalogService.js';
 import { getLocalFurnitureCatalog } from './lib/localFurnitureCatalog.js';
 import { CLOUDINARY_THUMBNAIL_FOLDER } from './constants/cloudinaryThumbnails.js';
 import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
-import { generateAgentReply, generateGeminiImage, generateVisionProductReply, resolveAgentModel, resolveAgentModelForTier, GEMINI_IMAGE_MODEL, type AgentChatMessage, type AgentAttachment } from './lib/gemini.js';
+import { generateAgentReply, generateGeminiImage, resolveAgentModelForTier, GEMINI_IMAGE_MODEL, type AgentChatMessage, type AgentAttachment } from './lib/gemini.js';
 import { analyzeAgentRequest } from './lib/agentRouting.js';
 import { resolveAttachmentMime, parseDataUrl, isBase64DataUrl } from './lib/agentAttachments.js';
-import { parseVisionWebDetection, buildVisionFindingsText } from './lib/visionProductSearch.js';
+import { runVisionProductSearch } from './lib/server/visionProductSearchCore.js';
 import type { AgentCatalogEntry } from './types.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
@@ -53,6 +53,15 @@ export default defineConfig(({ mode }) => {
       {
         name: 'local-api-middleware',
         configureServer(server) {
+          // dev: 一部のサーバ lib（cloudinarySign / visionProductSearchCore）は process.env を直接読む。
+          // Vite は .env.local を loadEnv の `env` に載せる（process.env には載らない）ため、必要キーだけ橋渡しする
+          // （既存値は上書きしない＝process.env 優先）。これで dev でも本番と同じ経路で署名/Vision が機能する（260726 敵対レビュー）。
+          for (const k of [
+            'CLOUDINARY_CLOUD_NAME', 'VITE_CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET',
+            'CLOUDINARY_3D_UPLOAD_PRESET', 'GOOGLE_VISION_API_KEY', 'GOOGLE_CLOUD_VISION_API_KEY', 'VISION_API_KEY',
+          ]) {
+            if (process.env[k] === undefined && env[k]) process.env[k] = env[k];
+          }
           server.middlewares.use(async (req, res, next) => {
             // --- Local Thumbnail Upload Endpoint (Cloudinary) ---
             if (req.url === '/api/thumbnails' && req.method === 'POST') {
@@ -266,7 +275,18 @@ export default defineConfig(({ mode }) => {
                             res.setHeader('Content-Type', 'application/json');
                             return res.end(JSON.stringify({ success: false, error: '有効な形式のAPIキーが見つかりません。' }));
                         }
-                        const parsed = JSON.parse(body) as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[]; projectContext?: unknown };
+                        const parsed = JSON.parse(body) as { mode?: unknown; prompt?: unknown; messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: AgentCatalogEntry[]; files?: AgentAttachment[]; projectContext?: unknown };
+                        // 画像から商品を特定する専用モード（②・260726）。本番同様 /api/agent へ相乗り（mode 分岐）。
+                        if (parsed.mode === 'vision-product') {
+                            const { status, body: out } = await runVisionProductSearch({
+                                imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : '',
+                                prompt: typeof parsed.prompt === 'string' ? parsed.prompt : '',
+                                geminiKey: apiKey,
+                            });
+                            res.statusCode = status;
+                            res.setHeader('Content-Type', 'application/json');
+                            return res.end(JSON.stringify(out));
+                        }
                         const messages: AgentChatMessage[] = Array.isArray(parsed.messages)
                             ? parsed.messages
                                   .filter(
@@ -326,61 +346,6 @@ export default defineConfig(({ mode }) => {
                         return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model, route: { tier: route.tier, useSearch: route.useSearch } }));
                     } catch (e: any) {
                         console.error('agent local error:', e);
-                        res.statusCode = 500;
-                        res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: false, error: e.message }));
-                    }
-                });
-                return;
-            }
-
-            // --- Local Vision Product Search（画像から商品を特定・②・260725）。本番 api/visionProductSearch.ts のローカル版。 ---
-            if (req.url === '/api/visionProductSearch' && req.method === 'POST') {
-                let body = '';
-                req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', async () => {
-                    try {
-                        const visionKey = (process.env.GOOGLE_VISION_API_KEY || process.env.GOOGLE_CLOUD_VISION_API_KEY || process.env.VISION_API_KEY || env.GOOGLE_VISION_API_KEY || env.GOOGLE_CLOUD_VISION_API_KEY || env.VISION_API_KEY || '').trim();
-                        res.setHeader('Content-Type', 'application/json');
-                        if (!visionKey) {
-                            res.statusCode = 200;
-                            return res.end(JSON.stringify({ success: false, disabled: true, error: '画像からの商品特定機能は現在無効です。' }));
-                        }
-                        const rawApiKey = (typeof req.headers['x-gemini-key'] === 'string' ? (req.headers['x-gemini-key'] as string) : '') || process.env.VITE_GEMINI_API_KEY || process.env.GEMINI_API_KEY || env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY || '';
-                        const geminiKey = extractGeminiApiKey(rawApiKey);
-                        if (!geminiKey) {
-                            res.statusCode = 400;
-                            return res.end(JSON.stringify({ success: false, error: 'Gemini APIキーが見つかりません。' }));
-                        }
-                        const parsed = JSON.parse(body) as { imageDataUrl?: unknown; prompt?: unknown };
-                        const imageDataUrl = typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : '';
-                        const prompt = typeof parsed.prompt === 'string' ? parsed.prompt.trim().slice(0, 500) : '';
-                        const { base64, mimeType } = parseDataUrl(imageDataUrl);
-                        if (!base64 || !mimeType.startsWith('image/')) {
-                            res.statusCode = 400;
-                            return res.end(JSON.stringify({ success: false, error: '有効な画像が必要です。' }));
-                        }
-                        if (base64.length > 8 * 1024 * 1024) { // 本番 api/visionProductSearch.ts と同じ 8MB 上限
-                            res.statusCode = 400;
-                            return res.end(JSON.stringify({ success: false, error: '画像が大きすぎます。縮小して再度お試しください。' }));
-                        }
-                        const visionRes = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(visionKey)}`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ requests: [{ image: { content: base64 }, features: [{ type: 'WEB_DETECTION', maxResults: 15 }] }] }),
-                        });
-                        if (!visionRes.ok) {
-                            res.statusCode = 502;
-                            return res.end(JSON.stringify({ success: false, error: `画像解析に失敗しました (${visionRes.status})` }));
-                        }
-                        const findings = parseVisionWebDetection(await visionRes.json());
-                        const { reply, recommendations, usage } = await generateVisionProductReply(geminiKey, {
-                            imageDataUrl, prompt, visionFindingsText: buildVisionFindingsText(findings), model: resolveAgentModel(),
-                        });
-                        res.statusCode = 200;
-                        return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model: resolveAgentModel(), visionPages: findings.pages.slice(0, 5) }));
-                    } catch (e: any) {
-                        console.error('visionProductSearch local error:', e);
                         res.statusCode = 500;
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(JSON.stringify({ success: false, error: e.message }));
@@ -587,7 +552,7 @@ export default defineConfig(({ mode }) => {
                     // 管理ダッシュボード読取（メール許可リスト認証・本番 api/admin/orphan-cleanup.ts と一致・260711）。
                     const url0 = new URL(req.url || '', 'http://x');
                     const action = url0.searchParams.get('action') || '';
-                    if (['whoami', 'keyhealth', 'usage', 'user-usage', 'share-project', 'testkey', 'infra'].includes(action)) {
+                    if (['whoami', 'keyhealth', 'usage', 'user-usage', 'share-project', 'testkey', 'infra', 'sign-3d-upload'].includes(action)) {
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
                         const { verifyAdmin, getKeyHealth, getUsageSummary, getUserUsageHistory, createOrGetProjectShareToken, testKey } = await import('./lib/server/adminDashboard.js');
@@ -598,6 +563,14 @@ export default defineConfig(({ mode }) => {
                         }
                         if (!admin.ok) { res.statusCode = admin.status; return res.end(JSON.stringify({ error: admin.error })); }
                         res.statusCode = 200;
+                        // 公式3Dアップロードの署名（①・260726）。本番 orphan-cleanup.ts と一致。必ず POST。
+                        if (action === 'sign-3d-upload') {
+                            if (req.method !== 'POST') { res.statusCode = 405; return res.end(JSON.stringify({ error: 'sign-3d-upload は POST。' })); }
+                            const { signOfficial3dUpload } = await import('./lib/server/cloudinarySign.js');
+                            const signed = signOfficial3dUpload();
+                            if (!signed.ok) { res.statusCode = 500; return res.end(JSON.stringify({ error: signed.error })); }
+                            return res.end(JSON.stringify({ success: true, ...signed }));
+                        }
                         if (action === 'keyhealth') return res.end(JSON.stringify({ success: true, keys: getKeyHealth() }));
                         if (action === 'usage') {
                             const from = url0.searchParams.get('from') || null;

@@ -30,7 +30,7 @@ import { beamExposedAreaM2, wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } f
 import { beamOverlapDeductionByIdM2 } from './utils/beamOverlap.js';
 import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
-import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl } from './utils/furnitureThumbnailUrl.js';
+import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl, isOfficialCatalogModelUrl } from './utils/furnitureThumbnailUrl.js';
 import * as THREE from 'three';
 
 import { useAiRenderer } from './hooks/useAiRenderer.js';
@@ -359,16 +359,22 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
         if (currentUrl) {
             const t0 = performance.now();
             globalThumbnailCache[currentUrl] = dataUrl;
-            
-            try {
-                const fileName = getThumbnailPublicIdFromGlbUrl(currentUrl);
-                await fetch('/api/thumbnails', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ fileName, imageData: dataUrl })
-                });
-            } catch (e) {
-                console.error('Thumbnail upload failed:', e);
+
+            // 責務分担の厳守（260726・クライアント要望③）: Cloudinary へサムネイルを保存するのは
+            // "公式カタログ（Cloudinary 3d_assets / materials）" のモデルのときだけ。一般ユーザーが
+            // アップロードした 3D モデル（Supabase 由来）のサムネイルは Cloudinary へ送らない
+            // （＝公式領域に混ざらない）。ユーザー分は生成結果を globalThumbnailCache に保持して表示に使う。
+            if (isOfficialCatalogModelUrl(currentUrl)) {
+                try {
+                    const fileName = getThumbnailPublicIdFromGlbUrl(currentUrl);
+                    await fetch('/api/thumbnails', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ fileName, imageData: dataUrl })
+                    });
+                } catch (e) {
+                    console.error('Thumbnail upload failed:', e);
+                }
             }
             dequeueCurrent('success');
             const elapsed = performance.now() - t0;

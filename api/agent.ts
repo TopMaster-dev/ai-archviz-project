@@ -1,6 +1,7 @@
 import { generateAgentReply, resolveAgentModelForTier, type AgentAttachment, type AgentChatMessage } from '../lib/gemini.js';
 import { isBase64DataUrl, resolveAttachmentMime, parseDataUrl } from '../lib/agentAttachments.js';
 import { analyzeAgentRequest } from '../lib/agentRouting.js';
+import { runVisionProductSearch } from '../lib/server/visionProductSearchCore.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 import type { AgentCatalogEntry } from '../types.js';
 
@@ -34,7 +35,18 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ success: false, error: 'APIキーが見つかりません。' });
     }
 
-    const body = req.body as { messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown; files?: unknown; projectContext?: unknown };
+    const body = req.body as { mode?: unknown; prompt?: unknown; messages?: AgentChatMessage[]; imageDataUrl?: string | null; catalog?: unknown; files?: unknown; projectContext?: unknown };
+
+    // 画像から商品を特定する専用モード（②・260726）。Hobby の関数上限に配慮し、専用関数ではなく /api/agent へ相乗り。
+    if (body.mode === 'vision-product') {
+      const { status, body: out } = await runVisionProductSearch({
+        imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : '',
+        prompt: typeof body.prompt === 'string' ? body.prompt : '',
+        geminiKey: apiKey,
+      });
+      return res.status(status).json(out);
+    }
+
     const messages: AgentChatMessage[] = Array.isArray(body.messages)
       ? body.messages
           .filter(
