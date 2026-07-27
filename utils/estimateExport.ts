@@ -1,5 +1,6 @@
 import type { AiEstimateItem, FurnitureItem } from '../types.js';
 import type { BaseboardEstimateRow } from './baseboardEstimate.js';
+import type { EstimateMetaOverride } from '../lib/project/projectState.js';
 import { surfaceFromMeshName } from './meshSurface.js';
 
 /** App の costBreakdown 行と同一形状 */
@@ -14,6 +15,8 @@ export interface CostBreakdownEntry {
   modelNumber?: string; // 品番（建材アップロード時に任意入力・260630）
   textureUrl?: string;
   productId: string;
+  /** 商品URL（見積パネルで任意入力・260728 #6）。備考へ `URL:` として出す。 */
+  productUrl?: string;
 }
 
 export interface MaterialExportRow {
@@ -99,12 +102,27 @@ export interface BuildEstimateOptions {
   /** マテリアルボードのヘッダ/フッタ表示用（260623）。 */
   projectName?: string;
   authorName?: string;
-  /** 建材ラインのメモ（productId キー）。CSV/PDF の備考へ反映（4c）。 */
-  materialMemoByProductId?: Record<string, string>;
   /** 巾木ライン（壁延長 × m単価）。CSV/PDF の【巾木】セクションへ反映（260613）。 */
   baseboardRows?: BaseboardEstimateRow[];
-  /** 巾木ラインのメモ（productId キー）。CSV/PDF の備考へ反映（260630）。 */
-  baseboardMemoByProductId?: Record<string, string>;
+  /**
+   * 建材・巾木のメタ上書き（260728 #6）。キーは `material:<productId>` / `baseboard:<productId>`。
+   * 旧 materialMemoByProductId / baseboardMemoByProductId を統合したもの。
+   * 名称・メーカー・品番は行の表示名へ、メモとURLは備考へ反映する（家具/AI項目の既存挙動と揃える）。
+   */
+  overridesByKey?: Record<string, EstimateMetaOverride>;
+}
+
+/** 上書きを引く（未設定は undefined）。 */
+function materialOverride(options: BuildEstimateOptions, productId: string): EstimateMetaOverride | undefined {
+  return options.overridesByKey?.[`material:${productId}`];
+}
+function baseboardOverride(options: BuildEstimateOptions, productId: string): EstimateMetaOverride | undefined {
+  return options.overridesByKey?.[`baseboard:${productId}`];
+}
+
+/** メモとURLを備考文字列へ（家具/AI項目と同じ体裁）。 */
+function remarkFrom(memo: string | undefined, productUrl: string | undefined): string {
+  return [memo, productUrl ? `URL:${productUrl}` : ''].filter((s) => s && String(s).trim()).join(' / ');
 }
 
 function roundYen(n: number): number {
@@ -261,7 +279,7 @@ export function buildEstimateExportPayload(
         prodName: item.prodName,
         modelNumber: item.modelNumber,
         productId: item.productId,
-        memo: options.materialMemoByProductId?.[item.productId],
+        memo: remarkFrom(materialOverride(options, item.productId)?.memo, materialOverride(options, item.productId)?.productUrl),
       });
     }
   }
@@ -315,7 +333,7 @@ export function buildEstimateExportPayload(
     unit: 'm',
     unitPrice: roundYen(r.unitPrice),
     amount: roundYen(r.cost),
-    remark: (options.baseboardMemoByProductId?.[r.productId] ?? '').trim(),
+    remark: remarkFrom(baseboardOverride(options, r.productId)?.memo, baseboardOverride(options, r.productId)?.productUrl),
     sectionType: '3D確定',
     inputStatus: r.unitPrice > 0 ? '完了' : '未入力',
   }));

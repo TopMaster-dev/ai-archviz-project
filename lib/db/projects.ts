@@ -2,6 +2,7 @@ import { getSupabase } from './supabaseClient.js';
 import { deleteAiRenderImagesForProject, ensureDataUrl, toStoredImage } from './aiRenderStorage.js';
 import type { ProjectState } from '../project/projectState.js';
 import type { ProjectRow, ProjectSummary, DeletedProjectSummary, SharedProject } from './types.js';
+import { collectAiRenderUrls } from '../aiImageRefs.js';
 
 // プロジェクトの永続化（CRUD + 複製 + 共有）。すべて RLS 前提（本人の行のみ）。
 
@@ -93,50 +94,102 @@ export async function saveProject(
  * data 内の ai-render 公開URLを download→新IDで再upload→全置換。ベストエフォート（失敗したURLは元のまま=共有）。
  * 変更があれば新しい data を、無ければ null を返す。
  */
-async function rehomeAiImages(data: ProjectState, newProjectId: string): Promise<ProjectState | null> {
+async function rehomeAiImagesCounted(
+  data: ProjectState,
+  newProjectId: string,
+): Promise<{ rehomed: ProjectState | null; failed: number }> {
   let json: string;
   try {
     json = JSON.stringify(data);
   } catch {
-    return null;
+    return { rehomed: null, failed: 0 };
   }
-  const urls = Array.from(new Set(json.match(/https?:\/\/[^"\s\\]+\/ai-render\/[^"\s\\]+/g) ?? []));
-  if (urls.length === 0) return null;
+  const urls = collectAiRenderUrls(data);
+  if (urls.length === 0) return { rehomed: null, failed: 0 };
   let result = json;
   let changed = false;
+  let failed = 0;
   for (const url of urls) {
     try {
       const dataUrl = await ensureDataUrl(url); // 元画像をダウンロード
-      if (!dataUrl.startsWith('data:')) continue; // 取得失敗→元のまま（共有）
+      if (!dataUrl.startsWith('data:')) {
+        failed += 1; // 取得失敗＝他人の領域を指したまま残る
+        continue;
+      }
       const newUrl = await toStoredImage(dataUrl, newProjectId); // 新ID配下へ保存
       if (newUrl && newUrl !== url && newUrl.startsWith('http')) {
         result = result.split(url).join(newUrl); // 同一URLの全出現を新URLへ
         changed = true;
+      } else {
+        failed += 1;
       }
     } catch {
-      /* このURLはスキップ（元のまま） */
+      failed += 1;
     }
   }
-  if (!changed) return null;
+  if (!changed) return { rehomed: null, failed };
   try {
-    return JSON.parse(result) as ProjectState;
+    return { rehomed: JSON.parse(result) as ProjectState, failed };
   } catch {
-    return null;
+    return { rehomed: null, failed };
   }
 }
 
+/**
+ * 同一ユーザー内の複製（260728 クライアント #1）。
+ *
+ * 要望:「同じデータであればリンクで読ませる」。以前は AI生成画像を1枚ずつ download→re-upload して
+ * 物理コピーしていたため、複製のたびにファイル数と使用容量が倍増し、複製自体も重かった。
+ * 同じ所有者の中では実体を共有し、URL をそのまま引き継ぐ。
+ *
+ * ※これが成立するのは、削除側が「オーナーのどのプロジェクトからも参照されていない実体だけ消す」
+ *   参照カウントに対応済みだから（lib/db/aiRenderStorage.ts / lib/server/purgeProjects.ts /
+ *   lib/server/orphanCleanup.ts）。**この関数だけを先にリリースしてはいけない**（元を削除した瞬間に
+ *   コピー側の画像が全て 404 になる）。
+ *
+ * 別ユーザーへのコピーは copySharedProject（実体を複製）を使うこと。
+ */
 export async function duplicateProject(id: string): Promise<string> {
   const src = await getProject(id);
   if (!src) throw new Error('複製元のプロジェクトが見つかりません。');
   const newId = await createProject(`${src.name} のコピー`, src.data, src.memo ?? undefined);
-  // コピーのAI生成画像を新ID配下へ複製し、元と Storage を共有しないようにする（260630・ベストエフォート）。
-  try {
-    const rehomed = await rehomeAiImages(src.data, newId);
-    if (rehomed) await saveProject(newId, { data: rehomed });
-  } catch (e) {
-    console.warn('[duplicate] AI画像の複製に失敗（元と共有のまま）', e);
+  // サムネイルも引き継ぐ（DB列のdataURLなのでStorageとは無関係・複製直後の一覧が空にならない）。
+  if (src.thumbnail_url) {
+    try {
+      await saveProject(newId, { thumbnail_url: src.thumbnail_url });
+    } catch {
+      /* サムネはベストエフォート（次回保存時に付く） */
+    }
   }
   return newId;
+}
+
+/**
+ * 別ユーザーのプロジェクトを自分のものとしてコピーする（共有ビューアの「複製して編集」・260728 #1）。
+ *
+ * 要望2:「別ユーザーへの複製→そのときだけファイルをコピーする」。
+ * ここでリンク共有にしてしまうと、(a) 画像が元所有者の容量に計上され続ける、(b) コピー側は
+ * Storage RLS（先頭フォルダ=自分のUID）により削除も管理もできない、(c) 元所有者が完全削除すると
+ * 無言で壊れる、という三重の問題が起きる。よって実体を自分の配下へ複製する。
+ *
+ * 取り込めなかった画像がある場合は件数を返す（呼び出し側でユーザーに知らせる）。
+ * 握りつぶすと「他人の領域への永久リンク」が黙って残るため、同一ユーザー複製のような緩さは採らない。
+ */
+export async function copySharedProject(
+  name: string,
+  data: ProjectState,
+): Promise<{ id: string; failedImageCount: number }> {
+  const newId = await createProject(name, data);
+  let failedImageCount = 0;
+  try {
+    const { rehomed, failed } = await rehomeAiImagesCounted(data, newId);
+    failedImageCount = failed;
+    if (rehomed) await saveProject(newId, { data: rehomed });
+  } catch (e) {
+    console.warn('[copyShared] AI画像の取り込みに失敗', e);
+    failedImageCount = -1; // 不明（全部失敗した可能性）
+  }
+  return { id: newId, failedImageCount };
 }
 
 /** 論理削除（deleted_at セット）＋ 猶予後に物理削除されるよう purge 予約。 */

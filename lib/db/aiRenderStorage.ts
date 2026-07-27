@@ -97,19 +97,53 @@ function aiRenderStoragePathFromUrl(url: string | null | undefined): string | nu
 }
 
 /**
+ * 「このユーザーの他プロジェクトから参照されている ai-render パス」の集合を取得する（260728 #1）。
+ *
+ * プロジェクト複製をリンク共有にしたため、フォルダの持ち主プロジェクトが消えても、別プロジェクトが
+ * その実体を参照している状態が「正常系」になった。削除前に必ずこれを引いて除外する。
+ *
+ * 失敗時は null を返す。呼び出し側は null を「判定不能」として扱い、**何も削除しない**こと。
+ * （RPC 未適用の本番へコードだけ出た場合も、容量リークで済み、生きている画像は壊れない。）
+ */
+async function fetchReferencedAiRenderPaths(excludeProjectIds: string[]): Promise<Set<string> | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+  try {
+    const { data, error } = await sb.rpc('ai_render_refs_self', {
+      p_exclude: excludeProjectIds.filter(Boolean),
+    });
+    if (error) return null;
+    const rows = Array.isArray(data) ? (data as unknown[]) : [];
+    return new Set(rows.filter((r): r is string => typeof r === 'string'));
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 生成画像（ai-render）の Storage 実体を削除して容量を解放する（ベストエフォート・260629）。
  * data: URL や user-uploads 以外 / ai-render 以外のURLは無視する（誤削除防止）。
  * RLS により本人フォルダ（先頭=auth.uid）のみ削除可能。
+ *
+ * 260728 #1: 複製がリンク共有になったため、他プロジェクトがまだ参照している実体は消さない。
+ * @param excludeProjectId 参照集合から除外するプロジェクト（＝今まさに版を消している自分自身）。
  */
-export async function deleteAiRenderImages(urls: Array<string | null | undefined>): Promise<void> {
+export async function deleteAiRenderImages(
+  urls: Array<string | null | undefined>,
+  opts?: { excludeProjectId?: string },
+): Promise<void> {
   const sb = getSupabase();
   if (!sb) return;
   const paths = Array.from(
     new Set(urls.map(aiRenderStoragePathFromUrl).filter((p): p is string => !!p)),
   );
   if (paths.length === 0) return;
+  const referenced = await fetchReferencedAiRenderPaths(opts?.excludeProjectId ? [opts.excludeProjectId] : []);
+  if (!referenced) return; // 判定不能＝消さない（安全側）
+  const deletable = paths.filter((p) => !referenced.has(p));
+  if (deletable.length === 0) return;
   try {
-    await sb.storage.from(BUCKET).remove(paths);
+    await sb.storage.from(BUCKET).remove(deletable);
   } catch {
     /* ベストエフォート（容量解放の失敗で操作を妨げない） */
   }
@@ -130,7 +164,13 @@ export async function deleteAiRenderImagesForProject(projectId: string): Promise
     const { data: files } = await sb.storage.from(BUCKET).list(prefix, { limit: 1000 });
     if (!files || files.length === 0) return;
     const paths = files.filter((f) => f.name).map((f) => `${prefix}/${f.name}`);
-    if (paths.length > 0) await sb.storage.from(BUCKET).remove(paths);
+    if (paths.length === 0) return;
+    // 260728 #1: 複製はリンク共有になったため、このフォルダの実体を他プロジェクトが参照していることがある。
+    // フォルダ単位で消さず、参照されていないファイルだけを消す。判定不能なら1件も消さない（安全側）。
+    const referenced = await fetchReferencedAiRenderPaths([projectId]);
+    if (!referenced) return;
+    const deletable = paths.filter((p) => !referenced.has(p));
+    if (deletable.length > 0) await sb.storage.from(BUCKET).remove(deletable);
   } catch {
     /* ベストエフォート */
   }

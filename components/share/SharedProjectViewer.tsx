@@ -7,7 +7,7 @@ import { SketchCanvas } from '../SketchCanvas.js';
 import { LoadingOverlay } from '../LoadingOverlay.js';
 import { useAuth } from '../../lib/auth/AuthContext.js';
 import { isSupabaseConfigured } from '../../lib/db/supabaseClient.js';
-import { createProject, getSharedProject, isFreePlanLimitError } from '../../lib/db/projects.js';
+import { copySharedProject, getSharedProject, isFreePlanLimitError } from '../../lib/db/projects.js';
 import { useLoadingStore } from '../../lib/store/loadingStore.js';
 import type { SharedProject } from '../../lib/db/types.js';
 import type { AiEditVersion } from '../../types.js';
@@ -101,7 +101,14 @@ export function SharedProjectViewer({ token }: { token: string }) {
     setCopying(true);
     setCopyErr(null);
     try {
-      await createProject(`${project.name} のコピー`, project.data);
+      // 他ユーザーからのコピーは実体を自分の配下へ複製する（260728 #1・要望2）。
+      // 従来は createProject だけで、画像URLが元所有者の Storage を指したままになっていた
+      // （＝元所有者の容量に計上され続け、こちらからは削除できず、元が完全削除されると壊れる）。
+      const { failedImageCount } = await copySharedProject(`${project.name} のコピー`, project.data);
+      if (failedImageCount !== 0) {
+        // 取り込めなかった画像がある＝一部が元所有者への参照のまま。黙って進めない。
+        setCopyErr('一部の画像を取り込めませんでした。元のプロジェクトが削除されると表示できなくなる場合があります。');
+      }
       goAppRoot(); // 自分のホーム画面へ遷移し、複製を表示。
     } catch (e) {
       setCopying(false);

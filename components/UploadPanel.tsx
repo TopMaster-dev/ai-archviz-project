@@ -14,11 +14,13 @@ import {
   STORAGE_WARN_FRACTION,
   STORAGE_WARN_THRESHOLD_BYTES,
   updateUserUploadMetadata,
+  getUserUpload,
   uploadUserFile,
   type StorageUsage,
   type UploadKind,
   type UserUpload,
 } from '../lib/db/uploads.js';
+import { persistUploadMeta } from '../lib/uploadsMeta.js';
 import type { MaterialCategory } from '../types.js';
 import {
   TEXTURE_CATEGORY_OPTIONS,
@@ -344,11 +346,61 @@ export function UploadPanel({
   };
 
   // テクスチャのカテゴリ割当を変更（既存 metadata にマージして保存）。
+  // マイアップロードの商品メタ編集（260728 クライアント #6）。
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    name?: string;
+    brand?: string;
+    modelNumber?: string;
+    productUrl?: string;
+    price?: string;
+  }>({});
+
+  const startEditMeta = (u: UserUpload) => {
+    const m = (u.metadata ?? {}) as Record<string, unknown>;
+    const s = (v: unknown) => (typeof v === 'string' ? v : '');
+    setEditDraft({
+      name: s(m.name),
+      brand: s(m.brand),
+      modelNumber: s(m.modelNumber),
+      productUrl: s(m.productUrl),
+      price: typeof m.price === 'number' && Number.isFinite(m.price) ? String(m.price) : '',
+    });
+    setEditingId(u.id);
+  };
+
+  const handleSaveMeta = async (u: UserUpload) => {
+    setUpdatingId(u.id);
+    setMsg(null);
+    try {
+      // persistUploadMeta が「最新行を取り直してからマージ」するので、画面上の古い metadata で
+      // thumbnailUrl / footprint2d などを消してしまうことがない（260728）。
+      const priceRaw = (editDraft.price ?? '').trim();
+      const row = await persistUploadMeta(u.id, {
+        name: editDraft.name,
+        brand: editDraft.brand,
+        modelNumber: editDraft.modelNumber,
+        productUrl: editDraft.productUrl,
+        price: priceRaw === '' ? 0 : Math.max(0, Number(priceRaw) || 0), // 0 は「未設定へ戻す」
+      });
+      if (row) setUploads((prev) => prev.map((x) => (x.id === u.id ? row : x)));
+      setEditingId(null);
+      onUploadsChanged?.(); // 素材・家具一覧へ反映
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : '保存に失敗しました。');
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
   const handleChangeCategory = async (u: UserUpload, category: MaterialCategory | null) => {
     setUpdatingId(u.id);
     setMsg(null);
     try {
-      const next: Record<string, unknown> = { ...u.metadata };
+      // 画面上の古い metadata へマージすると、別経路が書いたキー（thumbnailUrl 等）を消す恐れがある。
+      // 直前に最新行を取り直す（260728・他のメタ書き込みと同じ方針）。
+      const fresh = await getUserUpload(u.id);
+      const next: Record<string, unknown> = { ...((fresh?.metadata ?? u.metadata) ?? {}) };
       if (category) next.category = category;
       else delete next.category; // 共通＝未設定
       const row = await updateUserUploadMetadata(u.id, next);
@@ -612,6 +664,16 @@ export function UploadPanel({
                       ))}
                     </select>
                   )}
+                  {/* アップロード情報そのものを編集する（260728 クライアント #6）。
+                      ここでの変更は台帳（user_uploads.metadata）を書き換えるので、以後の配置・素材適用に反映される。 */}
+                  <button
+                    type="button"
+                    disabled={updatingId === u.id}
+                    onClick={() => (editingId === u.id ? setEditingId(null) : startEditMeta(u))}
+                    className="shrink-0 rounded px-2 py-1 text-[11px] text-neutral-300 transition hover:bg-white/10 disabled:opacity-50"
+                  >
+                    {editingId === u.id ? '閉じる' : '編集'}
+                  </button>
                   <button
                     type="button"
                     disabled={deletingId === u.id}
@@ -620,6 +682,57 @@ export function UploadPanel({
                   >
                     {deletingId === u.id ? '削除中…' : '削除'}
                   </button>
+                  {editingId === u.id && (
+                    <div className="mt-2 w-full basis-full space-y-1.5 rounded-lg border border-white/10 bg-black/30 p-2">
+                      {(
+                        [
+                          ['name', '名前'],
+                          ['brand', 'メーカー名'],
+                          ['modelNumber', '品番'],
+                          ['productUrl', 'URL'],
+                        ] as const
+                      ).map(([key, label]) => (
+                        <div key={key} className="flex items-center gap-1.5">
+                          <span className="w-[64px] shrink-0 text-[10px] font-semibold text-neutral-400">{label}</span>
+                          <input
+                            value={editDraft[key] ?? ''}
+                            onChange={(e) => setEditDraft((d) => ({ ...d, [key]: e.target.value }))}
+                            className="w-full rounded border border-white/10 bg-neutral-900 px-2 py-1 text-[11px] text-neutral-100 outline-none focus:border-emerald-500"
+                          />
+                        </div>
+                      ))}
+                      <div className="flex items-center gap-1.5">
+                        <span className="w-[64px] shrink-0 text-[10px] font-semibold text-neutral-400">金額</span>
+                        <input
+                          inputMode="numeric"
+                          value={editDraft.price ?? ''}
+                          onChange={(e) => setEditDraft((d) => ({ ...d, price: e.target.value }))}
+                          className="w-full rounded border border-white/10 bg-neutral-900 px-2 py-1 text-[11px] text-neutral-100 outline-none focus:border-emerald-500"
+                        />
+                        <span className="shrink-0 text-[10px] text-neutral-500">円</span>
+                      </div>
+                      <div className="flex justify-end gap-1.5 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(null)}
+                          className="rounded px-2 py-1 text-[11px] text-neutral-400 transition hover:bg-white/10"
+                        >
+                          キャンセル
+                        </button>
+                        <button
+                          type="button"
+                          disabled={updatingId === u.id}
+                          onClick={() => void handleSaveMeta(u)}
+                          className="rounded bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          {updatingId === u.id ? '保存中…' : '保存'}
+                        </button>
+                      </div>
+                      <p className="text-[10px] leading-snug text-neutral-500">
+                        ここでの変更はアップロード情報そのものを書き換えます。すでに配置済みの家具や適用済みの素材には遡って反映されません。
+                      </p>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>

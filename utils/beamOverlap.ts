@@ -113,6 +113,11 @@ function beamFacesExposed(
  * 梁ごとの重なり控除面積(m²)を返す（beamExposedAreaM2 から差し引く用）。
  * 交差ペアの二重計上分を 50/50 で両梁に割り当てる（合計は正しく、行ごとの偏りを避ける）。
  */
+/**
+ * @deprecated 260728 #10: beamExposedAreaByIdM2 が union で厳密に解くため不要になった。
+ * ペア交差の 50/50 控除は 3本以上の重なりで引きすぎ、側面の埋没も見ない。新旧を併用すると二重控除になる。
+ * beamFootprintCornersMm / convexIntersectionAreaMm2 は新モジュールが再利用しているので残す。
+ */
 export function beamOverlapDeductionByIdM2(
   beams: Beam[],
   roomHeightMm: number

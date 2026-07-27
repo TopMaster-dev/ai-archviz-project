@@ -734,6 +734,48 @@ $$;
 grant execute on function public.storage_usage_self() to authenticated;
 
 -- ---------------------------------------------------------------------------
+-- 10b) AI生成画像の参照集合（260728 クライアント #1「同じデータならリンクで読ませる」）
+--
+-- プロジェクト複製を「実体コピー」から「同じURLを参照（リンク）」へ変えるにあたり、
+-- 削除時に「このユーザーのどのプロジェクトからも参照されていない実体だけ消す」判定が必要になる。
+-- projects.data(jsonb) をテキスト化して ai-render の Storage パスを全部抜き出す。
+--
+-- 重要: これらの関数が無い/失敗する環境では、呼び出し側は「何も消さない」に倒す（容量はリークするが、
+--       生きている画像を消すよりはるかに安全）。リンク化と削除側の改修は必ず同時にリリースすること。
+-- ---------------------------------------------------------------------------
+
+-- 本人用（クライアントから呼ぶ）。p_exclude で「今まさに消そうとしているプロジェクト」を除外する。
+create or replace function ai_render_refs_self(p_exclude uuid[] default '{}')
+returns setof text language sql security definer set search_path = public as $$
+  select distinct m[1]
+  from projects p,
+       lateral regexp_matches(
+         p.data::text,
+         '/storage/v1/object/public/user-uploads/([^"\s\\]*/ai-render/[^"\s\\]+)',
+         'g'
+       ) as m
+  where p.owner_id = auth.uid()
+    and not (p.id = any(coalesce(p_exclude, '{}'::uuid[])));
+$$;
+revoke execute on function public.ai_render_refs_self(uuid[]) from public, anon;
+grant  execute on function public.ai_render_refs_self(uuid[]) to authenticated;
+
+-- サーバ用（cron の purge / 孤児掃除）。オーナーを明示し、service_role のみ実行可。
+create or replace function ai_render_refs_for_owner(p_owner uuid, p_exclude uuid[] default '{}')
+returns setof text language sql security definer set search_path = public as $$
+  select distinct m[1]
+  from projects p,
+       lateral regexp_matches(
+         p.data::text,
+         '/storage/v1/object/public/user-uploads/([^"\s\\]*/ai-render/[^"\s\\]+)',
+         'g'
+       ) as m
+  where p.owner_id = p_owner
+    and not (p.id = any(coalesce(p_exclude, '{}'::uuid[])));
+$$;
+revoke execute on function public.ai_render_refs_for_owner(uuid, uuid[]) from public, anon, authenticated;
+
+-- ---------------------------------------------------------------------------
 -- 11) pg_cron スケジュール（拡張が無い環境でも失敗しないよう例外を握りつぶす）
 -- ---------------------------------------------------------------------------
 create or replace function flag_expired_free_data(grace_days int default 14)

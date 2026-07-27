@@ -72,8 +72,12 @@ function loadStored(): { versions: AiEditVersion[]; activeVersionId: string | nu
  *   写真AI編集プロジェクト（2a）はプロジェクトごとに DB 保存するため false を渡し、
  *   グローバルな localStorage を介した他プロジェクトへの履歴の混入を防ぐ。
  */
-export function useAiEditSession(options?: { persistLocal?: boolean }) {
+export function useAiEditSession(options?: { persistLocal?: boolean; projectId?: string | null }) {
   const persistLocal = options?.persistLocal ?? true;
+  // 版削除時の実体削除で「自分自身の参照」を除外するために使う（260728 #1・リンク共有対応）。
+  // ref に持つのは deleteVersion が useCallback([]) で安定参照を保つため。
+  const projectIdRef = useRef<string | null>(options?.projectId ?? null);
+  projectIdRef.current = options?.projectId ?? null;
   const [versions, setVersions] = useState<AiEditVersion[]>(() =>
     persistLocal ? capVersions(loadStored()?.versions ?? []) : []
   );
@@ -365,7 +369,11 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
         target.styleRefDataUrl,
         ...(target.styleRefDataUrls ?? []),
       ].filter((u): u is string => !!u && !keep.has(u));
-      if (orphaned.length > 0) void deleteAiRenderImages(orphaned); // 非同期・ベストエフォート
+      // 複製がリンク共有になったため、他プロジェクトが参照している実体は消してはいけない（260728 #1）。
+      // 自分のプロジェクトは除外して参照集合を引く（自分の生き残り版は上の keep で既に判定済み）。
+      if (orphaned.length > 0) {
+        void deleteAiRenderImages(orphaned, { excludeProjectId: projectIdRef.current ?? undefined });
+      }
       return survivors;
     });
     // 削除した版に紐づく「AI追加アイテム」も一緒に片付ける（260728 #8 の付随バグ）。

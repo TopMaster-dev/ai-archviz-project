@@ -1,5 +1,6 @@
 import type { FurnitureCatalogItem, Product, MaterialCategory } from '../types.js';
 import type { UserUpload } from './db/uploads.js';
+import type { MaterialPhysical } from './materialPhysical.js';
 import { updateUserUploadMetadata, listUserUploads, uploadUserThumbnailPng, getUserUpload } from './db/uploads.js';
 import { normalizeModelUnit, unitGeometryScale, sanitizeGeometryScale } from '../utils/modelUnit.js';
 import { normalizeUprightXDeg } from '../utils/modelOrientation.js';
@@ -167,8 +168,32 @@ export function uploadToProduct(upload: UserUpload): Product {
   // 商品金額（円・整数）。未入力/不正/0 は 0（未設定）。
   const metaPrice =
     typeof meta.price === 'number' && Number.isFinite(meta.price) && meta.price > 0 ? Math.round(meta.price) : 0;
+
+  /**
+   * 実寸（この画像1枚が現実で何mmぶんか）（260728 クライアント #5）。
+   *
+   * これが無いと effectiveTextureShortEdgeMeters が既定 1.0m を返し、壁一面を写した写真でも
+   * 「1m角のタイル」として何十回も繰り返され、いかにも作り物に見える。これが「繰り返し感」の主因。
+   * アップロード時に入力してもらった値だけを採用し、**未入力の既存アップロードは従来どおり 1.0m**
+   * （physical を付けない）にして、過去プロジェクトの見た目を変えない。
+   */
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined;
+  const repeatWidthMm = num(meta.repeatWidthMm);
+  const repeatHeightMm = num(meta.repeatHeightMm);
+  const physical =
+    repeatWidthMm && repeatHeightMm
+      ? ({
+          repeatWidthMm,
+          repeatHeightMm,
+          imageKind: 'unknown' as const,
+          source: 'sidecar' as const,
+        } satisfies MaterialPhysical)
+      : undefined;
+
   return {
     id: `upload-tex-${upload.id}`,
+    physical,
     name: metaName || deriveUploadName(upload.originalName, 'テクスチャ'), // 入力したデータ名称を優先
     brand: metaBrand || USER_UPLOAD_BRAND, // メーカー名未入力時は識別用の既定ブランド
     modelNumber: metaModelNumber || undefined,

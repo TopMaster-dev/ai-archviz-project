@@ -119,7 +119,30 @@ export interface ProjectState {
   /** 概算見積の手動「AI追加アイテム」（3D未配置の見積行）。永続化対象（260619 クライアント要望）。 */
   estimate: {
     aiItems: AiEstimateItem[];
+    /**
+     * 建材・巾木の「名前/メーカー名/品番/価格/URL/メモ」の上書き（260728 クライアント #6）。
+     *
+     * 従来これらは App のローカル state（materialUnitPriceOverrides 等）にしか無く、プロジェクトを
+     * 開き直すと入力が消えていた（＝「編集できない」というクライアント指摘の実害）。ここへ移して永続化する。
+     * キーは `material:<productId>` / `baseboard:<productId>`（productId は未割当壁だと 'default_no_tex' 共有）。
+     * 家具・AI追加アイテムは各アイテム自身が同じ項目を持つため対象外。
+     */
+    overrides: Record<string, EstimateMetaOverride>;
   };
+}
+
+/**
+ * 見積行のメタ上書き（260728 #6）。未設定（undefined）は「上書きしない＝元の値を使う」。
+ * 空文字は「明示的に空にした」ではなく未設定として扱い、保存時にキーごと削除する（肥大化防止）。
+ */
+export interface EstimateMetaOverride {
+  name?: string;
+  brand?: string;
+  modelNumber?: string;
+  productUrl?: string;
+  /** 建材＝㎡単価、巾木＝m単価。0 以下は未設定扱い。 */
+  unitPrice?: number;
+  memo?: string;
 }
 
 export function createEmptyProjectState(): ProjectState {
@@ -131,6 +154,6 @@ export function createEmptyProjectState(): ProjectState {
     materials: { selections: {}, materialSettings: {} },
     aiEdit: { versions: [], activeVersionId: null, draftObjects: [] },
     camera: { presets: [], renderAspectRatio: '16:9' },
-    estimate: { aiItems: [] },
+    estimate: { aiItems: [], overrides: {} },
   };
 }

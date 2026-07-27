@@ -15,6 +15,10 @@ import { beamFootprintCornersMm } from './beamOverlap.js';
  * L=lengthMm, W=widthMm, H=heightMm（mm→m）。非有限/非正は 0 を返す。
  * @param ceilingHeightMm 天井高(mm)。床への接触判定に使用（任意）。
  */
+/**
+ * @deprecated 260728 #10: 見積は utils/beamExposedArea.ts の beamExposedAreaByIdM2（立体の和の露出面）へ移行した。
+ * 本関数は各梁を独立した箱として数えるため、交差した梁の埋没面を計上してしまう。新規利用は不可。
+ */
 export function beamExposedAreaM2(
   beam: Pick<Beam, 'lengthMm' | 'widthMm' | 'heightMm' | 'wallIndex'> & { dropMm?: number },
   ceilingHeightMm?: number,

@@ -7,6 +7,7 @@ import {
   PROJECT_SCHEMA_VERSION,
   type ProjectState,
   type UnderlaySettings,
+  type EstimateMetaOverride,
 } from '../project/projectState.js';
 
 // プロジェクトの統合ストア（Zustand + immer）。
@@ -57,6 +58,12 @@ export interface ProjectStoreState {
 
   // estimate（手動「AI追加アイテム」・260619。永続化＝toProjectState/loadProjectState 経由）
   setAiEstimateItems(items: ProjectState['estimate']['aiItems']): void;
+  /**
+   * 建材/巾木のメタ上書きを1件更新する（260728 #6）。key は `material:<productId>` / `baseboard:<productId>`。
+   * patch の undefined は「変更しない」、空文字・0以下は「未設定へ戻す」＝キーを削除する（保存を肥大化させない）。
+   * 全項目が空になった行はエントリごと削除する。
+   */
+  setEstimateOverride(key: string, patch: EstimateMetaOverride): void;
 
   // selection (transient)
   select(ids: string[]): void;
@@ -165,6 +172,27 @@ export const useProjectStore = create<ProjectStoreState>()(
           s.estimate.aiItems = items;
         }),
 
+      setEstimateOverride: (key, patch) =>
+        set((s) => {
+          if (!s.estimate.overrides) s.estimate.overrides = {}; // 旧データ（overrides 未保存）への安全網
+          const current: EstimateMetaOverride = { ...(s.estimate.overrides[key] ?? {}) };
+          const textKeys = ['name', 'brand', 'modelNumber', 'productUrl', 'memo'] as const;
+          for (const k of textKeys) {
+            const v = patch[k];
+            if (v === undefined) continue; // 変更しない
+            const trimmed = v.trim();
+            if (trimmed) current[k] = trimmed;
+            else delete current[k]; // 空にしたら未設定へ戻す
+          }
+          if (patch.unitPrice !== undefined) {
+            const n = patch.unitPrice;
+            if (Number.isFinite(n) && n > 0) current.unitPrice = n;
+            else delete current.unitPrice;
+          }
+          if (Object.keys(current).length === 0) delete s.estimate.overrides[key];
+          else s.estimate.overrides[key] = current;
+        }),
+
       select: (ids) =>
         set((s) => {
           s.selectedIds = ids;
@@ -257,6 +285,8 @@ export const useProjectStore = create<ProjectStoreState>()(
           };
           s.estimate = {
             aiItems: src.estimate?.aiItems ?? d.estimate.aiItems,
+            // overrides を書き忘れると、保存はされるのに読み戻されず「編集が消える」ままになる（260728 #6）。
+            overrides: src.estimate?.overrides ?? d.estimate.overrides,
           };
           s.selectedIds = [];
         }),

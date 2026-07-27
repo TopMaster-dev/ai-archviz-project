@@ -144,6 +144,47 @@ describe('projectStore — load / serialize', () => {
     expect(store.getState().scene.roomHeightMm).toBe(2700);
   });
 
+  // 260728 #6: 見積の単価/メモ/メーカー等の編集がプロジェクトを開き直すと消えていた。
+  // 原因は loadProjectState が estimate から aiItems しか読み戻していなかったこと。ここで固定する。
+  it('estimate.overrides が保存・復元される（編集が消えないこと）', () => {
+    store.getState().setEstimateOverride('material:prod-1', {
+      brand: 'サンゲツ',
+      modelNumber: 'KAGETOHIK-ADL-R',
+      unitPrice: 3200,
+      memo: '施主支給',
+    });
+    const snapshot = store.getState().toProjectState();
+    expect(snapshot.estimate.overrides['material:prod-1']?.unitPrice).toBe(3200);
+
+    store.getState().reset();
+    expect(store.getState().estimate.overrides['material:prod-1']).toBeUndefined();
+
+    store.getState().loadProjectState(snapshot);
+    const restored = store.getState().estimate.overrides['material:prod-1'];
+    expect(restored?.brand).toBe('サンゲツ');
+    expect(restored?.modelNumber).toBe('KAGETOHIK-ADL-R');
+    expect(restored?.unitPrice).toBe(3200);
+    expect(restored?.memo).toBe('施主支給');
+  });
+
+  it('空文字・0以下は未設定へ戻し、全部空ならエントリごと消す', () => {
+    store.getState().setEstimateOverride('baseboard:default_no_tex', { brand: 'X', unitPrice: 800 });
+    expect(store.getState().estimate.overrides['baseboard:default_no_tex']).toBeDefined();
+
+    store.getState().setEstimateOverride('baseboard:default_no_tex', { unitPrice: 0 });
+    expect(store.getState().estimate.overrides['baseboard:default_no_tex']?.unitPrice).toBeUndefined();
+    expect(store.getState().estimate.overrides['baseboard:default_no_tex']?.brand).toBe('X');
+
+    store.getState().setEstimateOverride('baseboard:default_no_tex', { brand: '   ' });
+    expect(store.getState().estimate.overrides['baseboard:default_no_tex']).toBeUndefined();
+  });
+
+  it('undefined の項目は既存値を変更しない（部分更新）', () => {
+    store.getState().setEstimateOverride('material:p', { brand: 'A', modelNumber: 'B' });
+    store.getState().setEstimateOverride('material:p', { modelNumber: 'C' });
+    expect(store.getState().estimate.overrides['material:p']).toEqual({ brand: 'A', modelNumber: 'C' });
+  });
+
   it('fills defaults when loading partial/legacy project data (no crash)', () => {
     // 旧スキーマ/部分的な data（scene.beams や aiEdit/camera が欠ける）を読み込んでも
     // 各フィールドが既定値で補完され、参照クラッシュしないこと。

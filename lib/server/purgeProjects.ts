@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { fetchOwnerAiRenderRefs } from './aiRenderRefs.js';
 
 // 猶予期間（14日）を過ぎた論理削除済みプロジェクトの「物理削除＋容量解放」（260629 クライアント要望）。
 //
@@ -32,6 +33,8 @@ export interface PurgeProjectsResult {
 async function deleteStorageFolder(
   admin: SupabaseClient,
   prefix: string,
+  /** このオーナーの他プロジェクトが参照している実体パス。含まれるファイルは消さない（260728 #1）。 */
+  referenced: Set<string>,
 ): Promise<{ deleted: number; ok: boolean }> {
   let deleted = 0;
   // 削除のたびに残りが先頭へ来るため offset は常に 0。安全打ち切りとして最大ページ数を設ける。
@@ -42,8 +45,12 @@ async function deleteStorageFolder(
       return { deleted, ok: false };
     }
     if (!files || files.length === 0) return { deleted, ok: true }; // 空＝完了（消すものが無い場合も成功）
-    const paths = files.filter((f) => f.name).map((f) => `${prefix}/${f.name}`);
-    if (paths.length === 0) return { deleted, ok: true };
+    const allPaths = files.filter((f) => f.name).map((f) => `${prefix}/${f.name}`);
+    if (allPaths.length === 0) return { deleted, ok: true };
+    // リンク共有（260728 #1）により、このフォルダの実体を他プロジェクトが参照していることがある。参照中は残す。
+    // 参照中ファイルは list に残り続けるため、削除対象が無くなった時点で必ず抜ける（無限ループ防止）。
+    const paths = allPaths.filter((p) => !referenced.has(p));
+    if (paths.length === 0) return { deleted, ok: true }; // 全て参照中＝解放すべきものは無い（成功扱い）
     const { error: rmErr } = await admin.storage.from(BUCKET).remove(paths);
     if (rmErr) {
       console.error('[purge-projects] remove failed for', prefix, rmErr.message);
@@ -84,10 +91,30 @@ export async function runPurgeProjects(env: PurgeProjectsEnv): Promise<PurgeProj
   let storageDeleted = 0;
   const okIds: string[] = [];
   const failedIds: string[] = [];
+  // オーナーごとに1回だけ参照集合を引く（260728 #1）。除外するのは「今回purgeする同オーナーの全プロジェクト」＝
+  // それら以外から参照されている実体だけを残す。取得できなければそのオーナーは丸ごとスキップ（消さない）。
+  const targetIdsByOwner = new Map<string, string[]>();
+  for (const t of targets) {
+    const list = targetIdsByOwner.get(t.owner_id) ?? [];
+    list.push(t.id);
+    targetIdsByOwner.set(t.owner_id, list);
+  }
+  const refsByOwner = new Map<string, Set<string> | null>();
+  for (const [ownerId, ids] of targetIdsByOwner) {
+    refsByOwner.set(ownerId, await fetchOwnerAiRenderRefs(admin, ownerId, ids));
+  }
+
   for (const t of targets) {
     let ok = false;
+    const referenced = refsByOwner.get(t.owner_id);
+    if (!referenced) {
+      // 参照集合が引けない＝安全側で何も消さない。行も残して次回再試行する。
+      console.error('[purge-projects] refs unavailable; skipping owner', t.owner_id);
+      failedIds.push(t.id);
+      continue;
+    }
     try {
-      const r = await deleteStorageFolder(admin, `${t.owner_id}/ai-render/${t.id}`);
+      const r = await deleteStorageFolder(admin, `${t.owner_id}/ai-render/${t.id}`, referenced);
       ok = r.ok;
       storageDeleted += r.deleted;
     } catch (e) {

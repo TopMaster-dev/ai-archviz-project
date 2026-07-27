@@ -26,8 +26,7 @@ import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
-import { beamExposedAreaM2, wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } from './utils/beamArea.js';
-import { beamOverlapDeductionByIdM2 } from './utils/beamOverlap.js';
+import { wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } from './utils/beamArea.js';
 import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl, isOfficialCatalogModelUrl } from './utils/furnitureThumbnailUrl.js';
@@ -60,6 +59,12 @@ import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
 import { buildAgentProjectSummary } from './lib/agentProjectContext.js';
 import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, persistUserModelThumbnail, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
+import { persistUploadMetaByProductId } from './lib/uploadsMeta.js';
+import { readImageSize } from './utils/imageSize.js';
+import { beamExposedAreaByIdM2, beamSolidsFromBeams, roomWallOccluders, isWallOccluderId } from './utils/beamExposedArea.js';
+import { resolveBeamPlacement, polygonCentroidMm } from './utils/beamPlacement.js';
+import { ProductMetaFields } from './components/ProductMetaFields.js';
+import type { EstimateMetaOverride } from './lib/project/projectState.js';
 
 // カメラ視点プリセットは per-project でストア（＝Supabase の projects.data）へ永続化する（260703）。
 // 旧実装は localStorage（ブラウザ単位・全プロジェクト共通）だったため、別ブラウザ/端末では保存視点が
@@ -552,19 +557,16 @@ type EstimatePanelDetailScrollProps = {
   baseboardRows: BaseboardEstimateRow[];
   baseboardTotal: number;
   activeMeshes: string[];
-  materialUnitPriceOverrides: Record<string, number>;
-  setMaterialUnitPriceOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>;
-  materialMemoOverrides: Record<string, string>;
-  setMaterialMemoOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
-  baseboardUnitPriceOverrides: Record<string, number>;
-  setBaseboardUnitPriceOverrides: React.Dispatch<React.SetStateAction<Record<string, number>>>;
-  baseboardMemoOverrides: Record<string, string>;
-  setBaseboardMemoOverrides: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  /** 建材・巾木のメタ上書き（永続・260728 #6）。キーは material:<id> / baseboard:<id>。 */
+  estimateOverrides: Record<string, EstimateMetaOverride>;
+  setEstimateOverride: (key: string, patch: EstimateMetaOverride) => void;
   furnitureItems: any[];
   activeFurnitureId: string | null;
   setFurnitureItems: React.Dispatch<React.SetStateAction<any[]>>;
   /** アップロード家具の見積編集を台帳へ書き戻す（#9・任意）。 */
   onPersistFurnitureUpload?: (id: string) => void;
+  /** アップロード建材（テクスチャ）の見積編集を台帳へ書き戻す（260728 #6・任意）。 */
+  onPersistMaterialUpload?: (productId: string) => void;
   furnitureTotal: number;
   aiEstimateItems: AiEstimateItem[];
   aiEstimateTotal: number;
@@ -582,18 +584,13 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
   baseboardRows,
   baseboardTotal,
   activeMeshes,
-  materialUnitPriceOverrides,
-  setMaterialUnitPriceOverrides,
-  materialMemoOverrides,
-  setMaterialMemoOverrides,
-  baseboardUnitPriceOverrides,
-  setBaseboardUnitPriceOverrides,
-  baseboardMemoOverrides,
-  setBaseboardMemoOverrides,
+  estimateOverrides,
+  setEstimateOverride,
   furnitureItems,
   activeFurnitureId,
   setFurnitureItems,
   onPersistFurnitureUpload,
+  onPersistMaterialUpload,
   furnitureTotal,
   aiEstimateItems,
   aiEstimateTotal,
@@ -653,37 +650,19 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     <div className="text-[9px] font-mono text-neutral-500">{item.area.toFixed(1)}㎡</div>
                     <div className={`text-xs font-mono font-bold ${isHighlighted ? 'text-emerald-400' : 'text-white'}`}>¥{Math.round(item.cost).toLocaleString()}</div>
                   </div>
-                  <div className="mt-2 flex items-center gap-1">
-                    <span className="text-[9px] font-bold text-neutral-400">㎡単価</span>
-                    <input
-                      value={materialUnitPriceOverrides[item.productId] ?? item.unitPrice ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value.trim();
-                        const next = raw === '' ? undefined : Math.max(0, Number(raw) || 0);
-                        setMaterialUnitPriceOverrides((prev) => {
-                          const copy = { ...prev };
-                          if (next == null) delete copy[item.productId];
-                          else copy[item.productId] = next;
-                          return copy;
-                        });
-                      }}
-                      className="w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
-                    <span className="text-[9px] font-bold text-neutral-500">円/㎡</span>
-                  </div>
-                  <input
-                    value={materialMemoOverrides[item.productId] ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setMaterialMemoOverrides((prev) => {
-                        const copy = { ...prev };
-                        if (v === '') delete copy[item.productId];
-                        else copy[item.productId] = v;
-                        return copy;
-                      });
+                  {/* 名前/メーカー/品番/価格/URL/メモ を統一フォームで編集（260728 #6）。
+                      値はプロジェクトへ永続化され、アップロード建材は台帳（user_uploads）へも書き戻す。 */}
+                  <ProductMetaFields
+                    values={estimateOverrides[`material:${item.productId}`] ?? {}}
+                    placeholders={{
+                      name: item.prodName,
+                      brand: item.brand,
+                      modelNumber: item.modelNumber,
+                      unitPrice: item.unitPrice,
                     }}
-                    placeholder="メモ（任意）"
-                    className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                    priceUnitLabel="円/㎡"
+                    onChange={(patch) => setEstimateOverride(`material:${item.productId}`, patch)}
+                    onCommit={() => onPersistMaterialUpload?.(item.productId)}
                   />
                 </div>
               );
@@ -715,38 +694,15 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                   </div>
                   <div className="text-xs font-mono font-bold text-white">¥{Math.round(r.cost).toLocaleString()}</div>
                 </div>
-                {/* 建材ラインと同様に m単価・メモを編集可能に（260630・クライアント要望）。 */}
-                <div className="mt-2 flex items-center gap-1">
-                  <span className="text-[9px] font-bold text-neutral-400">m単価</span>
-                  <input
-                    value={baseboardUnitPriceOverrides[r.productId] ?? r.unitPrice ?? ''}
-                    onChange={(e) => {
-                      const raw = e.target.value.trim();
-                      const next = raw === '' ? undefined : Math.max(0, Number(raw) || 0);
-                      setBaseboardUnitPriceOverrides((prev) => {
-                        const copy = { ...prev };
-                        if (next == null) delete copy[r.productId];
-                        else copy[r.productId] = next;
-                        return copy;
-                      });
-                    }}
-                    className="w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                  />
-                  <span className="text-[9px] font-bold text-neutral-500">円/m</span>
-                </div>
-                <input
-                  value={baseboardMemoOverrides[r.productId] ?? ''}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setBaseboardMemoOverrides((prev) => {
-                      const copy = { ...prev };
-                      if (v === '') delete copy[r.productId];
-                      else copy[r.productId] = v;
-                      return copy;
-                    });
-                  }}
-                  placeholder="メモ（任意）"
-                  className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                {/* 建材ラインと同じ統一フォームで 名前/メーカー/品番/m単価/URL/メモ を編集（260728 #6）。
+                    巾木は独立した製品を持たないため、未入力時は壁材由来の値を placeholder に出す。
+                    productId が 'default_no_tex' の行は素材未割当の壁をまとめた1行なので、
+                    その編集は未割当壁すべてに効く（従来の m単価上書きと同じ挙動）。 */}
+                <ProductMetaFields
+                  values={estimateOverrides[`baseboard:${r.productId}`] ?? {}}
+                  placeholders={{ name: r.productName, brand: r.brand, unitPrice: r.unitPrice }}
+                  priceUnitLabel="円/m"
+                  onChange={(patch) => setEstimateOverride(`baseboard:${r.productId}`, patch)}
                 />
               </div>
             ))}
@@ -1174,12 +1130,17 @@ const App: React.FC = () => {
     },
     []
   );
-  const [materialUnitPriceOverrides, setMaterialUnitPriceOverrides] = useState<Record<string, number>>({});
-  // 建材ラインのメモ（productId キー、セッション内のみ）（4c）。
-  const [materialMemoOverrides, setMaterialMemoOverrides] = useState<Record<string, string>>({});
-  // 巾木ラインの m単価・メモ上書き（productId キー、建材ラインと同じくセッション内のみ・260630）。
-  const [baseboardUnitPriceOverrides, setBaseboardUnitPriceOverrides] = useState<Record<string, number>>({});
-  const [baseboardMemoOverrides, setBaseboardMemoOverrides] = useState<Record<string, string>>({});
+  // 建材・巾木の「名前/メーカー/品番/価格/URL/メモ」上書き（260728 クライアント #6）。
+  // 以前は App ローカルの useState 4本（materialUnitPriceOverrides / materialMemoOverrides /
+  // baseboardUnitPriceOverrides / baseboardMemoOverrides）で、autosave の対象外だったため
+  // プロジェクトを開き直すと入力が消えていた。プロジェクト状態（estimate.overrides）へ移して永続化する。
+  const estimateOverrides = useProjectStore((s) => s.estimate.overrides);
+  const setEstimateOverride = useCallback(
+    (key: string, patch: EstimateMetaOverride) => useProjectStore.getState().setEstimateOverride(key, patch),
+    []
+  );
+  const materialOverrideKey = (productId: string) => `material:${productId}`;
+  const baseboardOverrideKey = (productId: string) => `baseboard:${productId}`;
   const [estimateGuardOpen, setEstimateGuardOpen] = useState(false);
   const [pendingExportKind, setPendingExportKind] = useState<'pdf' | 'csv' | null>(null);
   const [showDebugModal, setShowDebugModal] = useState(false);
@@ -1461,7 +1422,11 @@ const App: React.FC = () => {
 
   // 履歴の永続化（260619）: ログイン中のプロジェクトはプロジェクトごとにクラウド保存するため localStorage を
   // 使わない（混入防止）。プロジェクト未選択（ゲスト等）のときのみ localStorage に退避する。
-  const aiEditSession = useAiEditSession({ persistLocal: !projectSession?.projectId });
+  // projectId は「版削除時に自分の参照を除外して実体を消す」判定に使う（260728 #1・リンク共有対応）。
+  const aiEditSession = useAiEditSession({
+    persistLocal: !projectSession?.projectId,
+    projectId: projectSession?.projectId ?? null,
+  });
 
   // ホームに戻らずにウィンドウ/タブを閉じる・リロードしようとしたとき、ブラウザ標準の確認ダイアログを出す
   // （データ消失防止・260715 クライアント要望）。プロジェクトを開いている（＝編集中）ときだけ有効。ホームや
@@ -2626,6 +2591,8 @@ const App: React.FC = () => {
   const [pendingMaterialBrand, setPendingMaterialBrand] = useState('');
   const [pendingMaterialModelNumber, setPendingMaterialModelNumber] = useState('');
   const [pendingMaterialPrice, setPendingMaterialPrice] = useState('');
+  // 実寸（画像1枚ぶんの現実の幅mm）（260728 #5）。空欄なら従来どおり 1m 角として貼る。
+  const [pendingMaterialRealWidthMm, setPendingMaterialRealWidthMm] = useState('');
   const materialUploadBusyRef = useRef(false); // 建材アップロードの二重送信ガード（3Dモデルと同方針）。
   const closeMaterialPopup = () => {
     setPendingMaterialPreview((prev) => { if (prev) URL.revokeObjectURL(prev); return null; });
@@ -2635,6 +2602,7 @@ const App: React.FC = () => {
     setPendingMaterialBrand('');
     setPendingMaterialModelNumber('');
     setPendingMaterialPrice('');
+    setPendingMaterialRealWidthMm('');
   };
   const onMaterialFilesPicked = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
@@ -2646,6 +2614,7 @@ const App: React.FC = () => {
     // データ名称は先頭ファイル名で初期化（3Dモデルと同様・編集可）。金額は空。
     setPendingMaterialName(deriveUploadName(files[0].name));
     setPendingMaterialPrice('');
+    setPendingMaterialRealWidthMm('');
   };
   // 建材（テクスチャ）を user-uploads（Supabase Storage＋user_uploads 台帳）へ保存してから素材パレットへ追加する。
   // 260703 クライアント報告の修正: 従来は base64 のメモリ内 Product を作るだけで永続化していなかったため、
@@ -2672,6 +2641,12 @@ const App: React.FC = () => {
     // 商品金額は整数円のみ（小数だと行の四捨五入と合計がずれる）。空/0/不正は未設定＝3Dモデルと同方針。
     const priceNum = Math.round(Number(pendingMaterialPrice));
     const price = pendingMaterialPrice.trim() !== '' && Number.isFinite(priceNum) && priceNum > 0 ? priceNum : undefined;
+    // 実寸（この画像1枚が現実で何mm相当か）（260728 #5）。未入力なら従来どおり 1m角として貼る。
+    const realWidthNum = Math.round(Number(pendingMaterialRealWidthMm));
+    const realWidthMm =
+      pendingMaterialRealWidthMm.trim() !== '' && Number.isFinite(realWidthNum) && realWidthNum > 0
+        ? realWidthNum
+        : undefined;
     // 単一ファイルは入力名を優先、複数は各ファイル名（重複名を避ける）。
     const nameFor = (file: File) => (files.length === 1 ? enteredName || deriveUploadName(file.name) : deriveUploadName(file.name));
     // ログイン済み（Supabase 構成済み）のときだけ Storage へ永続化。ゲスト/未構成は従来どおりメモリ内（base64）。
@@ -2699,6 +2674,15 @@ const App: React.FC = () => {
             if (enteredBrand) metadata.brand = enteredBrand;
             if (enteredModelNumber) metadata.modelNumber = enteredModelNumber;
             if (price !== undefined) metadata.price = price;
+            // 実寸を入れると 3D のタイリング密度が現実に合う（260728 #5）。高さは画像のアスペクト比から導く
+            // ので、ユーザーの入力は「幅」1つだけで済む。読めなければ実寸なし＝従来挙動。
+            if (realWidthMm !== undefined) {
+              const dims = await readImageSize(file).catch(() => null);
+              if (dims && dims.width > 0 && dims.height > 0) {
+                metadata.repeatWidthMm = realWidthMm;
+                metadata.repeatHeightMm = Math.round((realWidthMm * dims.height) / dims.width);
+              }
+            }
             const row = await uploadUserFile(file, 'texture', { metadata });
             newProducts.push(uploadToProduct(row)); // storageUrl 由来＝リロード後も mergeTextureUploads が拾う
             succeeded++;
@@ -2919,6 +2903,44 @@ const App: React.FC = () => {
     [persistUploadFurnitureMeta],
   );
 
+  /**
+   * アップロード建材（テクスチャ）の見積編集を台帳へ書き戻す（260728 #6）。
+   * 「ユーザーがアップロードしたデータは、変更内容をアップロード情報自体を書き換える」要望への対応。
+   * 対象は productId が `upload-tex-*` の素材のみ（公式カタログ素材はプロジェクト内の上書きに留める）。
+   * 家具と同じく 600ms デバウンス（productId ごとに独立したタイマー）。
+   */
+  const persistUploadMaterialMeta = useCallback(async (productId: string) => {
+    try {
+      const ov = useProjectStore.getState().estimate.overrides[`material:${productId}`];
+      if (!ov) return;
+      await persistUploadMetaByProductId(productId, {
+        name: ov.name,
+        brand: ov.brand,
+        modelNumber: ov.modelNumber,
+        productUrl: ov.productUrl,
+        price: ov.unitPrice,
+      });
+    } catch (e) {
+      console.warn('アップロード建材メタの台帳保存に失敗（プロジェクトには保存済み）:', e);
+    }
+  }, []);
+
+  const persistMaterialTimersRef = useRef<Map<string, number>>(new Map());
+  const schedulePersistUploadMaterialMeta = useCallback(
+    (productId: string) => {
+      if (!productId?.startsWith('upload-tex-')) return; // 台帳を持たない素材は対象外
+      const timers = persistMaterialTimersRef.current;
+      const existing = timers.get(productId);
+      if (existing) window.clearTimeout(existing);
+      const t = window.setTimeout(() => {
+        timers.delete(productId);
+        void persistUploadMaterialMeta(productId);
+      }, 600);
+      timers.set(productId, t);
+    },
+    [persistUploadMaterialMeta],
+  );
+
   /** 2D キャンバスの点を sketchPoints（3D 用）へ反映。生成ボタン／3D トグルの両方から使う */
   const commitSketchPointsToRoomState = useCallback((points: SketchPoint[]) => {
     setSketchPoints(points);
@@ -3059,11 +3081,36 @@ const App: React.FC = () => {
     };
   }, [sketchPoints]);
 
-  // 梁同士が重なる部分は上面/下面が二重計上されるため、梁ごとの控除面積(m²)を先に求めておく（260717 クライアント要望）。
-  const beamOverlapDeductionById = useMemo(
-    () => beamOverlapDeductionByIdM2(beams, roomHeight),
-    [beams, roomHeight]
-  );
+  /**
+   * 梁の露出面積(m²)を梁ごとに求める（260728 クライアント #10「梁の重なり分が正確に除外されていない」）。
+   *
+   * 旧実装（beamExposedAreaM2 ＋ beamOverlapDeductionByIdM2）は各梁を独立した箱として足し上げ、
+   * ペア交差の水平面だけを 50/50 で控除していたため、
+   *   ・交差した梁の内部に埋まった側面・端面が控除されない
+   *   ・3本以上が重なると引きすぎる
+   * という誤差があった。ここでは「くっついた1つの立体の、外から見えている面積」を厳密に出す。
+   *
+   * 壁との接触は場合分けせず、**壁そのものを非課金の遮蔽体として渡す**ことで自動的に解決する
+   * （壁梁の裏面・壁に突き当たる端面・壁沿いの自由梁の背面が、すべて同じ規則で除外される）。
+   * 壁梁は保存値ではなく現在の部屋形状から描画と同じ位置へ作り直す（壁を動かしても追従する）。
+   *
+   * 性能: 全メッシュ分を1回で作る。梁ごとに呼ぶと O(n) × O(n^2) になり、2Dの梁ドラッグ（pointermove ごとに
+   * 再レンダー）でフレーム落ちする（敵対検証で 16本 22ms / 32本 250ms を実測）。
+   */
+  const beamExposedAreaById = useMemo(() => {
+    const pointsMm = sketchPoints.map((p) => ({ x: p.x / 0.05, y: p.y / 0.05 }));
+    const centerMm = polygonCentroidMm(pointsMm);
+    const placed = beams.map((b) => resolveBeamPlacement(b, pointsMm, centerMm));
+    const solids = [
+      ...beamSolidsFromBeams(placed, roomHeight),
+      ...roomWallOccluders(pointsMm, roomHeight), // 非課金の遮蔽体
+    ];
+    const raw = beamExposedAreaByIdM2(solids, roomHeight);
+    // 壁スラブは遮蔽のためだけに渡した合成物なので、結果から必ず取り除く
+    // （残すと将来マップを走査するコードが壁を梁として計上しかねない）。
+    for (const id of [...raw.keys()]) if (isWallOccluderId(id)) raw.delete(id);
+    return raw;
+  }, [beams, sketchPoints, roomHeight]);
 
   // メッシュ名から幾何学的な面積(m²)を返す（素材割当の有無に依存しない）。見積計算と選択パネルで
   // 共有し、未割当（未設定）の面でも面積が0にならないようにする（260612: 未設定壁の面積0バグ修正）。
@@ -3162,12 +3209,12 @@ const App: React.FC = () => {
     if (meshName.startsWith('Beam_')) {
       const bx = beams.find((x) => `Beam_${x.id}` === meshName);
       if (!bx) return 0;
-      // 露出面積から、他の梁と重なる水平面の二重計上分を控除する（260717）。
-      const deduction = beamOverlapDeductionById.get(bx.id) ?? 0;
-      return Math.max(0, beamExposedAreaM2(bx, roomHeight) - deduction);
+      // 事前に1回だけ計算した「立体の和の露出面積」を引くだけ（260728 #10）。
+      // 旧 beamExposedAreaM2 − beamOverlapDeductionByIdM2 の組み合わせは廃止（二重控除になる）。
+      return Math.max(0, beamExposedAreaById.get(bx.id) ?? 0);
     }
     return 0;
-  }, [sketchPoints, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams, beamOverlapDeductionById]);
+  }, [sketchPoints, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams, beamExposedAreaById]);
 
   const costBreakdown = useMemo(() => {
     const results: any[] = [];
@@ -3188,17 +3235,22 @@ const App: React.FC = () => {
         const area = areaForMeshM2(meshName);
 
         if (area > 0 || (area === 0 && !meshName.startsWith('Sketch_'))) {
-            results.push({ 
-                meshName, 
-                unitPrice: materialUnitPriceOverrides[prod.id] ?? prod.pricePerUnit,
+            // ユーザーの上書き（名前/メーカー/品番/㎡単価）を最優先で反映する（260728 #6）。
+            // 上書きは productId 単位なので、同じ製品を貼った全ての面に一貫して効く。
+            const ov = estimateOverrides[materialOverrideKey(prod.id)];
+            const unitPrice = ov?.unitPrice ?? prod.pricePerUnit;
+            results.push({
+                meshName,
+                unitPrice,
                 lossFactor: prod.lossFactor,
-                cost: (materialUnitPriceOverrides[prod.id] ?? prod.pricePerUnit) * area * (1 + prod.lossFactor), 
-                area, 
-                prodName: prod.name,
-                brand: prod.brand,
-                modelNumber: prod.modelNumber,
+                cost: unitPrice * area * (1 + prod.lossFactor),
+                area,
+                prodName: ov?.name ?? prod.name,
+                brand: ov?.brand ?? prod.brand,
+                modelNumber: ov?.modelNumber ?? prod.modelNumber,
                 textureUrl: prod.textureUrl,
                 productId: prod.id,
+                productUrl: ov?.productUrl,
             });
         }
     });
@@ -3219,7 +3271,7 @@ const App: React.FC = () => {
         }
         return a.meshName.localeCompare(b.meshName);
     });
-  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, materialUnitPriceOverrides, skeletonCeiling, skeletonUpperWallMm, beams, areaForMeshM2]);
+  }, [selections, sketchPoints, roomHeight, products, wallDivisions, openings, materialSettings, estimateOverrides, skeletonCeiling, skeletonUpperWallMm, beams, areaForMeshM2]);
 
   const materialsTotal = useMemo(
     () => costBreakdown.reduce((sum, item) => sum + item.cost, 0),
@@ -3246,17 +3298,19 @@ const App: React.FC = () => {
       const bbHeightMm = settings.baseboardHeight ?? 60;
       const openingsOnWall = openings.filter((op) => op.wallIndex === i);
       const lengthM = baseboardSegmentLengthM(fullLengthMm, openingsOnWall, bbHeightMm);
+      // 巾木の名前/メーカー/m単価もユーザー上書きを優先（260728 #6）。巾木は独立した製品を持たず
+      // 壁材から名称を借りているため、上書きが無ければ従来どおり壁材由来の値を使う。
+      const bOv = estimateOverrides[baseboardOverrideKey(settingsKey)];
       segs.push({
         lengthM,
         productId: settingsKey,
-        productName: prod ? prod.name : '巾木',
-        brand: prod ? (prod.brand ?? '') : '',
-        // 見積もりパネルで上書きした m単価を優先（無ければ素材設定の値）。
-        unitPricePerM: baseboardUnitPriceOverrides[settingsKey] ?? settings.baseboardUnitPrice ?? 0,
+        productName: bOv?.name ?? (prod ? prod.name : '巾木'),
+        brand: bOv?.brand ?? (prod ? (prod.brand ?? '') : ''),
+        unitPricePerM: bOv?.unitPrice ?? settings.baseboardUnitPrice ?? 0,
       });
     }
     return buildBaseboardRows(segs);
-  }, [sketchPoints, wallDivisions, selections, materialSettings, baseboardUnitPriceOverrides, openings]);
+  }, [sketchPoints, wallDivisions, selections, materialSettings, estimateOverrides, openings]);
   const baseboardTotal = useMemo(() => baseboardTotalCost(baseboardBreakdown), [baseboardBreakdown]);
   const furnitureTotal = useMemo(
     () => furnitureItems.reduce((sum, item) => sum + (item.customPrice ?? 0), 0),
@@ -3294,14 +3348,14 @@ const App: React.FC = () => {
     () =>
       buildEstimateExportPayload(costBreakdown as CostBreakdownEntry[], furnitureItems, visibleAiEstimateItems, {
         wallDivisions,
-        materialMemoByProductId: materialMemoOverrides,
+        // メモ/名称等の上書きは estimate.overrides から供給する（260728 #6・永続化）。
+        overridesByKey: estimateOverrides,
         baseboardRows: baseboardBreakdown,
-        baseboardMemoByProductId: baseboardMemoOverrides,
         // マテリアルボード（A3）のヘッダ＝プロジェクト名、フッタ＝会社名（無ければユーザー名）。
         projectName: projectSession?.projectName ?? '',
         authorName: authProfile?.company || authProfile?.display_name || '',
       }),
-    [costBreakdown, furnitureItems, visibleAiEstimateItems, wallDivisions, materialMemoOverrides, baseboardBreakdown, baseboardMemoOverrides, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
+    [costBreakdown, furnitureItems, visibleAiEstimateItems, wallDivisions, estimateOverrides, baseboardBreakdown, projectSession?.projectName, authProfile?.company, authProfile?.display_name]
   );
   const canExportEstimate =
     estimatePayload.materialSections.some((s) => s.rows.length > 0) ||
@@ -3611,18 +3665,13 @@ const App: React.FC = () => {
                 baseboardRows={baseboardBreakdown}
                 baseboardTotal={baseboardTotal}
                 activeMeshes={activeMeshes}
-                materialUnitPriceOverrides={materialUnitPriceOverrides}
-                setMaterialUnitPriceOverrides={setMaterialUnitPriceOverrides}
-                materialMemoOverrides={materialMemoOverrides}
-                setMaterialMemoOverrides={setMaterialMemoOverrides}
-                baseboardUnitPriceOverrides={baseboardUnitPriceOverrides}
-                setBaseboardUnitPriceOverrides={setBaseboardUnitPriceOverrides}
-                baseboardMemoOverrides={baseboardMemoOverrides}
-                setBaseboardMemoOverrides={setBaseboardMemoOverrides}
+                estimateOverrides={estimateOverrides}
+                setEstimateOverride={setEstimateOverride}
                 furnitureItems={furnitureItems}
                 activeFurnitureId={activeFurnitureId}
                 setFurnitureItems={setFurnitureItems}
                 onPersistFurnitureUpload={schedulePersistUploadFurnitureMeta}
+                onPersistMaterialUpload={schedulePersistUploadMaterialMeta}
                 furnitureTotal={furnitureTotal}
                 aiEstimateItems={visibleAiEstimateItems}
                 aiEstimateTotal={aiEstimateTotal}
@@ -3654,8 +3703,8 @@ const App: React.FC = () => {
       handleEstimateExportSelect,
       handleRemoveAiEstimateItem,
       handleUpdateAiEstimateItem,
-      materialUnitPriceOverrides,
-      materialMemoOverrides,
+      estimateOverrides,
+      setEstimateOverride,
       materialsTotal,
       missingInputCount,
       showCostPanel,
@@ -3773,18 +3822,38 @@ const App: React.FC = () => {
                 />
               </div>
             </div>
-            <div className="mt-3">
-              <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
-              <input
-                type="number"
-                min={0}
-                step={1}
-                inputMode="numeric"
-                value={pendingMaterialPrice}
-                onChange={(e) => setPendingMaterialPrice(e.target.value)}
-                placeholder="例: 45000"
-                className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
-              />
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-[10px] text-neutral-400">商品金額（円・任意）</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={pendingMaterialPrice}
+                  onChange={(e) => setPendingMaterialPrice(e.target.value)}
+                  placeholder="例: 45000"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              </div>
+              {/* 実寸（260728 #5）。「繰り返し感」の最大の原因は、実寸が分からず1m角で貼っていたこと。
+                  ここを入れるだけで密度が現実に合う。高さは画像の縦横比から自動計算する。 */}
+              <div>
+                <label className="mb-1 block text-[10px] text-neutral-400">実寸・画像の幅（mm・任意）</label>
+                <input
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={pendingMaterialRealWidthMm}
+                  onChange={(e) => setPendingMaterialRealWidthMm(e.target.value)}
+                  placeholder="例: 300（タイル1枚）/ 3600（壁一面）"
+                  className="w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-100 outline-none focus:border-emerald-500"
+                />
+                <p className="mt-1 text-[9px] leading-snug text-neutral-500">
+                  この画像が実物で何mmぶんかを入れると、3Dでの繰り返しが実寸どおりになります。未入力は1m角で貼ります。
+                </p>
+              </div>
             </div>
             <div className="mt-4 flex gap-4">
               <div className="h-28 w-28 shrink-0 overflow-hidden rounded-lg border border-white/10 bg-neutral-800">
@@ -4466,7 +4535,16 @@ const App: React.FC = () => {
                                                     : null;
                                                 // 1px=1mm（クライアント仕様260701）: 画像ピクセルの短辺(mm)をそのまま既定にする（1000mm へ正規化しない）。
                                                 // これで反映短辺・実寸の表示値が、実際の描画（画像px＝1タイルの実寸）と一致する。手動入力時はその値を優先。
-                                                const autoAppliedShortEdgeMm = detectedShortEdgeMm && detectedShortEdgeMm > 0
+                                                // 260728 #5: アップロード時に実寸を入力した素材（physical あり）は、描画側が実寸を使うので
+                                                // 表示もそちらへ揃える（揃えないと「パネルの数値どおりに貼られない」というズレが残る）。
+                                                const physicalShortEdgeMm = (() => {
+                                                    const p = g.product?.physical;
+                                                    if (!p?.repeatWidthMm || !p?.repeatHeightMm) return null;
+                                                    return Math.min(p.repeatWidthMm, p.repeatHeightMm);
+                                                })();
+                                                const autoAppliedShortEdgeMm = physicalShortEdgeMm && physicalShortEdgeMm > 0
+                                                    ? physicalShortEdgeMm
+                                                    : detectedShortEdgeMm && detectedShortEdgeMm > 0
                                                     ? detectedShortEdgeMm
                                                     : 1000;
                                                 const appliedShortEdgeMm = manualAppliedShortEdgeMm ?? autoAppliedShortEdgeMm;

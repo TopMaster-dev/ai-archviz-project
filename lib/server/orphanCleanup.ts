@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { fetchOwnerAiRenderRefs } from './aiRenderRefs.js';
 
 // 孤児になった AI生成画像（{uid}/ai-render/{projectId}/...）の一回限りの掃除（260629 クライアント要望）。
 //
@@ -124,12 +125,23 @@ export async function runOrphanCleanup(
   for (const uid of uids) {
     const projFolders = await listFolders(admin, `${uid}/ai-render`);
     if (projFolders === null) { incomplete = true; continue; } // この user はスキップ＝次回再試行
+    // 260728 #1（リンク共有）: 「projects 行が無いフォルダに、生きている参照が残る」のが正常系になった。
+    // フォルダ単位で孤児と断定して消すと、複製先が参照している画像を全部壊す。ファイル単位で判定する。
+    // uid はフォルダ名＝owner_id。参照集合が引けないユーザーは丸ごとスキップ（誤削除より容量リークを選ぶ）。
+    const referenced = await fetchOwnerAiRenderRefs(admin, uid, []);
+    if (!referenced) {
+      console.error('[orphan-cleanup] refs unavailable; skipping user', uid);
+      incomplete = true;
+      continue;
+    }
     for (const pid of projFolders) {
       const isOrphan = pid === 'unsaved' || !existingIds.has(pid); // 存在しないプロジェクト or 旧unsaved
       if (!isOrphan) continue;
       const prefix = `${uid}/ai-render/${pid}`;
-      const files = await listFiles(admin, prefix);
-      if (files === null) { incomplete = true; continue; } // 列挙不能なら削除しない（部分削除を避ける）
+      const allFiles = await listFiles(admin, prefix);
+      if (allFiles === null) { incomplete = true; continue; } // 列挙不能なら削除しない（部分削除を避ける）
+      // 生存プロジェクトから参照されている実体は孤児ではない。
+      const files = allFiles.filter((f) => !referenced.has(`${prefix}/${f.name}`));
       if (files.length === 0) continue;
       orphanFolders += 1;
       orphanFiles += files.length;

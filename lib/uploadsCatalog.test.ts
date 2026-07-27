@@ -158,3 +158,38 @@ describe('isUserUploadProduct', () => {
     expect(isUserUploadProduct({ id: 'mat-floor-1' })).toBe(false);
   });
 });
+
+/**
+ * 260728 クライアント #5:「AIレンダをよりシームレスに見せたい」。繰り返しが目立つ主因は
+ * 「アップロード素材の実寸が分からず、常に1m角のタイルとして貼っていた」こと。
+ * アップロード時に実寸を入れた素材だけ physical を持たせ、既存素材の見た目は変えない。
+ */
+describe('uploadToProduct — 実寸（physical）', () => {
+  const mk = (metadata: Record<string, unknown>) =>
+    uploadToProduct({
+      id: 'u1',
+      kind: 'texture',
+      storageUrl: 'https://x/y.png',
+      originalName: 'tile.png',
+      metadata,
+    } as never);
+
+  it('実寸メタがあれば physical を付ける（描画が実寸で貼られる）', () => {
+    const p = mk({ repeatWidthMm: 300, repeatHeightMm: 600 });
+    expect(p.physical?.repeatWidthMm).toBe(300);
+    expect(p.physical?.repeatHeightMm).toBe(600);
+    expect(p.physical?.source).toBe('sidecar');
+  });
+
+  it('実寸メタが無い既存アップロードは physical を付けない（従来どおり1m角＝見た目が変わらない）', () => {
+    expect(mk({}).physical).toBeUndefined();
+    expect(mk({ name: 'x', brand: 'y' }).physical).toBeUndefined();
+  });
+
+  it('片方だけ・0・負値・非数値は無効として扱う（誤った密度で貼らない）', () => {
+    expect(mk({ repeatWidthMm: 300 }).physical).toBeUndefined();
+    expect(mk({ repeatWidthMm: 0, repeatHeightMm: 600 }).physical).toBeUndefined();
+    expect(mk({ repeatWidthMm: -300, repeatHeightMm: 600 }).physical).toBeUndefined();
+    expect(mk({ repeatWidthMm: '300', repeatHeightMm: '600' }).physical).toBeUndefined();
+  });
+});
