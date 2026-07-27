@@ -33,14 +33,46 @@ function serializeContext(obj: Record<string, string>): string {
     .join('|');
 }
 
-/** リソースの現在の context.custom を取得（存在しない/失敗時は空）。footprint_* を消さないための read-merge 用。 */
+/**
+ * リソースの context を string マップで取り出す（260727 修正）。Cloudinary の応答は `context:{custom:{...}}` の
+ * 場合と、フラットに `context:{...}` の場合があるため両対応する（furnitureCatalogService.contextObjectFromResource と同一方針）。
+ * 従来は `.custom` のみを見ていたため、フラット形状だと category を取りこぼし、管理カードが空になっていた。
+ */
+function readResourceContext(r: any): Record<string, string> {
+  const raw = r?.context;
+  if (!raw || typeof raw !== 'object') return {};
+  const custom = raw.custom && typeof raw.custom === 'object' ? raw.custom : raw;
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(custom)) if (typeof v === 'string') out[k] = v;
+  return out;
+}
+
+/**
+ * 3d_assets 配下の raw リソースを context 付きで列挙する（260727 修正）。
+ * Search API（cloudinary.search）はインデックス反映にラグがあり、直前に付与した category が出ない/消えない
+ * ことがあるため、即時反映される Admin API（api.resources・prefix 指定・proven な api.resource と同系）を使う。
+ * 最大500件（公式カタログは小規模想定・next_cursor 未対応）。
+ */
+async function listOfficial3dResources(): Promise<any[]> {
+  try {
+    const res: any = await cloudinary.api.resources({
+      resource_type: 'raw',
+      type: 'upload',
+      prefix: '3d_assets/',
+      context: true,
+      max_results: 500,
+    });
+    return Array.isArray(res?.resources) ? res.resources : [];
+  } catch {
+    return [];
+  }
+}
+
+/** リソースの現在の context を取得（存在しない/失敗時は空）。footprint_* を消さないための read-merge 用。 */
 async function readContext(publicId: string): Promise<Record<string, string>> {
   try {
     const r: any = await cloudinary.api.resource(publicId, { ...RAW, context: true });
-    const custom = r?.context?.custom && typeof r.context.custom === 'object' ? r.context.custom : {};
-    const out: Record<string, string> = {};
-    for (const [k, v] of Object.entries(custom)) if (typeof v === 'string') out[k] = v;
-    return out;
+    return readResourceContext(r);
   } catch {
     return {};
   }
@@ -98,16 +130,9 @@ const CATEGORY_SEED = ['ソファ', 'チェア', 'テーブル', 'デスク', '�
 export async function listOfficialModelCategories(): Promise<{ categories: Array<{ name: string; count: number }> }> {
   const counts = new Map<string, number>();
   for (const s of CATEGORY_SEED) counts.set(s, 0);
-  try {
-    const res: any = await cloudinary.search.expression('folder:3d_assets').with_field('context').max_results(500).execute();
-    const resources: any[] = Array.isArray(res?.resources) ? res.resources : [];
-    for (const r of resources) {
-      const custom = r?.context?.custom && typeof r.context.custom === 'object' ? r.context.custom : {};
-      const c = typeof custom[META_CATEGORY_KEY] === 'string' ? custom[META_CATEGORY_KEY].trim() : '';
-      if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
-    }
-  } catch {
-    /* 資格情報なし等 → シードのみ返す */
+  for (const r of await listOfficial3dResources()) {
+    const c = (readResourceContext(r)[META_CATEGORY_KEY] ?? '').trim();
+    if (c) counts.set(c, (counts.get(c) ?? 0) + 1);
   }
   const categories = [...counts.entries()].map(([name, count]) => ({ name, count })).sort((a, b) => a.name.localeCompare(b.name, 'ja'));
   return { categories };
@@ -120,18 +145,11 @@ export async function renameOfficialModelCategory(from: string, to: string): Pro
   if (!src || !target) return { updated: 0, failed: 0 };
   let updated = 0;
   let failed = 0;
-  try {
-    const res: any = await cloudinary.search.expression('folder:3d_assets').with_field('context').max_results(500).execute();
-    const resources: any[] = Array.isArray(res?.resources) ? res.resources : [];
-    for (const r of resources) {
-      const custom = r?.context?.custom && typeof r.context.custom === 'object' ? r.context.custom : {};
-      if (typeof custom[META_CATEGORY_KEY] !== 'string' || custom[META_CATEGORY_KEY].trim() !== src) continue;
-      const res2 = await setOfficial3dMeta(String(r.public_id), { category: target });
-      if (res2.ok) updated += 1;
-      else failed += 1;
-    }
-  } catch {
-    failed += 1;
+  for (const r of await listOfficial3dResources()) {
+    if ((readResourceContext(r)[META_CATEGORY_KEY] ?? '').trim() !== src) continue;
+    const res2 = await setOfficial3dMeta(String(r.public_id), { category: target });
+    if (res2.ok) updated += 1;
+    else failed += 1;
   }
   return { updated, failed };
 }
@@ -145,24 +163,21 @@ export async function unassignOfficialModelCategory(category: string): Promise<{
   if (!src) return { updated: 0, failed: 0 };
   let updated = 0;
   let failed = 0;
-  try {
-    const res: any = await cloudinary.search.expression('folder:3d_assets').with_field('context').max_results(500).execute();
-    const resources: any[] = Array.isArray(res?.resources) ? res.resources : [];
-    for (const r of resources) {
-      const custom = r?.context?.custom && typeof r.context.custom === 'object' ? r.context.custom : {};
-      if (typeof custom[META_CATEGORY_KEY] !== 'string' || custom[META_CATEGORY_KEY].trim() !== src) continue;
-      const publicId = String(r.public_id);
-      const merged: Record<string, string> = {};
-      for (const [k, v] of Object.entries(custom)) if (typeof v === 'string' && k !== META_CATEGORY_KEY) merged[k] = v;
-      try {
-        await cloudinary.api.update(publicId, { ...RAW, context: serializeContext(merged) });
-        updated += 1;
-      } catch {
-        failed += 1;
-      }
+  for (const r of await listOfficial3dResources()) {
+    if ((readResourceContext(r)[META_CATEGORY_KEY] ?? '').trim() !== src) continue;
+    const publicId = String(r.public_id);
+    // category を外す直前に最新 context を取り直してから書き込む（スナップショットで全置換すると、その間に走る
+    // getFurnitureCatalog の footprint 自動書き戻し等と競合し footprint_* を巻き戻す恐れ＝lost update。rename/
+    // setOfficial3dMeta と同じく fresh read-merge にする・260727 敵対レビュー medium）。
+    const fresh = await readContext(publicId);
+    const merged: Record<string, string> = {};
+    for (const [k, v] of Object.entries(fresh)) if (k !== META_CATEGORY_KEY) merged[k] = v;
+    try {
+      await cloudinary.api.update(publicId, { ...RAW, context: serializeContext(merged) });
+      updated += 1;
+    } catch {
+      failed += 1;
     }
-  } catch {
-    failed += 1;
   }
   return { updated, failed };
 }
