@@ -137,13 +137,6 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
     );
   }
 
-  // 5個以上のときは最大5個/行で折り返して2行以上にする（横に長い1行を避ける・260727 クライアント要望）。
-  const MAX_PER_ROW = 5;
-  const categoryRows: string[][] = [];
-  for (let i = 0; i < assetCategories.length; i += MAX_PER_ROW) {
-    categoryRows.push(assetCategories.slice(i, i + MAX_PER_ROW));
-  }
-
   return (
     <div
       ref={containerRef}
@@ -220,32 +213,28 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
         </div>
       )}
 
-      {/* 5個以上は最大5個/行で折り返す（横長の1行を避け、余りは下の行へ・260727 クライアント要望）。 */}
-      <div className="glass p-1.5 rounded-2xl border border-white/10 flex flex-col gap-1.5 bg-black/40 backdrop-blur-xl shadow-2xl">
-        {categoryRows.map((row, ri) => (
-          <div key={ri} className="flex items-stretch gap-1.5">
-            {row.map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。260703(5): 初回は少し遅延して開く。
-                onClick={(e) => clickToggle(cat, e.currentTarget)}
-                onMouseEnter={(e) => hoverOpen(cat, e.currentTarget)}
-                // ボタンから隙間へ抜けたら保留中のオープンを取消（閉じている時のみ）。開いている時の自動クローズはコンテナ側 onMouseLeave が担当。
-                onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
-                className={`h-14 w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
-                  selectedAssetCategory === cat
-                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
-                    : cat === 'アップロード'
-                      ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
-                      : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
-                }`}
-              >
-                {/* 長いカテゴリ名（例: フロアランプ）が折り返して溢れないよう、幅は内容に合わせラベルは折り返さない（260727）。 */}
-                <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
-              </button>
-            ))}
-          </div>
+      {/* カテゴリは横1行で並べる（260727 クライアント要望で2行→1行へ戻す）。長い名称は下の span で折り返さない。 */}
+      <div className={barClass}>
+        {assetCategories.map((cat) => (
+          <button
+            key={cat}
+            type="button"
+            // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。260703(5): 初回は少し遅延して開く。
+            onClick={(e) => clickToggle(cat, e.currentTarget)}
+            onMouseEnter={(e) => hoverOpen(cat, e.currentTarget)}
+            // ボタンから隙間へ抜けたら保留中のオープンを取消（閉じている時のみ）。開いている時の自動クローズはコンテナ側 onMouseLeave が担当。
+            onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
+            className={`h-full w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
+              selectedAssetCategory === cat
+                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
+                : cat === 'アップロード'
+                  ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
+                  : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
+            }`}
+          >
+            {/* 長いカテゴリ名（例: フロアランプ）が折り返して溢れないよう、幅は内容に合わせラベルは折り返さない（260727）。 */}
+            <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
+          </button>
         ))}
       </div>
     </div>
