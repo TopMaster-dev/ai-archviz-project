@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useAuth } from '../lib/auth/AuthContext.js';
 import { ByokKeyPanel } from './ByokKeyPanel.js';
+import { canUseByok } from '../lib/byok.js';
 import { deriveCreditStatus } from '../utils/freePlanCredits.js';
 
 /**
@@ -148,10 +149,14 @@ export function SettingsModal({ onClose }: { onClose: () => void }) {
               </section>
             )}
 
-            <section className="border-t border-white/10 pt-4">
-              <h4 className="mb-2 text-xs font-black uppercase tracking-wider text-emerald-300">APIキー</h4>
-              <ByokKeyPanel />
-            </section>
+            {/* APIキー欄は既定で非表示。運営が profiles.byok_enabled を立てた
+                ユーザー（NDA締結企業）にだけ表示する（260728 クライアント #2）。 */}
+            {canUseByok(profile) && (
+              <section className="border-t border-white/10 pt-4">
+                <h4 className="mb-2 text-xs font-black uppercase tracking-wider text-emerald-300">APIキー</h4>
+                <ByokKeyPanel />
+              </section>
+            )}
           </div>
         )}
       </div>

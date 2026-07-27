@@ -541,7 +541,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         });
       } catch (err) {
         console.error('[underlay] failed to load', err);
-        showFurnitureHint('下絵の読み込みに失敗しました');
+        // 原因が分かる場合はそのまま出す（260728 #4: 「下絵の読み込みに失敗しました」だけでは
+        // パスワード保護・破損・メモリ不足の切り分けができず、問い合わせ対応ができなかった）。
+        // ただしアプリが自分で書いた日本語メッセージ（UnderlayError）だけを表示する。全例外の message を
+        // 出すと、画像読込失敗時の DOMException など英語の内部エラーがそのままユーザーに出てしまう。
+        const { UnderlayError } = await import('../utils/pdfToImage.js');
+        showFurnitureHint(err instanceof UnderlayError ? err.message : '下絵の読み込みに失敗しました');
       }
     },
     // showFurnitureHint は安定（useCallback []）のため依存に含めない。

@@ -29,7 +29,37 @@ export interface FurnitureProductMeta {
   productUrl?: string;
 }
 
-/** カタログの一意ID（または Cloudinary public_id）で照合（最優先）。 */
+/**
+ * ダミー（動作確認用サンプル）の対応表を使うかどうか（既定 false＝使わない）。
+ *
+ * 260728 クライアント #8:「提案される商品が実在しない／URLが404」の主因の一つが、この対応表のサンプル値
+ * （'（例）サンプル・ファニチャー' / 'SAMPLE-SOFA' / https://example.com/…）が
+ * 実データのような顔をして見積・エージェント提案に流れ込んでいたこと。既定でサンプルを出さない。
+ *
+ * 実データを入れるときは BY_ID / BY_NAME に実在の商品情報を追記する（フラグ不要でそのまま有効）。
+ * デモでサンプルを見せたい場合のみ VITE_ENABLE_SAMPLE_PRODUCT_META=true（サーバは ENABLE_SAMPLE_PRODUCT_META=true）。
+ *
+ * 本モジュールはクライアント（App.tsx）とサーバ（lib/gemini.ts → api/agent.ts）の両方から読まれるため、
+ * import.meta.env / process.env のどちらが無い環境でも落ちないように両方を握りつぶして読む。
+ */
+function sampleProductMetaEnabled(): boolean {
+  try {
+    const viteEnv = (import.meta as unknown as { env?: Record<string, string | undefined> }).env;
+    if (viteEnv?.VITE_ENABLE_SAMPLE_PRODUCT_META === 'true') return true;
+  } catch {
+    /* import.meta.env が無い実行環境（Node の一部）では無視 */
+  }
+  try {
+    if (typeof process !== 'undefined' && process.env?.ENABLE_SAMPLE_PRODUCT_META === 'true') return true;
+  } catch {
+    /* process が無い実行環境（ブラウザ）では無視 */
+  }
+  return false;
+}
+
+const SAMPLE_META_ENABLED = sampleProductMetaEnabled();
+
+/** カタログの一意ID（または Cloudinary public_id）で照合（最優先）。実データはここへ追記する。 */
 const BY_ID: Record<string, FurnitureProductMeta> = {
   // 例: '3d_assets/sofa_navy': { brand: '…', modelNumber: '…', price: 128000, productUrl: 'https://…' },
 };
@@ -78,5 +108,8 @@ function mergePreferringFirst(metas: (FurnitureProductMeta | undefined)[]): Furn
 export function getFurnitureProductMeta(
   item: Pick<FurnitureCatalogItem, 'id' | 'name' | 'type'>
 ): FurnitureProductMeta {
+  // BY_ID は実データ運用の置き場なので常に有効。BY_NAME / BY_TYPE はサンプル値なので既定では引かない
+  // （260728 #8: 実在しない品番・example.com のURLが見積とエージェント提案へ流れ込むのを止める）。
+  if (!SAMPLE_META_ENABLED) return mergePreferringFirst([BY_ID[item.id]]);
   return mergePreferringFirst([BY_ID[item.id], BY_NAME[item.name], BY_TYPE[item.type]]);
 }

@@ -12,6 +12,20 @@ import { saveGeminiKey, loadGeminiKey, clearGeminiKey } from './db/apiKeys.js';
 let cachedKey: string | null = null;
 let cachedLast4: string | null = null;
 
+/**
+ * BYOK（自分のAPIキー）を使わせてよいユーザーか（260728 クライアント #2）。
+ *
+ * 要望:「APIキーのメニューは基本『非表示』にして、特定のユーザー（＝AI API原価を開示してよい
+ * NDA締結企業）にだけ開放する」。判定は運営が管理する profiles.byok_enabled のみ。
+ * 未取得/未適用（undefined）は false＝非表示に倒す（deny by default）。
+ *
+ * メール許可リストを VITE_ 環境変数で持つ案は採らない: クライアントバンドルへNDA企業のメールが
+ * 載ってしまい、隠したい情報より重い漏洩になるため。
+ */
+export function canUseByok(profile: { byok_enabled?: boolean | null } | null | undefined): boolean {
+  return profile?.byok_enabled === true;
+}
+
 function setCache(key: string | null): void {
   const trimmed = key && key.trim() ? key.trim() : null;
   cachedKey = trimmed;

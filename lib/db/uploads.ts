@@ -391,6 +391,24 @@ export async function listUserUploads(kind?: UploadKind): Promise<UserUpload[]> 
 }
 
 /**
+ * 台帳1行を取り直す（metadata のリードモディファイライト前に最新値を取るため・260728 #7）。
+ * metadata は全置換更新なので、古いスナップショットへマージすると他所が書いたキー
+ * （thumbnailUrl / footprint2d / modelUnitScale 等）を無言で消してしまう。
+ * 見つからない/未構成のときは null（呼び出し側は手元のスナップショットへフォールバック）。
+ */
+export async function getUserUpload(id: string): Promise<UserUpload | null> {
+  const sb = getSupabase();
+  if (!sb) return null;
+  const { data, error } = await sb.from('user_uploads').select(SELECT_COLS).eq('id', id).maybeSingle();
+  // 「行が無い」(null) と「読み取り失敗」(throw) を区別する。両方を null にすると、呼び出し側が
+  // 通信エラー時に古いスナップショットへマージして書き戻し、防ごうとしていた lost update を
+  // そのまま再現してしまう（260728 敵対レビュー指摘）。
+  if (error) throw error;
+  if (!data) return null;
+  return mapRow(data as UploadRow);
+}
+
+/**
  * 台帳のメタデータを置き換える（カテゴリ割当の変更などに使用）。
  * metadata 全体を渡す（呼び出し側で既存 metadata とマージして渡すこと）。更新後の行を返す。
  */

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import type { AiEditObjectReference, AiEditVersion, NormalizedRect } from '../types.js';
 import { normalizeStoredVersions } from '../lib/aiEditNormalize.js';
 import { deleteAiRenderImages } from '../lib/db/aiRenderStorage.js';
+import { useProjectStore } from '../lib/store/projectStore.js';
 
 function newObjectId() {
   return `obj_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
@@ -367,6 +368,18 @@ export function useAiEditSession(options?: { persistLocal?: boolean }) {
       if (orphaned.length > 0) void deleteAiRenderImages(orphaned); // 非同期・ベストエフォート
       return survivors;
     });
+    // 削除した版に紐づく「AI追加アイテム」も一緒に片付ける（260728 #8 の付随バグ）。
+    // 見積は versionId === 表示中の版 で絞り込むため、版だけ消すと該当アイテムは
+    // 「画面に出ないのに保存され続け、編集も削除もできない幽霊行」になっていた。
+    // 共通アイテム（versionId 未設定）は全画像で表示するものなので残す。
+    try {
+      const store = useProjectStore.getState();
+      const items = store.estimate.aiItems;
+      const remaining = items.filter((it) => it.versionId !== idToDelete);
+      if (remaining.length !== items.length) store.setAiEstimateItems(remaining);
+    } catch {
+      /* ストア未初期化などでも版削除自体は成立させる */
+    }
   }, []);
 
   const clearSession = useCallback(() => {

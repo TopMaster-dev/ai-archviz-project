@@ -31,6 +31,13 @@ export interface Profile {
   locked_at: string | null;
   /** ロック理由（監査用）。 */
   lock_reason: string | null;
+  /**
+   * BYOK（自分のAPIキー入力）を許可するか（既定 false＝非表示・260728 クライアント #2）。
+   * 「AI APIの原価を開示してよい相手（NDA締結企業）にだけ開放する」ための運営管理フラグ。
+   * 本人は更新できない（schema の列単位 grant に含めない）。
+   * optional にしてあるのは、マイグレーション未適用のDBで undefined→falsy→非表示（安全側）に倒すため。
+   */
+  byok_enabled?: boolean | null;
   created_at: string;
 }
 

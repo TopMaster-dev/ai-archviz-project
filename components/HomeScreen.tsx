@@ -450,7 +450,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
           <button
             type="button"
             onClick={() => setSettingsOpen(true)}
-            title="設定（プロフィール・APIキー）"
+            title="設定（プロフィール）"
             aria-label="設定"
             className="flex h-8 w-8 items-center justify-center rounded-md bg-neutral-800 text-neutral-300 transition hover:bg-neutral-700 hover:text-white"
           >

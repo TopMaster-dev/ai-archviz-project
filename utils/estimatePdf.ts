@@ -21,6 +21,34 @@ function tdStyle(align: 'left' | 'right', extra = ''): string {
   return `border:1px solid #333;padding:6px 8px;vertical-align:middle;line-height:1.4;text-align:${align};${extra}`;
 }
 
+/**
+ * AI生成画像だけの1ページ（260728 クライアント #12「画像だけで1ページにして」）。
+ * 見積本文には画像を入れない。3Dビューのスクリーンショットはそもそも渡ってこない（App 側で AI画像のみに限定）。
+ */
+function buildHeroImagePage(dataUrl: string, projectName?: string): HTMLElement {
+  const root = document.createElement('div');
+  root.style.cssText = `box-sizing:border-box;width:720px;padding:18px 22px;background:#fff;color:#111;font-family:${FONT_STACK};font-size:10px;line-height:1.35;`;
+
+  if (projectName) {
+    const t = document.createElement('div');
+    t.textContent = projectName;
+    t.style.cssText = 'font-size:14px;font-weight:700;margin-bottom:10px;';
+    root.appendChild(t);
+  }
+
+  const imgWrap = document.createElement('div');
+  imgWrap.style.cssText = 'width:100%;border:1px solid #ccc;background:#f4f4f4;text-align:center;line-height:0;';
+  const img = document.createElement('img');
+  img.crossOrigin = 'anonymous';
+  img.src = dataUrl;
+  // ページを1枚占有するので高さ上限は設けず、幅いっぱいに載せる（縮小は renderNodeToPdfPage 側が行う）。
+  img.style.cssText = 'max-width:100%;display:inline-block;vertical-align:middle;';
+  img.alt = '';
+  imgWrap.appendChild(img);
+  root.appendChild(imgWrap);
+  return root;
+}
+
 function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   const root = document.createElement('div');
   root.style.cssText = `box-sizing:border-box;width:720px;padding:18px 22px;background:#fff;color:#111;font-family:${FONT_STACK};font-size:10px;line-height:1.35;`;
@@ -35,19 +63,8 @@ function buildEstimatePage(payload: EstimateExportPayload): HTMLElement {
   sub.style.cssText = 'font-size:8px;color:#666;margin-bottom:10px;';
   root.appendChild(sub);
 
-  // 現在表示中の画像（AI生成画像 or 3D/2Dビュー）を見積書の先頭に載せる（3h・260720）。
-  if (payload.roomImageDataUrl) {
-    const imgWrap = document.createElement('div');
-    imgWrap.style.cssText =
-      'width:100%;margin-bottom:12px;border:1px solid #ccc;background:#f4f4f4;text-align:center;line-height:0;';
-    const img = document.createElement('img');
-    img.crossOrigin = 'anonymous';
-    img.src = payload.roomImageDataUrl;
-    img.style.cssText = 'max-width:100%;max-height:340px;object-fit:contain;display:inline-block;vertical-align:middle;';
-    img.alt = '';
-    imgWrap.appendChild(img);
-    root.appendChild(imgWrap);
-  }
+  // 画像は見積本文には載せず、独立した1ページ（buildHeroImagePage）に分離した（260728 クライアント #12）。
+  // 本文に埋めると縦に伸びて renderNodeToPdfPage の縮小が効き、表が小さく読みづらくなる副作用もあった。
 
   const totalBar = document.createElement('div');
   totalBar.style.cssText = 'margin-bottom:12px;padding-bottom:8px;border-bottom:2px solid #111;';
@@ -341,8 +358,12 @@ function buildMaterialBoardPage(
       imgWrap.appendChild(ph);
     }
     const cap = document.createElement('div');
+    // ボードは height:840px 固定のため、品番＋メーカー名が長いとキャプションが何行も折り返し、
+    // 2行目のカードが用紙外へ押し出されて html2canvas に切り取られる（＝「縦に並ぶ／崩れる」ように見える）。
+    // 2行で打ち切って高さを一定に保つ（260728 クライアント #3a の再発防止）。
     cap.style.cssText =
-      'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;word-break:break-all;';
+      'background:#ededed;padding:4px 8px;font-size:11px;font-weight:600;border:1px solid #ccc;border-top:none;' +
+      'word-break:break-all;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;max-height:34px;';
     const mark = document.createElement('span');
     mark.textContent = '■';
     mark.style.cssText = 'color:#111;margin-right:2px;'; // 黒（クライアント要望・260720。旧: 赤 #cc0000）
@@ -414,7 +435,9 @@ async function renderNodeToPdfPage(
       h = maxH;
     }
     if (!isFirst) pdf.addPage();
-    pdf.addImage(img, 'PNG', margin, margin, w, h);
+    // 縦長で maxH に収めるため幅を縮めたぶん、x を margin 固定にすると縮小分が全部「右の余白」になり
+    // 内容が左に寄って見える（260728 クライアント #12）。A3ボード側（renderBoardToA3Page）と同じく水平中央へ。
+    pdf.addImage(img, 'PNG', (pageW - w) / 2, margin, w, h);
   } finally {
     document.body.removeChild(node);
   }
@@ -448,12 +471,16 @@ async function renderBoardToA3Page(pdf: jsPDF, node: HTMLElement): Promise<void>
 
 export async function downloadEstimatePdf(payload: EstimateExportPayload): Promise<void> {
   const pdf = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  // 見積先頭の画像（3h）は html2canvas 前に読み込んでおく（未ロードだと白紙で写るため・board 画像と同じ方式）。
-  if (payload.roomImageDataUrl) {
-    await preloadTextureUrls([payload.roomImageDataUrl]);
+  // 画像は html2canvas 前に読み込んでおく（未ロードだと白紙で写るため・board 画像と同じ方式）。
+  // roomImageDataUrl は App 側で「AI生成画像があるときだけ」渡される（3Dビューのスクショは渡さない・260728 #12）。
+  const heroUrl = payload.roomImageDataUrl;
+  if (heroUrl) {
+    await preloadTextureUrls([heroUrl]);
+    // 画像だけで1ページ（先頭）。以降の見積本文は addPage されるので isFirst=false。
+    await renderNodeToPdfPage(pdf, buildHeroImagePage(heroUrl, payload.projectName), true);
   }
   const estimateEl = buildEstimatePage(payload);
-  await renderNodeToPdfPage(pdf, estimateEl, true);
+  await renderNodeToPdfPage(pdf, estimateEl, !heroUrl);
 
   const board = payload.materialBoard;
   if (board.length > 0) {

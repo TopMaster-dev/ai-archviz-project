@@ -103,6 +103,13 @@ update profiles
 alter table profiles add column if not exists locked_at   timestamptz;
 alter table profiles add column if not exists lock_reason text;
 
+-- BYOK（自分のAPIキー入力）の許可フラグ（260728 クライアント #2）。
+-- 既定 false＝APIキーのメニューは全ユーザーで非表示。AI API 原価を開示してよい相手
+-- （NDA締結企業）にだけ運営が true を立てて開放する。
+-- 重要: locked_at と同様、下の「grant update (...)」列リストには絶対に含めないこと。
+--       含めると本人が自分で有効化できてしまう（RLS は行単位なので防げない）。
+alter table profiles add column if not exists byok_enabled boolean not null default false;
+
 drop trigger if exists trg_profiles_updated_at on profiles;
 create trigger trg_profiles_updated_at
   before update on profiles

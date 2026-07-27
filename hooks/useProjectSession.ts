@@ -15,7 +15,7 @@ import {
   FREE_PLAN_PROJECT_LIMIT,
 } from '../lib/db/projects.js';
 import { createEmptyProjectState, type ProjectState, type ProjectKind } from '../lib/project/projectState.js';
-import { refreshGeminiKey, resetGeminiKeyCache } from '../lib/byok.js';
+import { refreshGeminiKey, resetGeminiKeyCache, canUseByok } from '../lib/byok.js';
 import type { ProjectSummary, PlanType } from '../lib/db/types.js';
 import { consumeAiCredit as dbConsumeAiCredit } from '../lib/db/credits.js';
 import { deriveCreditStatus, ENABLE_FREE_PLAN_AI_CREDITS, type CreditStatus } from '../utils/freePlanCredits.js';
@@ -133,6 +133,41 @@ export function useProjectSession(): ProjectSession {
     await refreshProfile(); // 残数表示を更新
   }, [plan, refreshProfile]);
 
+  /**
+   * BYOK（自分のGeminiキー）のメモリキャッシュ制御（260728 クライアント #2）。
+   *
+   * profiles.byok_enabled が真のユーザーだけキーを読み込む。許可されていない／未ログインでは
+   * キャッシュを空にする＝過去に保存済みのキーがあっても生成リクエストに載せない。
+   * profile はログイン後に非同期で届くため、プロジェクト読込の effect とは分けて
+   * 「許可フラグの変化」を依存に持たせる（同じ effect に入れると初回 null のまま再評価されない）。
+   */
+  // 3状態で扱う: 未ログイン / プロフィール未取得（判定不能） / 判定確定。
+  // profile は取得失敗時にも null になる（AuthContext がエラーを握りつぶす）ため、null を
+  // そのまま「不許可」と解釈すると、通信の一瞬の失敗で許可ユーザーのキーが消え、以後の生成が
+  // 運営キー課金に切り替わってしまう（260728 敵対レビュー指摘）。判定不能の間は現状維持にする。
+  const loggedOut = !configured || !userId;
+  const byokState: 'logged-out' | 'unknown' | 'allowed' | 'denied' = loggedOut
+    ? 'logged-out'
+    : !profile
+      ? 'unknown'
+      : canUseByok(profile)
+        ? 'allowed'
+        : 'denied';
+  useEffect(() => {
+    if (byokState === 'unknown') return; // 判定できるまで触らない
+    if (byokState === 'allowed') {
+      let cancelled = false;
+      // 解決前にログアウト/不許可へ変わったら、遅れて届いたキーでキャッシュを復活させない。
+      void refreshGeminiKey().then((key) => {
+        if (cancelled && key) resetGeminiKeyCache();
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    resetGeminiKeyCache();
+  }, [byokState]);
+
   // ログイン時に最新プロジェクトを読み込む（無ければ作成）。
   useEffect(() => {
     let active = true;
@@ -146,8 +181,6 @@ export function useProjectSession(): ProjectSession {
     }
     (async () => {
       setStatus('loading');
-      // BYOK: 保存済みの Gemini キーをメモリへ読み込む（生成 fetch で使用）。プロジェクト読込とは独立。
-      void refreshGeminiKey();
       try {
         const list = await listProjects();
         if (!active) return;

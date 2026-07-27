@@ -39,6 +39,13 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   // コンテナ基準の絶対配置（親の transform 有無に依存しない）。left はコンテナ内でクランプして端でもはみ出さない。
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [anchorPos, setAnchorPos] = useState<{ left: number; width: number } | null>(null);
+
+  // ポップアップ幅（アンカー未測定時のフォールバックと共通化）。下の grid 高さ計算と必ず同じ値を使う。
+  const popupWidthCss = anchorPos ? `${anchorPos.width}px` : 'min(90vw, 360px)';
+  // サムネイル一覧は「最大2行、3行目以降はスクロール」（260728 クライアント要望 #7・3Dモデル増加への備え）。
+  // 1セル = (幅 − p-4×2(32) − pr-1(4) − スクロールバー(8) − gap×3(24)) / 4 = (幅 − 68) / 4
+  // 2行の高さ = セル×2 + gap(8) = (幅 − 68) / 2 + 8 。幅から導出するので、幅を変えても行数が崩れない。
+  const gridMaxHeight = `calc((${popupWidthCss} - 68px) / 2 + 8px)`;
   const measureAnchor = useCallback((el: HTMLElement | null) => {
     const c = containerRef.current;
     if (!c || !el) {
@@ -151,8 +158,8 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
           // 中央寄せは transform ではなく marginLeft で行う（入場アニメの slide-in が transform を使うため競合回避）。
           style={
             anchorPos
-              ? { left: anchorPos.left, width: anchorPos.width, marginLeft: -anchorPos.width / 2 }
-              : { right: 0, width: 'min(90vw, 360px)' }
+              ? { left: anchorPos.left, width: popupWidthCss, marginLeft: -anchorPos.width / 2 }
+              : { right: 0, width: popupWidthCss }
           }
         >
           <div className="flex justify-between items-center mb-3 px-1">
@@ -168,7 +175,12 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
               </svg>
             </button>
           </div>
-          <div className="grid grid-cols-4 gap-2 max-h-[300px] overflow-y-auto pr-1 scroll-dark">
+          {/* 2行ぶんだけ見せて以降はスクロール。scrollbarGutter:'stable' でスクロールバー出現時にセル幅が
+              揺れる（＝行数が変わって見える）のを防ぐ。 */}
+          <div
+            className="grid grid-cols-4 gap-2 overflow-y-auto pr-1 scroll-dark"
+            style={{ maxHeight: gridMaxHeight, scrollbarGutter: 'stable' }}
+          >
             {selectedAssetCategory === 'アップロード' && onUploadModel && (
               <button
                 type="button"

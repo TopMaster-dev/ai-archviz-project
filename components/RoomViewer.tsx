@@ -57,6 +57,7 @@ import { hasInvisibleAncestor } from '../utils/raycastVisibility.js';
 import { applyFurniturePatch, resolveMoveMembers, applyGroupRotation, computeGroupCentroidXZ, type Vec2XZ } from '../utils/furnitureGroupMove.js';
 import { solidRectsForSegment } from '../utils/wallOpeningTiling.js';
 import { toggleBeamSelection } from '../utils/beamSelection.js';
+import { surfaceFromMeshName } from '../utils/meshSurface.js';
 
 // three.jsのジオメトリをパストレーサー(BVH)対応に拡張
 if (!(THREE.BufferGeometry.prototype as any).computeBoundsTree) {
@@ -609,6 +610,31 @@ function getSurfaceSizeFromMesh(mesh: THREE.Mesh): { widthM: number; heightM: nu
   return { widthM, heightM };
 }
 
+/**
+ * 異方性フィルタの上限（GPU依存）。Canvas 生成時（onCreated）に記録する。
+ * 未取得（描画前・テスト環境）は 1＝three.js 既定と同じ挙動。
+ */
+let maxTextureAnisotropy = 1;
+export function setMaxTextureAnisotropy(v: number): void {
+  if (Number.isFinite(v) && v > 0) maxTextureAnisotropy = v;
+}
+
+/**
+ * テクスチャに異方性フィルタを適用する（260728 クライアント #5「AIレンダをよりシームレスに見せたい」）。
+ *
+ * 床や広い壁は RepeatWrapping で高頻度に繰り返すため、斜めから見るとミップマップの過剰縮小で
+ * ちらつき・モアレが出て「繰り返しパターン」が目に付きやすくなる。異方性フィルタはこの劣化を抑え、
+ * 3D段の見えが整う＝それを img2img でなぞる AIレンダの結果も落ち着く。
+ * 16以上は費用対効果が低くGPU負荷だけ増えるため 8 で頭打ちにする。
+ */
+function applyTextureAnisotropy(texture: THREE.Texture): void {
+  const target = Math.min(8, maxTextureAnisotropy);
+  if (texture.anisotropy !== target) {
+    texture.anisotropy = target;
+    texture.needsUpdate = true;
+  }
+}
+
 function applyRealSizeTextureRepeat(
   texture: THREE.Texture,
   shortEdgeMeters: number,
@@ -686,6 +712,7 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
       tx.center.set(0.5, 0.5);
       tx.rotation = rotationRad; // テクスチャの向き（度・260613 row 164）
       applyRealSizeTextureRepeat(tx, shortEdgeMeters, surface?.widthM, surface?.heightM, tileMeters, uvInMeters);
+      applyTextureAnisotropy(tx); // 斜め視の床・広い壁のちらつき/モアレを抑える（260728 #5）
       tx.needsUpdate = true;
     };
     const texture = new THREE.TextureLoader().load(prod.textureUrl, applyTx);
@@ -725,6 +752,7 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
     const t = texture.clone();
     t.wrapS = t.wrapT = THREE.RepeatWrapping;
     t.colorSpace = THREE.SRGBColorSpace;
+    applyTextureAnisotropy(t); // 繰り返し面のちらつき抑制（260728 #5）
     return t;
   }, [texture]);
 
@@ -2095,11 +2123,12 @@ const CustomBIMScene = ({
           e.stopPropagation();
           if (isDraggingRef.current) return;
           const meshName = e.object.name;
-          const lowerName = meshName.toLowerCase();
-          let category: MaterialCategory = 'Wall';
-          if (lowerName.includes('floor')) category = 'Floor';
-          else if (lowerName.includes('ceiling')) category = 'Ceiling';
-          
+          // 面の判定は見積/マテリアルボードと同じ関数を使う（260728 #3b）。
+          // ここと utils/estimateExport.classifySurface が別実装だと、同じメッシュが
+          // 3Dでは床・PDFでは壁のように食い違うため、必ず共有関数を経由させる。
+          const kind = surfaceFromMeshName(meshName);
+          const category: MaterialCategory = kind === 'floor' ? 'Floor' : kind === 'ceiling' ? 'Ceiling' : 'Wall';
+
           // Multi-selection: Shift のみ（260703 クライアント要望で Ctrl/Cmd は除外）。
           onMeshClick(category, meshName, e.shiftKey);
         }}
@@ -3605,6 +3634,8 @@ export const RoomViewer: React.FC<RoomViewerProps> = ({
           // AIレンダリングのスナップショットが、隠しサムネイル生成用キャンバス等ではなく
           // このメイン3Dルームキャンバスを確実に選べるよう目印を付ける（useAiRenderer 参照）。
           gl.domElement.dataset.ariseRoom = '1';
+          // 異方性フィルタの上限を記録（テクスチャ適用時に使う・260728 #5）。
+          setMaxTextureAnisotropy(gl.capabilities.getMaxAnisotropy());
           // 2D→3D のローディング・オーバーレイを解除（3Dキャンバス生成後、数フレーム描画してから隠す・260630）。
           requestAnimationFrame(() => requestAnimationFrame(() => useLoadingStore.getState().hide('view')));
         }}

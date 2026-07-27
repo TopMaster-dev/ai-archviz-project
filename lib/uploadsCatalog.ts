@@ -1,6 +1,6 @@
 import type { FurnitureCatalogItem, Product, MaterialCategory } from '../types.js';
 import type { UserUpload } from './db/uploads.js';
-import { updateUserUploadMetadata, listUserUploads, uploadUserThumbnailPng } from './db/uploads.js';
+import { updateUserUploadMetadata, listUserUploads, uploadUserThumbnailPng, getUserUpload } from './db/uploads.js';
 import { normalizeModelUnit, unitGeometryScale, sanitizeGeometryScale } from '../utils/modelUnit.js';
 import { normalizeUprightXDeg } from '../utils/modelOrientation.js';
 
@@ -110,10 +110,19 @@ export async function ensureUploadFootprint(upload: UserUpload): Promise<Furnitu
     const dims = await computeGltfFootprintBaseMm(upload.storageUrl, geomScale, uprightXDeg);
     item.footprint2d = { widthMm: dims.width, depthMm: dims.depth };
     try {
-      await updateUserUploadMetadata(upload.id, {
-        ...(upload.metadata ?? {}),
-        footprint2d: { widthMm: dims.width, depthMm: dims.depth },
-      });
+      // 計測は3Dモデルのダウンロードを伴い時間がかかるため、その間に persistUserModelThumbnail が
+      // thumbnailUrl を書いていることがある。開始時のスナップショットへマージすると、その値を
+      // 消してしまい次回起動でサムネイルが再生成される（260728 #7）。直前に最新行を取り直す。
+      // 取得に失敗した場合は throw されるので、この write 自体を行わない（古い値で上書きしない）。
+      // 行が消えている場合も書かない。footprint は次回起動で再計測されるだけで実害が小さく、
+      // 他キー（thumbnailUrl 等）を失う方が高くつく。
+      const fresh = await getUserUpload(upload.id);
+      if (fresh) {
+        await updateUserUploadMetadata(upload.id, {
+          ...(fresh.metadata ?? {}),
+          footprint2d: { widthMm: dims.width, depthMm: dims.depth },
+        });
+      }
     } catch {
       /* 永続化失敗（ゲスト/未構成/ネットワーク）→ 当セッションは実測値で表示。次回起動で再計測。 */
     }
@@ -133,7 +142,12 @@ export async function persistUserModelThumbnail(modelUrl: string, dataUrlPng: st
   const up = models.find((u) => u.storageUrl === modelUrl);
   if (!up) return null;
   const publicUrl = await uploadUserThumbnailPng(up.id, dataUrlPng);
-  await updateUserUploadMetadata(up.id, { ...(up.metadata ?? {}), thumbnailUrl: publicUrl });
+  // アップロード完了までの間に ensureUploadFootprint が footprint2d を書いている可能性があるため、
+  // 最新行へマージする（逆向きの取りこぼし防止・260728 #7）。
+  // 読み取り失敗は throw、行が消えていれば null。どちらも「古い値で上書きしない」ために書かない。
+  const fresh = await getUserUpload(up.id);
+  if (!fresh) return null;
+  await updateUserUploadMetadata(up.id, { ...(fresh.metadata ?? {}), thumbnailUrl: publicUrl });
   return publicUrl;
 }
 

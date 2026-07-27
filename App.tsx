@@ -220,11 +220,40 @@ const thumbnailOrientByUrl = new Map<string, { uprightXDeg: number; forwardYawDe
 // URL→永続化済みサムネイルURL（ユーザーアップロードは Supabase 公開URL・260727 #2）。
 // 一度生成・保存すれば、以後は再生成せずこの URL を表示に使う（公式は Cloudinary 静的URLで解決するため対象外）。
 const persistedThumbnailByUrl = new Map<string, string>();
+// 404 が確認された永続サムネイルURL（実体が消えている）。カタログ側は古い thumbnailUrl を持ったままなので、
+// これを覚えておかないと「登録解除 → 再生成要求 → seed/props が同じ死んだURLを再登録 → 生成キャンセル」
+// という自己打ち消しループになり、復旧できない（260728 敵対レビュー指摘）。
+const deadThumbnailUrls = new Set<string>();
 export const registerPersistedThumbnail = (url: string, thumbUrl: string) => {
+    if (deadThumbnailUrls.has(thumbUrl)) return; // 死んだURLは二度と採用しない
     if (thumbUrl && persistedThumbnailByUrl.get(url) !== thumbUrl) {
         persistedThumbnailByUrl.set(url, thumbUrl);
+        // 永続URLが判明した時点で、まだ着手していない生成予約を取り消す（260728 クライアント #7:
+        // 「サムネイルが無いときだけ生成する」ことの担保）。従来はキュー投入後に判明しても止められず、
+        // 保存済みモデルでも一度は WebGL 描画が走っていた。描画中の1件だけは中断しない（Canvas破棄で
+        // 表示が乱れるため。結果は永続URLで上書きされるので実害なし）。
+        const timerId = thumbnailEnqueueTimers.get(url);
+        if (timerId !== undefined) {
+            window.clearTimeout(timerId);
+            thumbnailEnqueueTimers.delete(url);
+        }
+        const queuedIdx = generationQueue.indexOf(url);
+        if (queuedIdx > 0) generationQueue.splice(queuedIdx, 1); // idx 0 = 描画中なので触らない
         notifyCacheUpdate();
     }
+};
+
+/**
+ * 永続サムネイルURLが 404（保存先から消えた）だったときに登録を取り消す（260728 #7）。
+ * これを消さないと requestThumbnail の persisted ガードに阻まれ、再生成の復旧経路が永久に死ぬ。
+ */
+/** 404 が確認済みのサムネイルURLか（カタログ由来の古い値を弾くため）。 */
+export const isDeadThumbnailUrl = (thumbUrl: string) => deadThumbnailUrls.has(thumbUrl);
+
+export const unregisterPersistedThumbnail = (url: string) => {
+    const dead = persistedThumbnailByUrl.get(url);
+    if (dead) deadThumbnailUrls.add(dead); // 同じURLでの再登録を以後ブロックする
+    if (persistedThumbnailByUrl.delete(url)) notifyCacheUpdate();
 };
 
 export const requestThumbnail = (url: string, uprightXDeg = 0, forwardYawDeg = 0) => {
@@ -335,8 +364,16 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
 
     useEffect(() => {
         if (!enabled) return;
-        if (!currentUrl && generationQueue.length > 0) {
-            setCurrentUrl(generationQueue[0]);
+        if (currentUrl || generationQueue.length === 0) return;
+        // キュー滞留中に解決した（＝永続URLが判明した／生成済みになった）URLは描画せず捨てる（260728 #7）。
+        while (generationQueue.length > 0) {
+            const next = generationQueue[0];
+            if (globalThumbnailCache[next] || persistedThumbnailByUrl.has(next)) {
+                generationQueue.shift();
+                continue;
+            }
+            setCurrentUrl(next);
+            return;
         }
     }, [enabled, currentUrl, tick]);
 
@@ -430,7 +467,10 @@ const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0, thumbna
     const isOfficial = isOfficialCatalogModelUrl(url);
     const cloudinaryStatic = getThumbnailImageUrlFromGlbUrl(url); // 公式のみ意味を持つ
     // 初回 state は prop/マップから読むが、マップへの書込は effect で行う（レンダー中の副作用を避ける・敵対レビュー）。
-    const persisted = thumbnailUrl ?? persistedThumbnailByUrl.get(url);
+    // 404 が確認済みのURLは除外する。prop（カタログの古い thumbnailUrl）はマップを介さず直接来るため、
+    // ここで弾かないと復旧要求のたびに死んだURLへ戻ってしまう（260728 敵対レビュー指摘）。
+    const persistedRaw = thumbnailUrl ?? persistedThumbnailByUrl.get(url);
+    const persisted = persistedRaw && !isDeadThumbnailUrl(persistedRaw) ? persistedRaw : undefined;
 
     const [imgSrc, setImgSrc] = useState<string>(
         globalThumbnailCache[url] || persisted || (isOfficial ? cloudinaryStatic : '')
@@ -469,6 +509,9 @@ const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0, thumbna
                 onError={(e) => {
                     // 静的URL(公式・初回未生成)や永続URL(Supabaseが404=削除済)なら、生成キューへ。
                     if (imgSrc === cloudinaryStatic || imgSrc === persisted) {
+                        // 永続URLが死んでいる場合は登録を外してから積む。外さないと requestThumbnail の
+                        // persisted ガードで弾かれ、この復旧経路が機能しない（260728 #7）。
+                        if (imgSrc === persisted) unregisterPersistedThumbnail(url);
                         requestThumbnail(url, uprightXDeg, forwardYawDeg);
                         e.currentTarget.style.display = 'none';
                         if (e.currentTarget.nextElementSibling) e.currentTarget.nextElementSibling.classList.remove('hidden');
@@ -3063,9 +3106,15 @@ const App: React.FC = () => {
       // （260613: 巾木の有無でクロス壁面の面積が変わらない不具合の修正）。開口の差し引き範囲も巾木上端に合わせる。
       if (segBottomMm === 0) {
         const wallProd = selections[meshName];
-        const wallSettings = wallProd ? materialSettings[wallProd.id] : undefined;
+        // 素材未割当の壁でも巾木は有効にできる（設定は 'default_no_tex' キーに入る）。3D描画・巾木見積ライン・
+        // 素材パネルは全てこのフォールバックで読むのに、ここだけ prod 必須だったため「巾木ONでも壁面積が変わらない」
+        // 症状になっていた（260728 クライアント #11）。他3箇所と同じキー解決に揃える。
+        const wallSettings = materialSettings[wallProd ? wallProd.id : 'default_no_tex'];
         if (wallSettings?.baseboardEnabled) {
-          const bbHeight = Math.min(wallSettings.baseboardHeight ?? 60, segTopMm);
+          // クランプは3D描画（RoomViewer の actualWallH）と同じにする。以前は上限がセグメント高そのもので
+          // 下限ガードも無く、腰壁下段より巾木が高いと面積がちょうど0になり、その壁材の行が見積からも
+          // マテリアルボードからも丸ごと消えていた（3Dには描かれているのに）。最低1mmは残す。
+          const bbHeight = Math.min(Math.max(0, wallSettings.baseboardHeight ?? 60), Math.max(0, segTopMm - 1));
           segBottomMm = bbHeight;
           grossArea = (distMm * (segTopMm - bbHeight)) / 1000000;
         }
@@ -3318,34 +3367,25 @@ const App: React.FC = () => {
 
   const [estimateExportBusy, setEstimateExportBusy] = useState(false);
 
-  // 見積書PDFの先頭に載せる「現在表示中の画像」を書き出し時に取得（3h・260720）。
-  // AI編集中はAI生成画像を優先し、それ以外は現在ビュー（3D/2Dスケッチ）のキャンバスを取り込む。取得できなければ undefined。
+  // 見積書PDFに付ける画像を書き出し時に取得（3h・260720 → 260728 クライアント #12 で仕様変更）。
+  // 変更点: 「AI生成画像がある場合のみ」画像ページを付ける。3D/2Dビューのスクリーンショットは付けない
+  //（クライアント指摘:「3Dビューの場合はスクショは必要ない」）。無ければ undefined＝画像ページ自体を出さない。
+  // aiEditOpen ゲートも外す: 3Dビューから書き出しても、生成済みのAI画像があればそれを使う。
   const captureEstimateHeroImage = useCallback(async (): Promise<string | undefined> => {
     try {
-      if (aiEditOpen && aiEditVersions.length > 0) {
-        const active =
-          aiEditVersions.find((v) => v.id === aiEditActiveVersionId) ?? aiEditVersions[aiEditVersions.length - 1];
-        if (active?.outputImageDataUrl) return await ensureDataUrl(active.outputImageDataUrl);
-      }
-      const sel = viewMode === '3D' ? 'canvas[data-arise-room]' : 'canvas[data-arise-sketch]';
-      const c = document.querySelector(sel) as HTMLCanvasElement | null;
-      if (!c || c.width < 8 || c.height < 8) return undefined;
-      const scale = Math.min(1, 1400 / c.width);
-      const tw = Math.max(1, Math.round(c.width * scale));
-      const th = Math.max(1, Math.round(c.height * scale));
-      const tmp = document.createElement('canvas');
-      tmp.width = tw;
-      tmp.height = th;
-      const tctx = tmp.getContext('2d');
-      if (!tctx) return undefined;
-      tctx.fillStyle = '#0b0b0b'; // 2Dスケッチは透明背景のためJPEGの黒落ち防止に画面と同じ背景を敷く
-      tctx.fillRect(0, 0, tw, th);
-      tctx.drawImage(c, 0, 0, tw, th);
-      return tmp.toDataURL('image/jpeg', 0.85);
+      if (aiEditVersions.length === 0) return undefined;
+      const active =
+        aiEditVersions.find((v) => v.id === aiEditActiveVersionId) ?? aiEditVersions[aiEditVersions.length - 1];
+      if (!active?.outputImageDataUrl) return undefined;
+      const resolved = await ensureDataUrl(active.outputImageDataUrl);
+      // ensureDataUrl は取得に失敗すると「元のURLをそのまま」返す仕様（fail-soft）。
+      // それを画像ページに載せると読めない <img> になり、真っ白な1ページ目が出てしまうため、
+      // data URL に解決できたときだけ採用する（画像が無ければページごと出さない）。
+      return resolved.startsWith('data:') ? resolved : undefined;
     } catch {
-      return undefined; // 取得できなくても見積書は出せる（画像なしで続行）
+      return undefined; // 取得できなくても見積書は出せる（画像ページなしで続行）
     }
-  }, [aiEditOpen, aiEditVersions, aiEditActiveVersionId, viewMode]);
+  }, [aiEditVersions, aiEditActiveVersionId]);
 
   const executeEstimateExport = useCallback(async (kind: 'pdf' | 'csv') => {
     if (!canExportEstimate || estimateExportBusy) return;

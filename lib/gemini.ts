@@ -383,8 +383,13 @@ async function catalogAgentReply(
         .join('\n')
     : '';
   const projectBlock = opts?.projectContext ? `\n\n${opts.projectContext}` : '';
+  // カタログが空のときに「上記カタログから index で挙げろ」と指示すると、存在しない番号を捏造しがち
+  // （resolveAgentRecommendations で捨てられるが、本文だけ実在しない商品を語る）。空なら明示的に禁止する。
+  const recommendLine = catalog.length
+    ? '- 家具やコーディネートを提案するときは、上記カタログから該当商品を index で挙げる（カタログに無いものは挙げない）。家具提案が不要な相談では空配列にする。メーカー・品番・価格・商品URLは表示側がカタログから自動付与するため、reason には選定理由のみを簡潔に書く。'
+    : '- 利用可能な商品カタログが無いため、recommendations は必ず空配列 [] にする。具体的なメーカー名・品番・価格・商品URLは推測で書かず、reply では一般的な設計上の助言のみを述べる。';
   const system = `${AGENT_ADVISOR_INTRO}
-- 家具やコーディネートを提案するときは、上記カタログから該当商品を index で挙げる（カタログに無いものは挙げない）。家具提案が不要な相談では空配列にする。メーカー・品番・価格・商品URLは表示側がカタログから自動付与するため、reason には選定理由のみを簡潔に書く。
+${recommendLine}
 - 出力は必ず次の形式の JSON のみ（前後に説明やマークダウンを付けない）:
 {"reply":"<会話的な日本語の助言。必須。recommendationsの有無に関わらず必ず入れる>","recommendations":[{"index":<カタログ番号(整数)>,"name":"<見積もりに載せる自然な日本語名>","reason":"<短い推薦理由>"}]}${projectBlock}${catalogBlock}`;
   const payload = {

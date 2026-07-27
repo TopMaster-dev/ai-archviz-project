@@ -1,5 +1,6 @@
 import type { AiEstimateItem, FurnitureItem } from '../types.js';
 import type { BaseboardEstimateRow } from './baseboardEstimate.js';
+import { surfaceFromMeshName } from './meshSurface.js';
 
 /** App の costBreakdown 行と同一形状 */
 export interface CostBreakdownEntry {
@@ -110,11 +111,27 @@ function roundYen(n: number): number {
   return Math.round(n);
 }
 
+/**
+ * メッシュ名から「3Dで実際に貼られた面」を判定する（見積セクション＋マテリアルボードの共通の真実源）。
+ *
+ * クライアント要望（260728 #3b）:「見積の 壁・床・天井 区分は素材カタログのカテゴリではなく、
+ * 3Dビューで実際に貼られた面（床/壁/天井/梁）で判定し、マテリアルボードと一致させる」。
+ *
+ * Sketch_* の厳密名を最優先し、取込み3Dモデル（任意のメッシュ名）だけ名前ヒューリスティックで拾う。
+ * 判定順は固定（ceiling を floor より先に見る＝'floor_ceiling' のような複合名の取り違え防止）。
+ * ここを変えると PDF/CSV のセクションとマテリアルボードのスワッチが同時に変わる（呼び出しは本関数1本）。
+ */
 export function classifySurface(meshName: string): SurfaceKey {
+  // 1) スケッチ由来の確定名（最優先・完全一致/前方一致）
   if (meshName === 'Sketch_Floor') return 'floor';
   if (meshName === 'Sketch_Ceiling') return 'ceiling';
   if (meshName.startsWith('Beam_')) return 'beam';
-  return 'wall';
+  if (meshName.startsWith('Sketch_Wall_') || meshName === 'Sketch_UpperBand') return 'wall';
+
+  // 2) 取込み3Dモデルの任意メッシュ名は共有関数へ委譲する。
+  //    RoomViewer（3Dで面をクリックしたときの分類）と同じ関数を使うことで、
+  //    「3Dでは床なのにPDFでは壁」というズレが原理的に起きないようにする。
+  return surfaceFromMeshName(meshName);
 }
 
 /** 単一ルーム前提：メッシュ名から使用箇所ラベル */
