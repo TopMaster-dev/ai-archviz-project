@@ -193,7 +193,7 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
             // ボタンから隙間（gap の余白）へ抜けたら保留中のオープンを取消（閉じている時のみ・誤オープンの残路を塞ぐ）。
             // 既に開いている場合は切替に遅延を使わないため触らない（自動クローズはコンテナ側 onMouseLeave が担当）。
             onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
-            className={`h-full w-[60px] rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
+            className={`h-full w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
               selectedAssetCategory === cat
                 ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
                 : cat === 'アップロード'
@@ -201,7 +201,8 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
                   : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
             }`}
           >
-            <span className="text-[10px] font-black uppercase tracking-widest">{cat}</span>
+            {/* 長いカテゴリ名（例: フロアランプ）が枠内で折り返して溢れないよう、幅を内容に合わせ、ラベルは折り返さない（260727）。 */}
+            <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
           </button>
         ))}
       </div>
