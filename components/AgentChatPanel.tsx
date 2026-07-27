@@ -521,6 +521,11 @@ export function AgentChatPanel({
                     ]
                       .filter(Boolean)
                       .join(' ・ ');
+                    // 商品リンクは「検索」に統一する（260727・クライアント報告: AIが返す商品ページURLはリンク切れ/404が多い）。
+                    // モデルが生成した直リンクは信頼できないため、メーカー+商品名+品番の Google 検索へ誘導し、確実に到達できるようにする。
+                    // この検索URLは表示リンクにも「見積に追加」時の商品URLにも使い、見積側にも404が保存されないようにする。
+                    const searchQuery = [rec.brand, rec.name, rec.modelNumber].filter(Boolean).join(' ').trim();
+                    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery || (rec.name ?? ''))}`;
                     return (
                       <div key={key} className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-2">
                         <div className="flex items-start justify-between gap-2">
@@ -530,35 +535,24 @@ export function AgentChatPanel({
                             {rec.reason && (
                               <div className="mt-0.5 text-[10px] leading-relaxed text-neutral-500">{rec.reason}</div>
                             )}
-                            {rec.productUrl && /^https?:\/\//i.test(rec.productUrl) ? (
-                              <a
-                                href={rec.productUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
-                              >
-                                商品ページ ↗
-                              </a>
-                            ) : (
-                              // URLが無い/無効な場合の保険（260725 ①c）: メーカー+商品名+品番で Google 検索へ。
-                              <a
-                                href={`https://www.google.com/search?q=${encodeURIComponent(
-                                  [rec.brand, rec.name, rec.modelNumber].filter(Boolean).join(' '),
-                                )}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
-                              >
-                                Google で検索 ↗
-                              </a>
-                            )}
+                            {/* AI生成の直リンクは404が多いため表示せず、必ず到達できる商品検索リンクにする（260727・クライアント報告対応）。 */}
+                            <a
+                              href={searchUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
+                              title="メーカー名・商品名・品番で検索します（確実に開けます）"
+                            >
+                              商品を検索 ↗
+                            </a>
                           </div>
                           {onAddEstimateItem && (
                             <button
                               type="button"
                               disabled={added}
                               onClick={() => {
-                                onAddEstimateItem(rec);
+                                // 見積にも 404 の直リンクを載せないよう、確実に開ける検索URLを商品URLとして渡す（260727）。
+                                onAddEstimateItem({ ...rec, productUrl: searchUrl });
                                 setAddedKeys((s) => new Set(s).add(key));
                               }}
                               className="tap inline-flex shrink-0 items-center gap-0.5 rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
