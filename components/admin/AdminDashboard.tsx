@@ -2,6 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import { getSupabase } from '../../lib/db/supabaseClient.js';
 import { exitAdminDashboard } from '../../lib/admin/adminClient.js';
+import { ModelFilePreview } from '../ModelFilePreview.js';
+import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from '../../utils/modelUnit.js';
+import { normalizeUprightXDeg, normalizeYawDeg } from '../../utils/modelOrientation.js';
 
 /**
  * 運営（管理者）向けダッシュボード（260711・フェーズ1）。URL に ?admin を付けて開く。
@@ -262,20 +265,80 @@ function Card({ children }: { children: React.ReactNode }) {
   return <div className="rounded-xl border border-white/10 bg-neutral-900/70 p-4">{children}</div>;
 }
 
+const NEW_CATEGORY_SENTINEL = '__new__';
+
 /**
- * 公式3Dモデルを Cloudinary（3d_assets）へアップロードする（①・260726）。
- * サーバ（sign-3d-upload）で署名を発行し、ブラウザから Cloudinary へ直送する（署名付き直アップロード）。
- * API Secret はサーバ内のみ。保存先フォルダは Upload Preset「3d_assets upload」が固定する（3D は raw）。
+ * 公式3Dモデルを Cloudinary（3d_assets）へアップロードする（①・260726→260727）。
+ * サーバ（sign-3d-upload）で署名を発行し、ブラウザから Cloudinary へ直送する（署名付き直アップロード・API Secret はサーバ内のみ）。
+ * 260727: ユーザー側アップロードと同じ「向き調整プレビュー＋単位調整」＋「カテゴリ選択/新規作成」を追加。
+ * 選んだ向き/単位/寸法(footprint)/カテゴリはアップロード直後に set-3d-meta で Cloudinary context へ保存し、配置・分類に反映する。
  */
-function OfficialModelUploadCard() {
+function OfficialModelUploadCard({ onCategoriesChanged }: { onCategoriesChanged?: () => void }) {
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [result, setResult] = useState<{ publicId: string; url: string } | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
+  // 取り込み単位・向き（ユーザー側 UploadPanel と同一仕様）。
+  const [unit, setUnit] = useState<ModelUnit>('auto');
+  const [uprightXDeg, setUprightXDeg] = useState(0);
+  const [yawDeg, setYawDeg] = useState(0);
+  const yawTouchedRef = useRef(false);
+  const latestSuggestedYawRef = useRef(0);
+  const handleSuggestYaw = React.useCallback((deg: number) => {
+    const y = normalizeYawDeg(deg);
+    latestSuggestedYawRef.current = y;
+    if (!yawTouchedRef.current) setYawDeg(y);
+  }, []);
+  // カテゴリ選択/新規作成。
+  const [categories, setCategories] = useState<string[]>([]);
+  const [selectedCategory, setSelectedCategory] = useState('');
+  const [newCategory, setNewCategory] = useState('');
+
+  const loadCategories = React.useCallback(async () => {
+    try {
+      const r = await (await adminFetch('furniture-categories')).json();
+      if (Array.isArray(r?.categories)) setCategories(r.categories.map((c: { name: string }) => c.name));
+    } catch {
+      /* 一覧取得失敗は無視（新規作成は可能） */
+    }
+  }, []);
+  useEffect(() => { void loadCategories(); }, [loadCategories]);
 
   const ACCEPT = '.glb,.gltf,.fbx,.obj';
   const isAccepted = (name: string) => /\.(glb|gltf|fbx|obj)$/i.test(name);
+
+  const resetInputs = () => {
+    setUnit('auto');
+    setUprightXDeg(0);
+    setYawDeg(0);
+    yawTouchedRef.current = false;
+    latestSuggestedYawRef.current = 0;
+    setSelectedCategory('');
+    setNewCategory('');
+  };
+
+  // 選んだ向き/単位で footprint(mm) をクライアント計測（ユーザー側 ensureUploadFootprint と同じ計算・FBX/OBJ も可）。
+  const computeFootprint = async (f: File): Promise<{ width: number; depth: number } | null> => {
+    try {
+      const dot = f.name.lastIndexOf('.');
+      const ext = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : '';
+      const raw = URL.createObjectURL(f);
+      const measureUrl = ext ? `${raw}#${ext}` : raw; // #ext はローダの形式判定に必須（fbx/obj）。
+      try {
+        const { computeGltfFootprintBaseMm } = await import('../../utils/furnitureModelFootprint.js');
+        const dims = await computeGltfFootprintBaseMm(measureUrl, unitGeometryScale(unit), normalizeUprightXDeg(uprightXDeg));
+        return dims && Number.isFinite(dims.width) && Number.isFinite(dims.depth) ? { width: dims.width, depth: dims.depth } : null;
+      } finally {
+        URL.revokeObjectURL(raw);
+      }
+    } catch {
+      return null; // 計測失敗時は footprint 無しで続行（向き/カテゴリは保存される）。
+    }
+  };
+
+  const chosenCategory = (): string =>
+    (selectedCategory === NEW_CATEGORY_SENTINEL ? newCategory : selectedCategory).trim();
 
   const upload = async () => {
     if (!file) return;
@@ -310,9 +373,36 @@ function OfficialModelUploadCard() {
         setMsg(`アップロードに失敗しました（${upJson?.error?.message ?? up.status}）。`);
         return;
       }
-      setResult({ publicId: String(upJson.public_id), url: String(upJson.secure_url ?? '') });
-      setMsg('アップロードしました。家具カタログ（/api/furniture）に反映されます（エディタの再読込で反映）。サムネイルは初回表示時に自動生成されます。');
+      const publicId = String(upJson.public_id);
+      setResult({ publicId, url: String(upJson.secure_url ?? '') });
+
+      // 3) 向き/単位/footprint/カテゴリを Cloudinary context へ保存（set-3d-meta・best-effort）。
+      const fp = await computeFootprint(file);
+      const params = new URLSearchParams({ publicId });
+      if (fp) { params.set('widthMm', String(Math.round(fp.width))); params.set('depthMm', String(Math.round(fp.depth))); }
+      params.set('forwardYawDeg', String(normalizeYawDeg(yawDeg)));
+      params.set('uprightXDeg', String(normalizeUprightXDeg(uprightXDeg)));
+      const us = unitGeometryScale(unit);
+      if (us != null) { params.set('unitScale', String(us)); params.set('unit', unit); }
+      const cat = chosenCategory();
+      if (cat) params.set('category', cat);
+      let metaOk = true;
+      try {
+        const metaRes = await adminFetch(`set-3d-meta&${params.toString()}`, 'POST');
+        metaOk = metaRes.ok;
+      } catch {
+        metaOk = false;
+      }
+
+      setMsg(
+        (metaOk
+          ? `アップロードし、向き・単位${cat ? `・カテゴリ「${cat}」` : ''}を保存しました。`
+          : 'アップロードは成功しましたが、向き/カテゴリの保存に失敗しました（既定の向きで表示されます）。') +
+          ' 家具カタログ（/api/furniture）に反映されます（エディタの再読込で反映）。サムネイルは初回表示時に自動生成されます。',
+      );
+      if (cat) { void loadCategories(); onCategoriesChanged?.(); }
       setFile(null);
+      resetInputs();
       if (inputRef.current) inputRef.current.value = '';
     } catch {
       setMsg('通信エラーが発生しました。');
@@ -326,37 +416,197 @@ function OfficialModelUploadCard() {
       <h3 className="mb-1 text-sm font-bold text-emerald-300">公式3Dモデルのアップロード（Cloudinary）</h3>
       <p className="mb-3 text-[11px] leading-relaxed text-neutral-500">
         FBX / GLB / GLTF / OBJ を公式カタログ（Cloudinary の <span className="font-mono">3d_assets</span>）へ直接アップロードします。
-        ブラウザから Cloudinary へ直送し、署名はサーバ側で発行します（API Secret はクライアントに露出しません）。
-        アップロード後、家具カタログ（<span className="font-mono">/api/furniture</span>）に表示・反映されます。
+        署名はサーバ側で発行（API Secret 非露出）。向き・単位・カテゴリを調整してから保存でき、配置時の向き/サイズ合わせが正しくなります。
         ※一般ユーザーのアップロードは Supabase 管理で、この公式領域とは分離されています。
       </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPT}
-          onChange={(e) => {
-            setFile(e.target.files?.[0] ?? null);
-            setResult(null);
-            setMsg(null);
-          }}
-          className="text-xs text-neutral-300 file:mr-2 file:rounded-md file:border-0 file:bg-neutral-800 file:px-3 file:py-1.5 file:text-neutral-200 hover:file:bg-neutral-700"
-        />
+      <input
+        ref={inputRef}
+        type="file"
+        accept={ACCEPT}
+        onChange={(e) => {
+          setFile(e.target.files?.[0] ?? null);
+          setResult(null);
+          setMsg(null);
+          resetInputs();
+        }}
+        className="text-xs text-neutral-300 file:mr-2 file:rounded-md file:border-0 file:bg-neutral-800 file:px-3 file:py-1.5 file:text-neutral-200 hover:file:bg-neutral-700"
+      />
+
+      {file && (
+        <div className="mt-3 flex flex-col gap-3 sm:flex-row">
+          {/* 向き調整プレビュー（ユーザー側と同一の ModelFilePreview を再利用）。 */}
+          <ModelFilePreview
+            file={file}
+            unit={unit}
+            uprightXDeg={uprightXDeg}
+            yawDeg={yawDeg}
+            onSuggestYaw={handleSuggestYaw}
+            className="h-56 w-full shrink-0 rounded-lg border border-white/10 sm:w-56"
+          />
+          <div className="flex flex-1 flex-col gap-2.5">
+            {/* 取り込み単位 */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-neutral-400">取り込み単位</span>
+              <select
+                value={unit}
+                onChange={(e) => setUnit(e.target.value as ModelUnit)}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 outline-none focus:border-emerald-500"
+              >
+                {MODEL_UNIT_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* 向き（縦/横に回転・壁向き自動） */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-neutral-400">向き</span>
+              <button type="button" onClick={() => setUprightXDeg((d) => normalizeUprightXDeg(d + 90))} className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:border-emerald-500 hover:text-white">縦に回転（{normalizeUprightXDeg(uprightXDeg)}°）</button>
+              <button type="button" onClick={() => { yawTouchedRef.current = true; setYawDeg((d) => normalizeYawDeg(d + 90)); }} className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 transition hover:border-emerald-500 hover:text-white">横に回転（{normalizeYawDeg(yawDeg)}°）</button>
+              <button type="button" onClick={() => { yawTouchedRef.current = false; setYawDeg(normalizeYawDeg(latestSuggestedYawRef.current)); }} className="rounded-lg border border-emerald-600/60 bg-emerald-600/15 px-2.5 py-1.5 text-[11px] font-semibold text-emerald-300 transition hover:bg-emerald-600/25">壁向きを自動</button>
+            </div>
+            {/* カテゴリ選択 / 新規作成 */}
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] font-bold text-neutral-400">カテゴリ</span>
+              <select
+                value={selectedCategory}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 outline-none focus:border-emerald-500"
+              >
+                <option value="">（未分類）</option>
+                {categories.map((c) => (<option key={c} value={c}>{c}</option>))}
+                <option value={NEW_CATEGORY_SENTINEL}>＋ 新規カテゴリを追加</option>
+              </select>
+              {selectedCategory === NEW_CATEGORY_SENTINEL && (
+                <input
+                  value={newCategory}
+                  onChange={(e) => setNewCategory(e.target.value)}
+                  placeholder="新しいカテゴリ名"
+                  className="rounded-lg border border-neutral-700 bg-neutral-950 px-2.5 py-1.5 text-[11px] text-neutral-100 outline-none focus:border-emerald-500"
+                />
+              )}
+            </div>
+            <p className="text-[10px] leading-relaxed text-neutral-500">
+              ※「縦に回転」で寝ている/上下逆を立て、「横に回転」で正面を調整。プレビューはドラッグで回転・拡大でき、軸ギズモと床グリッドで前後・上下を確認できます。
+            </p>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <button
           type="button"
           onClick={() => void upload()}
           disabled={busy || !file}
           className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
         >
-          {busy ? 'アップロード中…' : 'アップロード'}
+          {busy ? 'アップロード中…' : 'この内容でアップロード'}
         </button>
+        {file && !busy && (
+          <span className="text-[11px] text-neutral-400">選択中: {file.name}（{(file.size / 1024 / 1024).toFixed(1)}MB）</span>
+        )}
       </div>
-      {file && !busy && (
-        <p className="mt-2 text-[11px] text-neutral-400">
-          選択中: {file.name}（{(file.size / 1024 / 1024).toFixed(1)}MB）
-        </p>
-      )}
       {result && <p className="mt-2 break-all text-[11px] text-emerald-300">保存済み public_id: {result.publicId}</p>}
+      {msg && <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">{msg}</p>}
+    </Card>
+  );
+}
+
+/**
+ * 既存カテゴリの管理（#4・260727）: 改名と「削除（＝解除）」。削除はアセットを消さず category を外すだけで、
+ * 対象は自動分類（ファイル名推定）へ戻る＝データ消失なし。
+ */
+function CategoryManagerCard({ reloadSignal, onChanged }: { reloadSignal: number; onChanged?: () => void }) {
+  const [cats, setCats] = useState<Array<{ name: string; count: number }>>([]);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [renameTo, setRenameTo] = useState<Record<string, string>>({});
+  const [msg, setMsg] = useState<string | null>(null);
+
+  const load = React.useCallback(async () => {
+    try {
+      const r = await (await adminFetch('furniture-categories')).json();
+      if (Array.isArray(r?.categories)) setCats(r.categories.filter((c: { count: number }) => c.count > 0));
+    } catch {
+      /* ignore */
+    }
+  }, []);
+  useEffect(() => { void load(); }, [load, reloadSignal]);
+
+  const doRename = async (from: string) => {
+    const to = (renameTo[from] ?? '').trim();
+    if (!to || to === from) return;
+    setBusy(from);
+    setMsg(null);
+    try {
+      const r = await (await adminFetch(`rename-3d-category&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, 'POST')).json();
+      setMsg(
+        !r?.success
+          ? `改名に失敗しました（${r?.error ?? 'error'}）。`
+          : r.failed > 0
+            ? `一部の更新に失敗しました（成功 ${r.updated ?? 0}件 / 失敗 ${r.failed}件）。Cloudinary の設定・接続をご確認ください。`
+            : `「${from}」→「${to}」に改名しました（${r.updated ?? 0}件）。`,
+      );
+      setRenameTo((m) => ({ ...m, [from]: '' }));
+      await load();
+      onChanged?.();
+    } catch {
+      setMsg('通信エラーが発生しました。');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const doDelete = async (name: string) => {
+    if (!window.confirm(`カテゴリ「${name}」を削除しますか？\n※3Dモデル自体は削除されません。該当モデルは自動分類（ファイル名推定）に戻ります。`)) return;
+    setBusy(name);
+    setMsg(null);
+    try {
+      const r = await (await adminFetch(`delete-3d-category&category=${encodeURIComponent(name)}`, 'POST')).json();
+      setMsg(
+        !r?.success
+          ? `解除に失敗しました（${r?.error ?? 'error'}）。`
+          : r.failed > 0
+            ? `一部の解除に失敗しました（成功 ${r.updated ?? 0}件 / 失敗 ${r.failed}件）。Cloudinary の設定・接続をご確認ください。`
+            : `カテゴリ「${name}」を解除しました（${r.updated ?? 0}件は自動分類へ）。`,
+      );
+      await load();
+      onChanged?.();
+    } catch {
+      setMsg('通信エラーが発生しました。');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <h3 className="text-sm font-bold text-emerald-300">カテゴリの管理（公式カタログ）</h3>
+        <button type="button" onClick={() => void load()} className="text-[11px] text-neutral-400 transition hover:text-neutral-200">更新</button>
+      </div>
+      <p className="mb-3 mt-1 text-[11px] leading-relaxed text-neutral-500">
+        管理者が割り当てたカテゴリの改名・削除ができます。「削除」はモデルを消さず、割り当てを外して自動分類へ戻すだけです。
+      </p>
+      {cats.length === 0 ? (
+        <p className="text-[11px] text-neutral-500">割り当て済みカテゴリはありません（アップロード時にカテゴリを指定すると表示されます）。</p>
+      ) : (
+        <ul className="space-y-2">
+          {cats.map((c) => (
+            <li key={c.name} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/30 px-3 py-2">
+              <span className="text-sm text-white">{c.name} <span className="text-[11px] text-neutral-500">（{c.count}件）</span></span>
+              <div className="flex items-center gap-1.5">
+                <input
+                  value={renameTo[c.name] ?? ''}
+                  onChange={(e) => setRenameTo((m) => ({ ...m, [c.name]: e.target.value }))}
+                  placeholder="新しい名前"
+                  className="w-28 rounded-md border border-white/15 bg-black/40 px-2 py-1 text-[11px] text-white outline-none focus:border-emerald-500/60"
+                />
+                <button type="button" disabled={busy === c.name || !(renameTo[c.name] ?? '').trim()} onClick={() => void doRename(c.name)} className="rounded-md border border-white/10 bg-neutral-800 px-2.5 py-1 text-[11px] text-neutral-200 hover:border-emerald-400 disabled:opacity-40">改名</button>
+                <button type="button" disabled={busy === c.name} onClick={() => void doDelete(c.name)} className="rounded-md border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-[11px] text-red-200 hover:border-red-400 disabled:opacity-40">削除</button>
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
       {msg && <p className="mt-2 text-[11px] text-neutral-400">{msg}</p>}
     </Card>
   );
@@ -707,6 +957,8 @@ export function AdminDashboard() {
   // 案件の1クリック閲覧（⑤）。
   const [openingProjectKey, setOpeningProjectKey] = useState<string | null>(null);
   const [shareMsg, setShareMsg] = useState<string | null>(null);
+  // 公式カタログのカテゴリ変更（アップロード時の新規/管理カードの改名・削除）で相互にリロードさせる信号（260727）。
+  const [catReload, setCatReload] = useState(0);
 
   // from/to（日付のみ）を API 用の ISO クエリ文字列へ。日付のみ入力を日の境界へ広げる。空はそのまま空。
   const rangeParamsFor = (from: string, to: string): string => {
@@ -996,7 +1248,8 @@ export function AdminDashboard() {
         {/* 運営操作: 登録リクエストの承認（#2）＋ユーザーの猶予期間管理（#4） */}
         <section className="space-y-3">
           <h2 className="text-sm font-bold text-neutral-200">運営操作</h2>
-          <OfficialModelUploadCard />
+          <OfficialModelUploadCard onCategoriesChanged={() => setCatReload((n) => n + 1)} />
+          <CategoryManagerCard reloadSignal={catReload} onChanged={() => setCatReload((n) => n + 1)} />
           <RegistrationRequestsCard />
           <GraceManagerCard />
         </section>

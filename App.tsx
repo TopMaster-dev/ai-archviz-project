@@ -59,7 +59,7 @@ import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
 import { buildAgentProjectSummary } from './lib/agentProjectContext.js';
-import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
+import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, persistUserModelThumbnail, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
 
 // カメラ視点プリセットは per-project でストア（＝Supabase の projects.data）へ永続化する（260703）。
 // 旧実装は localStorage（ブラウザ単位・全プロジェクト共通）だったため、別ブラウザ/端末では保存視点が
@@ -216,10 +216,22 @@ const scheduleIdleTask = (task: () => void, fallbackDelayMs = 220) => {
 
 // URL→取り込み向き（上下 uprightXDeg・前後 forwardYawDeg・度）。サムネイル生成時にプレビューと同じ向き補正を適用するため保持する（260724/260725・③④）。
 const thumbnailOrientByUrl = new Map<string, { uprightXDeg: number; forwardYawDeg: number }>();
+
+// URL→永続化済みサムネイルURL（ユーザーアップロードは Supabase 公開URL・260727 #2）。
+// 一度生成・保存すれば、以後は再生成せずこの URL を表示に使う（公式は Cloudinary 静的URLで解決するため対象外）。
+const persistedThumbnailByUrl = new Map<string, string>();
+export const registerPersistedThumbnail = (url: string, thumbUrl: string) => {
+    if (thumbUrl && persistedThumbnailByUrl.get(url) !== thumbUrl) {
+        persistedThumbnailByUrl.set(url, thumbUrl);
+        notifyCacheUpdate();
+    }
+};
+
 export const requestThumbnail = (url: string, uprightXDeg = 0, forwardYawDeg = 0) => {
     thumbnailOrientByUrl.set(url, { uprightXDeg, forwardYawDeg }); // 早期return前に常に最新の向きを記録。
     if (
         globalThumbnailCache[url] ||
+        persistedThumbnailByUrl.has(url) || // 永続URL既知なら再生成不要（260727・敵対レビュー: 冗長な再生成防止）
         thumbnailFailedUrls.has(url) ||
         generationQueue.includes(url) ||
         thumbnailEnqueueTimers.has(url)
@@ -227,7 +239,7 @@ export const requestThumbnail = (url: string, uprightXDeg = 0, forwardYawDeg = 0
         return;
     const timerId = window.setTimeout(() => {
         thumbnailEnqueueTimers.delete(url);
-        if (!globalThumbnailCache[url] && !generationQueue.includes(url)) {
+        if (!globalThumbnailCache[url] && !persistedThumbnailByUrl.has(url) && !generationQueue.includes(url)) {
             generationQueue.push(url);
             notifyCacheUpdate();
         }
@@ -375,6 +387,14 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
                 } catch (e) {
                     console.error('Thumbnail upload failed:', e);
                 }
+            } else {
+                // ユーザーアップロード(Supabase)は Cloudinary へ送らず、Supabase へ永続化する（260727・#2）。
+                // 永続化はキューを止めない fire-and-forget（3往復のネットワーク待ちで 8s タイムアウトと競合し次URLを取りこぼすのを防ぐ・敵対レビュー）。
+                // 生成PNGは既に globalThumbnailCache にあるため表示は即時。成功したら永続URLを登録（次回セッションで再生成しない）。
+                const persistUrl = currentUrl;
+                void persistUserModelThumbnail(persistUrl, dataUrl)
+                    .then((persisted) => { if (persisted) registerPersistedThumbnail(persistUrl, persisted); })
+                    .catch((e) => console.warn('user thumbnail persist failed:', e));
             }
             dequeueCurrent('success');
             const elapsed = performance.now() - t0;
@@ -401,34 +421,54 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
     );
 };
 
-const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0 }: { url?: string, name?: string, uprightXDeg?: number, forwardYawDeg?: number }) => {
+const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0, thumbnailUrl }: { url?: string, name?: string, uprightXDeg?: number, forwardYawDeg?: number, thumbnailUrl?: string }) => {
     // URLが未定義の場合はクラッシュを防ぎ、代わりのアイコンを表示する
     if (!url) return <div className="w-full h-full flex items-center justify-center bg-neutral-800"><span className="text-[10px] font-black text-neutral-500">{name?.charAt(0) || '?'}</span></div>;
 
-    // アップロード先（/api/thumbnails）と同じ public_id 規則で PNG URL を組み立てる
-    const staticImageUrl = getThumbnailImageUrlFromGlbUrl(url);
+    // 公式(Cloudinary)は静的URLで解決＝一度生成すれば以後再生成しない。
+    // ユーザー(Supabase)は永続URL(thumbnailUrl/persistedThumbnailByUrl)を優先し、無ければメモリ生成（260727・#2）。
+    const isOfficial = isOfficialCatalogModelUrl(url);
+    const cloudinaryStatic = getThumbnailImageUrlFromGlbUrl(url); // 公式のみ意味を持つ
+    // 初回 state は prop/マップから読むが、マップへの書込は effect で行う（レンダー中の副作用を避ける・敵対レビュー）。
+    const persisted = thumbnailUrl ?? persistedThumbnailByUrl.get(url);
 
-    const [imgSrc, setImgSrc] = useState(globalThumbnailCache[url] || staticImageUrl);
+    const [imgSrc, setImgSrc] = useState<string>(
+        globalThumbnailCache[url] || persisted || (isOfficial ? cloudinaryStatic : '')
+    );
+
+    // prop で受け取った永続URLをモジュールマップへ登録（他インスタンス/配置済みも解決できるように）。
+    useEffect(() => {
+        if (thumbnailUrl) registerPersistedThumbnail(url, thumbnailUrl);
+    }, [url, thumbnailUrl]);
 
     useEffect(() => {
         const listener = () => {
-            if (globalThumbnailCache[url] && imgSrc !== globalThumbnailCache[url]) {
-                setImgSrc(globalThumbnailCache[url]);
-            }
+            const next = globalThumbnailCache[url] || persistedThumbnailByUrl.get(url);
+            if (next && imgSrc !== next) setImgSrc(next);
         };
         cacheListeners.add(listener);
         return () => { cacheListeners.delete(listener); };
     }, [url, imgSrc]);
 
+    // 表示できるサムネが無いユーザーモデルは、bogus URL の 404 を待たず先に生成を依頼する。
+    useEffect(() => {
+        if (!imgSrc && !isOfficial) requestThumbnail(url, uprightXDeg, forwardYawDeg);
+    }, [imgSrc, url, isOfficial, uprightXDeg, forwardYawDeg]);
+
+    if (!imgSrc) {
+        // 生成待ち/未解決＝頭文字プレースホルダ（生成完了で notifyCacheUpdate → 上の listener が差し替え）。
+        return <div className="w-full h-full flex items-center justify-center bg-neutral-800"><span className="text-[10px] font-black text-neutral-500">{name?.charAt(0) || '?'}</span></div>;
+    }
+
     return (
         <div className="w-full h-full flex items-center justify-center bg-neutral-800 relative overflow-hidden">
-            <img 
-                src={imgSrc} 
-                className="w-full h-full object-cover transition-opacity duration-300" 
-                alt={name} 
+            <img
+                src={imgSrc}
+                className="w-full h-full object-cover transition-opacity duration-300"
+                alt={name}
                 onError={(e) => {
-                    // 画像が見つからない(404)場合のみ、バックグラウンドでの生成キューに登録
-                    if (imgSrc === staticImageUrl) {
+                    // 静的URL(公式・初回未生成)や永続URL(Supabaseが404=削除済)なら、生成キューへ。
+                    if (imgSrc === cloudinaryStatic || imgSrc === persisted) {
                         requestThumbnail(url, uprightXDeg, forwardYawDeg);
                         e.currentTarget.style.display = 'none';
                         if (e.currentTarget.nextElementSibling) e.currentTarget.nextElementSibling.classList.remove('hidden');
@@ -1208,7 +1248,14 @@ const App: React.FC = () => {
         ? { widthMm: Number(widthMm), depthMm: Number(depthMm) }
         : undefined;
 
-    return { id, type, name, url, defaultScale, defaultY, footprint2d, forwardYawDeg };
+    // 260727: 公式アップロードで付与された取り込み向き/単位/カテゴリ/サムネURLを引き継ぐ（配置・分類・表示で使用）。
+    const modelUprightXDeg = normalizeUprightXDeg(raw.modelUprightXDeg) || undefined;
+    const modelUnitScale =
+      Number.isFinite(raw.modelUnitScale) && Number(raw.modelUnitScale) > 0 ? Number(raw.modelUnitScale) : undefined;
+    const categoryExplicit = raw.categoryExplicit === true;
+    const thumbnailUrl = typeof raw.thumbnailUrl === 'string' && raw.thumbnailUrl ? raw.thumbnailUrl : undefined;
+
+    return { id, type, name, url, defaultScale, defaultY, footprint2d, forwardYawDeg, modelUprightXDeg, modelUnitScale, categoryExplicit, thumbnailUrl };
   }, []);
 
   // 選択中オブジェクトの Delete / Backspace 削除（建具・家具・3D梁）。
@@ -1290,6 +1337,8 @@ const App: React.FC = () => {
         return furnitureCatalog.map(item => {
             // アップロード資産はファイル名に依らず「アップロード」カテゴリへ固定（「＋」で追加した場所に集約・260623）。
             if (item.type === UPLOAD_FURNITURE_TYPE) return { ...item };
+            // 管理者が割り当てたカテゴリ（Cloudinary context 由来）はそのまま採用＝ファイル名から再推定しない（260727・#3）。
+            if (item.categoryExplicit) return { ...item };
             const urlParts = item.url.split('/');
             const fileNameWithExt = decodeURIComponent(urlParts[urlParts.length - 1]);
             const fileName = fileNameWithExt.split('.')[0]; 
@@ -1320,6 +1369,14 @@ const App: React.FC = () => {
     const types = Array.from(new Set(processedCatalog.map(item => item.type))).filter((t) => t !== UPLOAD_FURNITURE_TYPE);
     return [...types, UPLOAD_FURNITURE_TYPE];
   }, [processedCatalog]);
+
+  // 永続化済みサムネイル(Supabase)をカタログからモジュールマップへ seed（260727・#2）。
+  // リロード後も URL キーで即解決でき、一覧・配置済みどちらの ModelThumbnail も再生成せず表示できる。
+  useEffect(() => {
+    for (const item of furnitureCatalog) {
+      if (item.thumbnailUrl) registerPersistedThumbnail(item.url, item.thumbnailUrl);
+    }
+  }, [furnitureCatalog]);
 
   const [hideFurniture, setHideFurniture] = useState(false);
 
@@ -4074,7 +4131,7 @@ const App: React.FC = () => {
                                 selectedAssetCategory={selectedAssetCategory}
                                 onSelectedAssetCategoryChange={setSelectedAssetCategory}
                                 onPickItem={handleAddFurniture}
-                                renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} forwardYawDeg={item.forwardYawDeg} />}
+                                renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} forwardYawDeg={item.forwardYawDeg} thumbnailUrl={item.thumbnailUrl} />}
                                 fetchStatus={furnitureCatalogFetchStatus}
                                 fetchErrorMessage={furnitureCatalogErrorText}
                                 onUploadModel={handleUploadModelClick}
@@ -5250,7 +5307,7 @@ const App: React.FC = () => {
                                         selectedAssetCategory={selectedAssetCategory}
                                         onSelectedAssetCategoryChange={setSelectedAssetCategory}
                                         onPickItem={handleAddFurniture}
-                                        renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} forwardYawDeg={item.forwardYawDeg} />}
+                                        renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} forwardYawDeg={item.forwardYawDeg} thumbnailUrl={item.thumbnailUrl} />}
                                         fetchStatus={furnitureCatalogFetchStatus}
                                         fetchErrorMessage={furnitureCatalogErrorText}
                                         onUploadModel={handleUploadModelClick}

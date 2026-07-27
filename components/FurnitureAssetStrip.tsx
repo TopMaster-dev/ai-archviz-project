@@ -12,7 +12,7 @@ export type FurnitureAssetStripProps = {
   selectedAssetCategory: string | null;
   onSelectedAssetCategoryChange: (category: string | null) => void;
   onPickItem: (item: FurnitureAssetStripItem) => void;
-  renderThumbnail: (item: Pick<FurnitureAssetStripItem, 'url' | 'name' | 'modelUprightXDeg' | 'forwardYawDeg'>) => React.ReactNode;
+  renderThumbnail: (item: Pick<FurnitureAssetStripItem, 'url' | 'name' | 'modelUprightXDeg' | 'forwardYawDeg' | 'thumbnailUrl'>) => React.ReactNode;
   /** 家具カタログ API の読み込み状態 */
   fetchStatus: FurnitureCatalogFetchStatus;
   /** fetchStatus が error のとき表示する短いメッセージ */
@@ -169,6 +169,7 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
                       name: item.name,
                       modelUprightXDeg: item.modelUprightXDeg,
                       forwardYawDeg: item.forwardYawDeg,
+                      thumbnailUrl: item.thumbnailUrl,
                     })}
                   </div>
                   <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 opacity-0 group-hover:opacity-100 transition-opacity">

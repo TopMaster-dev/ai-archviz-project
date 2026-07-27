@@ -1,6 +1,6 @@
 import type { FurnitureCatalogItem, Product, MaterialCategory } from '../types.js';
 import type { UserUpload } from './db/uploads.js';
-import { updateUserUploadMetadata } from './db/uploads.js';
+import { updateUserUploadMetadata, listUserUploads, uploadUserThumbnailPng } from './db/uploads.js';
 import { normalizeModelUnit, unitGeometryScale, sanitizeGeometryScale } from '../utils/modelUnit.js';
 import { normalizeUprightXDeg } from '../utils/modelOrientation.js';
 
@@ -63,6 +63,7 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
   const metaBrand = str(meta.brand);
   const metaModelNumber = str(meta.modelNumber);
   const metaProductUrl = str(meta.productUrl);
+  const metaThumb = str(meta.thumbnailUrl); // 260727: 永続化済みサムネイル(Supabase 公開URL)
   return {
     id: `upload-${upload.id}`,
     type: UPLOAD_FURNITURE_TYPE,
@@ -78,6 +79,8 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
     modelUnitScale: sanitizeGeometryScale(finite(meta.modelUnitScale)) ?? undefined,
     // 取り込み向きの上下補正(①・260717・X軸 0/90/180/270°)。
     modelUprightXDeg: normalizeUprightXDeg(meta.modelUprightXDeg) || undefined,
+    // 永続化済みサムネイル(Supabase 公開URL・260727 #2)。あれば ModelThumbnail が再生成せず即表示に使う。
+    thumbnailUrl: metaThumb || undefined,
     // 見積もり連携メタ（配置時に handleAddFurniture が customBrand/modelNumber/customPrice/productUrl へ流す）。
     // 家具情報の編集（260715 #9）で updateUserUploadMetadata により台帳へ書き戻される。
     brand: metaBrand || undefined,
@@ -118,6 +121,20 @@ export async function ensureUploadFootprint(upload: UserUpload): Promise<Furnitu
     /* 実測失敗（モデル不正/CORS 等）→ footprint2d 未設定のまま。 */
   }
   return item;
+}
+
+/**
+ * 生成した3Dモデルサムネイルを Supabase へ永続化し、台帳 metadata.thumbnailUrl に記録する（260727・#2）。
+ * modelUrl（storageUrl）から所有アップロード行を引き当てる（App の persistUploadFurnitureMeta と同じ探索）。
+ * 見つからない/ゲスト/未構成時は null を返し、呼び出し側は従来どおりメモリ表示にフォールバックする。
+ */
+export async function persistUserModelThumbnail(modelUrl: string, dataUrlPng: string): Promise<string | null> {
+  const models = await listUserUploads('model');
+  const up = models.find((u) => u.storageUrl === modelUrl);
+  if (!up) return null;
+  const publicUrl = await uploadUserThumbnailPng(up.id, dataUrlPng);
+  await updateUserUploadMetadata(up.id, { ...(up.metadata ?? {}), thumbnailUrl: publicUrl });
+  return publicUrl;
 }
 
 /**

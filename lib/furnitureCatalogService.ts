@@ -17,6 +17,10 @@ type CatalogItem = {
   defaultY: number;
   footprint2d: { widthMm: number; depthMm: number };
   forwardYawDeg: number;
+  // 260727: 公式アップロード時に Cloudinary context へ保存した取り込み向き/単位/カテゴリ（あれば）。
+  modelUprightXDeg?: number; // X軸 0/90/180/270（ジオメトリ焼込・placement が適用）
+  modelUnitScale?: number; // 幾何プリスケール f_U（明示単位時のみ）
+  categoryExplicit?: boolean; // true=カテゴリは context 由来（管理者が割当）＝クライアントはファイル名から再推定しない
 };
 
 type CatalogStats = {
@@ -28,12 +32,26 @@ type CatalogStats = {
 };
 
 const FALLBACK_FOOTPRINT: FootprintMeta = { widthMm: 1000, depthMm: 700, forwardYawDeg: 0 };
-const FOOTPRINT_MIN_MM = 200;
-const FOOTPRINT_MAX_MM = 10000;
+// クライアント側の footprint 計測レンジ [10,50000]（utils/furnitureModelFootprint.ts）に合わせる（260727）。
+// 管理者が小物/大型モデルの実寸を context に保存しても、読み戻しで過剰クランプされないようにする。フォールバック既定(1000x700)は不変。
+const FOOTPRINT_MIN_MM = 10;
+const FOOTPRINT_MAX_MM = 50000;
 const LAZY_COMPUTE_LIMIT = 4;
 const META_WIDTH_KEY = 'footprint_width_mm';
 const META_DEPTH_KEY = 'footprint_depth_mm';
 const META_YAW_KEY = 'forward_yaw_deg';
+// 260727: 公式アップロードの取り込み向き/単位/カテゴリ（context.custom キー）。
+const META_UPRIGHT_KEY = 'model_upright_x_deg';
+const META_UNIT_SCALE_KEY = 'model_unit_scale';
+const META_CATEGORY_KEY = 'category';
+
+/** X軸上下補正を 0/90/180/270 へ正規化（modelOrientation の three 依存を避けるためここに内蔵）。 */
+const normalizeUprightDeg = (v: unknown): number | undefined => {
+  const n = typeof v === 'string' ? Number(v) : typeof v === 'number' ? v : NaN;
+  if (!Number.isFinite(n)) return undefined;
+  const r = (((Math.round(n / 90) * 90) % 360) + 360) % 360;
+  return r === 90 || r === 180 || r === 270 ? r : 0;
+};
 const inFlightFootprintWrite = new Set<string>();
 
 const loadFurnitureMeta = (): FurnitureMetaMap => {
@@ -416,7 +434,24 @@ const estimateFootprintMmFromModel = async (url: string, format?: string): Promi
 };
 
 const writeBackCloudinaryContext = async (resItem: any, footprint: FootprintMeta): Promise<void> => {
-  const existing = contextObjectFromResource(resItem);
+  // 260727: 更新直前に「最新の」context を取り直してからマージする（検索スナップショットは古く、
+  // その間に管理者が category を変更していると全置換で巻き戻してしまう＝lost update。敵対レビュー medium 指摘）。
+  let existing = contextObjectFromResource(resItem);
+  try {
+    const fresh: any = await cloudinary.api.resource(resItem.public_id, {
+      resource_type: resItem.resource_type || 'raw',
+      type: resItem.type || 'upload',
+      context: true,
+    });
+    const custom = fresh?.context?.custom && typeof fresh.context.custom === 'object' ? fresh.context.custom : null;
+    if (custom) {
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(custom)) if (typeof v === 'string') out[k] = v;
+      existing = out;
+    }
+  } catch {
+    /* 取り直し失敗時はスナップショットのままマージ（従来挙動） */
+  }
   const merged = {
     ...existing,
     [META_WIDTH_KEY]: String(Math.round(footprint.widthMm)),
@@ -524,6 +559,10 @@ export async function getFurnitureCatalog(options?: { debug?: boolean }): Promis
     if (!publicId || inFlightFootprintWrite.has(publicId)) continue;
     const url = String(resItem?.secure_url ?? '');
     if (!url) continue;
+    // 260727: 管理者が取り込み向き/単位を設定した公式アセットは、サーバの自動計測が upright/unit を無視して
+    // 誤った footprint を書き込むのを避けるため自動計測をスキップ（クライアント計測が権威・失敗時はフォールバック寸法）。
+    const adminCtx = contextObjectFromResource(resItem);
+    if (adminCtx[META_UPRIGHT_KEY] != null || adminCtx[META_UNIT_SCALE_KEY] != null) continue;
     inFlightFootprintWrite.add(publicId);
     try {
       const dims = await estimateFootprintMmFromModel(url, resItem?.format);
@@ -550,10 +589,17 @@ export async function getFurnitureCatalog(options?: { debug?: boolean }): Promis
   const items = resources.map((resItem: any): CatalogItem => {
     const resolved = resolveMetaFromResource(resItem, metaMap);
     const meta = computedByPublicId.get(resItem.public_id) ?? resolved.meta;
+    // 260727: 公式アップロードで context に保存した取り込み向き/単位/カテゴリを読み出す（無ければ従来どおり）。
+    const ctx = contextObjectFromResource(resItem);
+    const uprightXDeg = normalizeUprightDeg(ctx[META_UPRIGHT_KEY]);
+    const unitScaleNum = toFiniteNumber(ctx[META_UNIT_SCALE_KEY]);
+    const modelUnitScale = unitScaleNum != null && unitScaleNum > 0 ? unitScaleNum : undefined;
+    const explicitCat = typeof ctx[META_CATEGORY_KEY] === 'string' ? ctx[META_CATEGORY_KEY].trim() : '';
     return {
       id: resItem.public_id,
       name: resItem.filename,
-      type: inferTypeFromFilename(resItem.filename),
+      type: explicitCat || inferTypeFromFilename(resItem.filename),
+      categoryExplicit: !!explicitCat,
       url: resItem.secure_url,
       defaultScale: 1.0,
       defaultY: 0,
@@ -561,7 +607,9 @@ export async function getFurnitureCatalog(options?: { debug?: boolean }): Promis
         widthMm: meta?.widthMm ?? FALLBACK_FOOTPRINT.widthMm,
         depthMm: meta?.depthMm ?? FALLBACK_FOOTPRINT.depthMm
       },
-      forwardYawDeg: Number.isFinite(meta?.forwardYawDeg) ? Number(meta!.forwardYawDeg) : FALLBACK_FOOTPRINT.forwardYawDeg
+      forwardYawDeg: Number.isFinite(meta?.forwardYawDeg) ? Number(meta!.forwardYawDeg) : FALLBACK_FOOTPRINT.forwardYawDeg,
+      ...(uprightXDeg ? { modelUprightXDeg: uprightXDeg } : {}),
+      ...(modelUnitScale != null ? { modelUnitScale } : {})
     };
   });
 

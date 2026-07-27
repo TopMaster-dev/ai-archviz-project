@@ -63,6 +63,10 @@ export interface FurnitureCatalogItem {
   modelUnitScale?: number;
   /** 取り込み向きの上下補正(①・260717・X軸 0/90/180/270°)。配置時に FurnitureItem.modelUprightXDeg へ引き継ぐ。 */
   modelUprightXDeg?: number;
+  /** 260727: カテゴリが Cloudinary context 由来（管理者が割当）か。true のときクライアントはファイル名から再推定しない。 */
+  categoryExplicit?: boolean;
+  /** 260727: サムネイルの永続URL（ユーザーアップロードは Supabase 公開URL）。公式は未使用（Cloudinary静的URLで解決）。 */
+  thumbnailUrl?: string;
   /** 見積もり連携用の商品メタ（任意・260620 Tier1）。未設定時は配置時に furnitureProductMeta から補完する。 */
   brand?: string;
   /** 品番/型番。 */

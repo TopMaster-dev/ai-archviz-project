@@ -552,7 +552,7 @@ export default defineConfig(({ mode }) => {
                     // 管理ダッシュボード読取（メール許可リスト認証・本番 api/admin/orphan-cleanup.ts と一致・260711）。
                     const url0 = new URL(req.url || '', 'http://x');
                     const action = url0.searchParams.get('action') || '';
-                    if (['whoami', 'keyhealth', 'usage', 'user-usage', 'share-project', 'testkey', 'infra', 'sign-3d-upload'].includes(action)) {
+                    if (['whoami', 'keyhealth', 'usage', 'user-usage', 'share-project', 'testkey', 'infra', 'sign-3d-upload', 'furniture-categories', 'set-3d-meta', 'rename-3d-category', 'delete-3d-category'].includes(action)) {
                         const authHeader = (req.headers['authorization'] as string) || '';
                         const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
                         const { verifyAdmin, getKeyHealth, getUsageSummary, getUserUsageHistory, createOrGetProjectShareToken, testKey } = await import('./lib/server/adminDashboard.js');
@@ -570,6 +570,33 @@ export default defineConfig(({ mode }) => {
                             const signed = signOfficial3dUpload();
                             if (!signed.ok) { res.statusCode = 500; return res.end(JSON.stringify({ error: signed.error })); }
                             return res.end(JSON.stringify({ success: true, ...signed }));
+                        }
+                        // 公式カタログのカテゴリ/メタ管理（#1/#3/#4・260727）。本番 orphan-cleanup.ts と一致。
+                        if (['furniture-categories', 'set-3d-meta', 'rename-3d-category', 'delete-3d-category'].includes(action)) {
+                            const { listOfficialModelCategories, setOfficial3dMeta, renameOfficialModelCategory, unassignOfficialModelCategory } = await import('./lib/server/officialCatalogAdmin.js');
+                            const q = (name: string): string => url0.searchParams.get(name) || '';
+                            if (action === 'furniture-categories') {
+                                return res.end(JSON.stringify({ success: true, ...(await listOfficialModelCategories()) }));
+                            }
+                            if (req.method !== 'POST') { res.statusCode = 405; return res.end(JSON.stringify({ error: `${action} は POST。` })); }
+                            if (action === 'set-3d-meta') {
+                                const publicId = q('publicId');
+                                if (!publicId) { res.statusCode = 400; return res.end(JSON.stringify({ error: 'publicId が必要です。' })); }
+                                const numOrU = (name: string): number | undefined => { const v = q(name); const n = v === '' ? NaN : Number(v); return Number.isFinite(n) ? n : undefined; };
+                                const r = await setOfficial3dMeta(publicId, {
+                                    widthMm: numOrU('widthMm'), depthMm: numOrU('depthMm'), forwardYawDeg: numOrU('forwardYawDeg'),
+                                    uprightXDeg: numOrU('uprightXDeg'), unitScale: numOrU('unitScale') ?? null, unit: q('unit') || undefined, category: q('category') || undefined,
+                                });
+                                if (!r.ok) { res.statusCode = 500; return res.end(JSON.stringify({ error: r.error })); }
+                                return res.end(JSON.stringify({ success: true }));
+                            }
+                            if (action === 'rename-3d-category') {
+                                if (!q('from') || !q('to')) { res.statusCode = 400; return res.end(JSON.stringify({ error: 'from と to が必要です。' })); }
+                                return res.end(JSON.stringify({ success: true, ...(await renameOfficialModelCategory(q('from'), q('to'))) }));
+                            }
+                            // delete-3d-category
+                            if (!q('category')) { res.statusCode = 400; return res.end(JSON.stringify({ error: 'category が必要です。' })); }
+                            return res.end(JSON.stringify({ success: true, ...(await unassignOfficialModelCategory(q('category'))) }));
                         }
                         if (action === 'keyhealth') return res.end(JSON.stringify({ success: true, keys: getKeyHealth() }));
                         if (action === 'usage') {

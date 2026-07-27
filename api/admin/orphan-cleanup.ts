@@ -14,6 +14,12 @@ import {
 } from '../../lib/server/adminDashboard.js';
 import { getInfraStatus } from '../../lib/server/adminInfra.js';
 import { signOfficial3dUpload } from '../../lib/server/cloudinarySign.js';
+import {
+  setOfficial3dMeta,
+  listOfficialModelCategories,
+  renameOfficialModelCategory,
+  unassignOfficialModelCategory,
+} from '../../lib/server/officialCatalogAdmin.js';
 
 // 運用者向け管理エンドポイント。Vercel Hobby の関数数上限(12/12)のため、ここに以下を相乗りさせる（260711）:
 //  - 既定（action なし）: 孤児 AI生成画像の掃除。CRON_SECRET（Authorization: Bearer）で保護。?execute=1 で実削除。
@@ -54,8 +60,8 @@ export default async function handler(req: any, res: any) {
   // --- 管理ダッシュボード（メール許可リスト認証）---
   // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
-  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests'];
-  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request', 'share-project', 'sign-3d-upload'];
+  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests', 'furniture-categories'];
+  const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request', 'share-project', 'sign-3d-upload', 'set-3d-meta', 'rename-3d-category', 'delete-3d-category'];
   if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
     const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : '';
@@ -89,6 +95,47 @@ export default async function handler(req: any, res: any) {
       const signed = signOfficial3dUpload();
       if (!signed.ok) return res.status(500).json({ error: signed.error });
       return res.status(200).json({ success: true, ...signed });
+    }
+    // 公式カタログのカテゴリ一覧（select 用・#3/#4・260727）。
+    if (action === 'furniture-categories') {
+      return res.status(200).json({ success: true, ...(await listOfficialModelCategories()) });
+    }
+    // アップロード直後に向き/単位/footprint/カテゴリを Cloudinary context へ書き込む（#1/#3・260727）。必ず POST。
+    if (action === 'set-3d-meta') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'set-3d-meta は POST。' });
+      const publicId = getQueryParam(req, 'publicId');
+      if (!publicId) return res.status(400).json({ error: 'publicId が必要です。' });
+      const numOrU = (name: string): number | undefined => {
+        const v = getQueryParam(req, name);
+        const n = v === '' ? NaN : Number(v);
+        return Number.isFinite(n) ? n : undefined;
+      };
+      const r = await setOfficial3dMeta(publicId, {
+        widthMm: numOrU('widthMm'),
+        depthMm: numOrU('depthMm'),
+        forwardYawDeg: numOrU('forwardYawDeg'),
+        uprightXDeg: numOrU('uprightXDeg'),
+        unitScale: numOrU('unitScale') ?? null,
+        unit: getQueryParam(req, 'unit') || undefined,
+        category: getQueryParam(req, 'category') || undefined,
+      });
+      if (!r.ok) return res.status(500).json({ error: r.error });
+      return res.status(200).json({ success: true });
+    }
+    // カテゴリ改名（#4・260727）。必ず POST。
+    if (action === 'rename-3d-category') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'rename-3d-category は POST。' });
+      const from = getQueryParam(req, 'from');
+      const to = getQueryParam(req, 'to');
+      if (!from || !to) return res.status(400).json({ error: 'from と to が必要です。' });
+      return res.status(200).json({ success: true, ...(await renameOfficialModelCategory(from, to)) });
+    }
+    // カテゴリ「削除」＝安全な解除（アセットは消さずファイル名推定へ戻す・#4・260727）。必ず POST。
+    if (action === 'delete-3d-category') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'delete-3d-category は POST。' });
+      const category = getQueryParam(req, 'category');
+      if (!category) return res.status(400).json({ error: 'category が必要です。' });
+      return res.status(200).json({ success: true, ...(await unassignOfficialModelCategory(category)) });
     }
     if (action === 'testkey') {
       const engine = getEngineParam(req);

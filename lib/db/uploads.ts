@@ -357,6 +357,28 @@ export async function uploadUserFile(
   return mapRow(row as UploadRow);
 }
 
+/**
+ * 生成した3Dモデルのサムネイル(PNG dataURL)を Supabase Storage へ保存し、公開URLを返す（260727・#2 永続化）。
+ * 台帳(user_uploads)行は作らない（kind=model 行として再取り込みされ一覧/カタログが汚れるのを防ぐ）。
+ * パス `${uid}/thumbnails/${uploadId}.png`：先頭フォルダ=uid で Storage RLS を満たし、2階層目 thumbnails は
+ * storage_usage_self の分類で「その他」扱い＝カタログへ再出現しない。upsert で上書き保存する。
+ */
+export async function uploadUserThumbnailPng(uploadId: string, dataUrlPng: string): Promise<string> {
+  const sb = getSupabase();
+  if (!sb) throw new Error('Supabase が未構成のため、サムネイルを保存できません。');
+  const { data: userData } = await sb.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) throw new Error('未ログインのため、サムネイルを保存できません。');
+  const blob = await (await fetch(dataUrlPng)).blob();
+  const path = `${userId}/thumbnails/${uploadId}.png`;
+  const { error } = await sb.storage
+    .from(BUCKET)
+    .upload(path, blob, { upsert: true, contentType: 'image/png', cacheControl: '3600' });
+  if (error) throw error;
+  const { data: pub } = sb.storage.from(BUCKET).getPublicUrl(path);
+  return pub.publicUrl;
+}
+
 /** 本人のアップロード一覧（新しい順）。kind 指定で絞り込み。未構成/未ログインは空配列。 */
 export async function listUserUploads(kind?: UploadKind): Promise<UserUpload[]> {
   const sb = getSupabase();
@@ -393,9 +415,13 @@ export async function deleteUserUpload(upload: Pick<UserUpload, 'id' | 'publicId
   const sb = getSupabase();
   if (!sb) return;
   if (upload.publicId) {
+    // 実体に加え、永続化した3Dサムネイル `${uid}/thumbnails/${id}.png` も削除する（260727・#2 の後始末）。
+    const paths = [upload.publicId];
+    const uid = upload.publicId.split('/')[0];
+    if (uid) paths.push(`${uid}/thumbnails/${upload.id}.png`);
     await sb.storage
       .from(BUCKET)
-      .remove([upload.publicId])
+      .remove(paths)
       .catch(() => {});
   }
   const { error } = await sb.from('user_uploads').delete().eq('id', upload.id);
