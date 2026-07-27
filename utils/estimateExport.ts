@@ -121,6 +121,34 @@ function roundYen(n: number): number {
  * 判定順は固定（ceiling を floor より先に見る＝'floor_ceiling' のような複合名の取り違え防止）。
  * ここを変えると PDF/CSV のセクションとマテリアルボードのスワッチが同時に変わる（呼び出しは本関数1本）。
  */
+/**
+ * マテリアルボード／CSV に出す「品番」の表示用テキスト（260728 クライアント指摘）。
+ *
+ * 品番未入力の素材は内部ID（productId）へフォールバックする仕様だが、その中身は
+ * Cloudinary の public_id（例: `materials/generic/61ajziJ6ADL._AC_UF1000_1000_QL80_`）で、
+ * 商品情報として意味が無いうえ長すぎてキャプションが溢れていた。
+ * パス形式なら最後のセグメントだけにし、拡張子と末尾の記号を落として短く整える。
+ * それでも長い場合は末尾を省略する（レイアウトを崩さないため）。
+ */
+export function formatPartCodeForDisplay(
+  modelNumber: string | undefined,
+  partCode: string | undefined,
+  maxLen = 28,
+): string {
+  const explicit = (modelNumber ?? '').trim();
+  if (explicit) return explicit.length > maxLen ? `${explicit.slice(0, maxLen - 1)}…` : explicit;
+
+  const raw = (partCode ?? '').trim();
+  if (!raw) return '品番未設定';
+  // パス形式（materials/generic/xxx）なら末尾セグメントのみ
+  const last = raw.split('/').pop() ?? raw;
+  // 拡張子と、末尾に残りがちな区切り記号を除去
+  const noExt = last.replace(/\.(png|jpe?g|webp|avif|gif|tiff?)$/i, '');
+  const trimmed = noExt.replace(/[._\-]+$/, '');
+  const out = trimmed || last;
+  return out.length > maxLen ? `${out.slice(0, maxLen - 1)}…` : out;
+}
+
 export function classifySurface(meshName: string): SurfaceKey {
   // 1) スケッチ由来の確定名（最優先・完全一致/前方一致）
   if (meshName === 'Sketch_Floor') return 'floor';

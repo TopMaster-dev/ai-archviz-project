@@ -1,7 +1,7 @@
 import * as html2canvasModule from 'html2canvas';
 import { jsPDF } from 'jspdf';
 import type { EstimateExportPayload, MaterialBoardItem } from './estimateExport.js';
-import { estimateExportFilename, triggerBlobDownload } from './estimateExport.js';
+import { estimateExportFilename, triggerBlobDownload, formatPartCodeForDisplay } from './estimateExport.js';
 
 type Html2CanvasOptions = Partial<import('html2canvas').Options>;
 type Html2CanvasFn = (el: HTMLElement, o?: Html2CanvasOptions) => Promise<HTMLCanvasElement>;
@@ -369,7 +369,12 @@ function buildMaterialBoardPage(
     mark.style.cssText = 'color:#111;margin-right:2px;'; // 黒（クライアント要望・260720。旧: 赤 #cc0000）
     cap.appendChild(mark);
     // 品番はユーザー入力の modelNumber を優先し、無ければ内部 partCode（productId）にフォールバック（3e・260720）。
-    cap.appendChild(document.createTextNode(`${label}：${it.modelNumber || it.partCode}【${it.brand || 'メーカー名'}】`));
+    // 内部IDは Cloudinary のパスで長大なため、表示用に整形する（260728 クライアント指摘: 文字が切れて読めない）。
+    cap.appendChild(
+      document.createTextNode(
+        `${label}：${formatPartCodeForDisplay(it.modelNumber, it.partCode)}【${it.brand || 'メーカー名'}】`
+      )
+    );
 
     card.appendChild(imgWrap);
     card.appendChild(cap);
