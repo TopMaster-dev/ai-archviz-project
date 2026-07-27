@@ -3328,7 +3328,10 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           下端通知（Undo/Redo・ホームの退避位置）がズレる。アニメ無し＝確定レイアウトを即時計測。 */}
       <div
         ref={toolbarRef}
-        className={`absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:top-6 md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] pointer-events-auto ${readOnly ? 'hidden' : ''}`}
+        // ツールバーは幅に余裕がある時だけ上部（モード切替＝ホーム/2D/3D/AI/? の行）に横並びで置く。
+        // ツールバー(約790px)＋モード切替(約490px)は ~1346px 未満では収まらず「?」付近で重なるため（260727 クライアント指摘・1280pxで重なり）、
+        // 1400px 未満では従来のモバイル位置（ヘッダーの下・top-[136px]）へ落として重なりを避ける（1400px 以上は横並び）。
+        className={`absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] min-[1400px]:top-6 pointer-events-auto ${readOnly ? 'hidden' : ''}`}
       >
         <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
 
