@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /** `processedCatalog` の1件（App の handleAddFurniture に渡る形） */
@@ -35,6 +35,25 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   const barClass =
     'glass p-1.5 rounded-2xl border border-white/10 flex items-center gap-1.5 bg-black/40 backdrop-blur-xl shadow-2xl h-[72px]';
 
+  // ホバー中のカテゴリボタンの真上にポップアップを出すためのアンカー（260727 クライアント要望）。
+  // コンテナ基準の絶対配置（親の transform 有無に依存しない）。left はコンテナ内でクランプして端でもはみ出さない。
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [anchorPos, setAnchorPos] = useState<{ left: number; width: number } | null>(null);
+  const measureAnchor = useCallback((el: HTMLElement | null) => {
+    const c = containerRef.current;
+    if (!c || !el) {
+      setAnchorPos(null);
+      return;
+    }
+    const cr = c.getBoundingClientRect();
+    const br = el.getBoundingClientRect();
+    const centerX = br.left - cr.left + br.width / 2; // コンテナ内でのボタン中心
+    const width = Math.min(340, cr.width || 340);
+    // ポップアップ幅がコンテナからはみ出さないよう左位置をクランプ（中央=translateX(-50%)前提）。
+    const left = Math.max(width / 2, Math.min((cr.width || width) - width / 2, centerX));
+    setAnchorPos({ left, width });
+  }, []);
+
   // ホバーでポップアップを開閉するタイマー（260703(5) クライアント指摘③④）。
   // ③ カーソルが離れたら少し待って自動で閉じる（×不要）。バー↔ポップアップ間の隙間を跨ぐ猶予も兼ねる。
   // ④ 初回オープンは少し遅延させ、ドラッグ等で一瞬カテゴリに乗っただけでは開かないようにする（誤オープン防止）。
@@ -57,8 +76,10 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   const cancelClose = useCallback(() => clearCloseTimer(), []);
 
   // ホバーで開く。既に開いていれば即座にカテゴリ切替、閉じている場合のみ少し遅延して開く（誤オープン防止・④）。
+  // ホバーした要素の位置を測ってポップアップをその真上に出す（260727）。
   const hoverOpen = useCallback(
-    (cat: string) => {
+    (cat: string, el: HTMLElement) => {
+      measureAnchor(el);
       clearCloseTimer();
       if (selectedAssetCategory) {
         clearOpenTimer();
@@ -68,17 +89,18 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
       clearOpenTimer();
       openTimerRef.current = setTimeout(() => onSelectedAssetCategoryChange(cat), 140);
     },
-    [selectedAssetCategory, onSelectedAssetCategoryChange],
+    [selectedAssetCategory, onSelectedAssetCategoryChange, measureAnchor],
   );
 
   // クリックは即時トグル（保留中のタイマーは破棄）。
   const clickToggle = useCallback(
-    (cat: string) => {
+    (cat: string, el: HTMLElement) => {
+      measureAnchor(el);
       clearOpenTimer();
       clearCloseTimer();
       onSelectedAssetCategoryChange(selectedAssetCategory === cat ? null : cat);
     },
-    [selectedAssetCategory, onSelectedAssetCategoryChange],
+    [selectedAssetCategory, onSelectedAssetCategoryChange, measureAnchor],
   );
 
   if (fetchStatus === 'loading') {
@@ -115,14 +137,31 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
     );
   }
 
+  // 5個以上のときは最大5個/行で折り返して2行以上にする（横に長い1行を避ける・260727 クライアント要望）。
+  const MAX_PER_ROW = 5;
+  const categoryRows: string[][] = [];
+  for (let i = 0; i < assetCategories.length; i += MAX_PER_ROW) {
+    categoryRows.push(assetCategories.slice(i, i + MAX_PER_ROW));
+  }
+
   return (
     <div
+      ref={containerRef}
       className="relative flex items-center gap-3 pointer-events-auto"
       onMouseEnter={cancelClose}
       onMouseLeave={scheduleClose}
     >
       {selectedAssetCategory && (
-        <div className="absolute bottom-[calc(100%+16px)] right-0 w-[min(90vw,360px)] glass p-4 rounded-3xl border border-white/10 bg-black/80 backdrop-blur-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-2 safe-r">
+        <div
+          className="absolute bottom-[calc(100%+16px)] glass p-4 rounded-3xl border border-white/10 bg-black/80 backdrop-blur-2xl shadow-2xl animate-in fade-in slide-in-from-bottom-2"
+          // ホバーしたボタンの真上に中央寄せで表示（アンカー未測定時は従来どおり右寄せにフォールバック）。
+          // 中央寄せは transform ではなく marginLeft で行う（入場アニメの slide-in が transform を使うため競合回避）。
+          style={
+            anchorPos
+              ? { left: anchorPos.left, width: anchorPos.width, marginLeft: -anchorPos.width / 2 }
+              : { right: 0, width: 'min(90vw, 360px)' }
+          }
+        >
           <div className="flex justify-between items-center mb-3 px-1">
             <span className="text-[10px] font-black text-emerald-400 uppercase tracking-widest">{selectedAssetCategory}</span>
             <button
@@ -181,29 +220,32 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
         </div>
       )}
 
-      <div className={barClass}>
-        {assetCategories.map((cat) => (
-          <button
-            key={cat}
-            type="button"
-            onClick={() => clickToggle(cat)}
-            // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。
-            // 260703(5): 初回は少し遅延して開き、離れたら自動で閉じる（③④）。
-            onMouseEnter={() => hoverOpen(cat)}
-            // ボタンから隙間（gap の余白）へ抜けたら保留中のオープンを取消（閉じている時のみ・誤オープンの残路を塞ぐ）。
-            // 既に開いている場合は切替に遅延を使わないため触らない（自動クローズはコンテナ側 onMouseLeave が担当）。
-            onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
-            className={`h-full w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
-              selectedAssetCategory === cat
-                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
-                : cat === 'アップロード'
-                  ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
-                  : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
-            }`}
-          >
-            {/* 長いカテゴリ名（例: フロアランプ）が枠内で折り返して溢れないよう、幅を内容に合わせ、ラベルは折り返さない（260727）。 */}
-            <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
-          </button>
+      {/* 5個以上は最大5個/行で折り返す（横長の1行を避け、余りは下の行へ・260727 クライアント要望）。 */}
+      <div className="glass p-1.5 rounded-2xl border border-white/10 flex flex-col gap-1.5 bg-black/40 backdrop-blur-xl shadow-2xl">
+        {categoryRows.map((row, ri) => (
+          <div key={ri} className="flex items-stretch gap-1.5">
+            {row.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。260703(5): 初回は少し遅延して開く。
+                onClick={(e) => clickToggle(cat, e.currentTarget)}
+                onMouseEnter={(e) => hoverOpen(cat, e.currentTarget)}
+                // ボタンから隙間へ抜けたら保留中のオープンを取消（閉じている時のみ）。開いている時の自動クローズはコンテナ側 onMouseLeave が担当。
+                onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
+                className={`h-14 w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
+                  selectedAssetCategory === cat
+                    ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
+                    : cat === 'アップロード'
+                      ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
+                      : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
+                }`}
+              >
+                {/* 長いカテゴリ名（例: フロアランプ）が折り返して溢れないよう、幅は内容に合わせラベルは折り返さない（260727）。 */}
+                <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
+              </button>
+            ))}
+          </div>
         ))}
       </div>
     </div>
