@@ -537,7 +537,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               {spaceProjects.length > 0 && (
                 <div>
                   <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-neutral-300">
-                    空間デザイン
+                    図面からパース作成
                     <span className="text-xs font-normal text-neutral-500">{spaceProjects.length}</span>
                   </h3>
                   <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -548,7 +548,7 @@ export function HomeScreen({ onEnter }: { onEnter: () => void }) {
               {photoProjects.length > 0 && (
                 <div>
                   <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-neutral-300">
-                    写真をAI編集
+                    AIで写真編集
                     <span className="text-xs font-normal text-neutral-500">{photoProjects.length}</span>
                   </h3>
                   <ul className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
