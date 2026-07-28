@@ -20,10 +20,16 @@ export type SafeFetchFailReason =
   | 'too-large'
   | 'bad-status' // 2xx 以外（404/500/リダイレクト過多）
   | 'not-html' // PDF や画像など、HTML として解析してはいけない本文
+  | 'not-image' // 画像として取得したのに画像でなかった（HTML のエラーページ等）
   | 'network';
 
 export type SafeFetchResult =
   | { ok: true; html: string; finalUrl: string; status: number }
+  | { ok: false; reason: SafeFetchFailReason; status?: number };
+
+/** 画像取得の結果（260728 参考画像クリック→商品特定）。本文は base64 で返す（そのまま data URL にできる）。 */
+export type SafeFetchImageResult =
+  | { ok: true; base64: string; mimeType: string; finalUrl: string; status: number }
   | { ok: false; reason: SafeFetchFailReason; status?: number };
 
 /** 既定値。Vercel の関数実行時間・メモリに対して十分に安全側へ倒す。 */
@@ -32,6 +38,11 @@ const MIN_TIMEOUT_MS = 250;
 const MAX_TIMEOUT_MS = 15_000;
 
 const DEFAULT_MAX_BYTES = 512_000;
+/** 画像は HTML より大きいのが普通なので既定値を別に持つ（EC の商品写真はおおむね 1MB 未満）。 */
+const DEFAULT_MAX_IMAGE_BYTES = 4_000_000;
+
+/** Cloud Vision と Gemini の両方が確実に解釈できる画像形式だけ（SVG/AVIF/GIF は不可）。 */
+const DECODABLE_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
 const MIN_MAX_BYTES = 1024;
 const MAX_MAX_BYTES = 5_000_000;
 
@@ -419,10 +430,150 @@ export async function safeFetchPage(
   url: string,
   opts?: { timeoutMs?: number; maxBytes?: number },
 ): Promise<SafeFetchResult> {
+  const maxBytes = clamp(opts?.maxBytes ?? DEFAULT_MAX_BYTES, MIN_MAX_BYTES, MAX_MAX_BYTES);
+
+  return guardedFetch<Extract<SafeFetchResult, { ok: true }>>(url, {
+    timeoutMs: opts?.timeoutMs,
+    accept: 'text/html,application/xhtml+xml',
+    // PDF や画像を HTML として解析させない
+    acceptContentType: (ct) => ct.includes('text/html') || ct.includes('application/xhtml'),
+    wrongTypeReason: 'not-html',
+    read: async (res, controller, finalUrl, status) => {
+      const outcome = await readBodyCapped(res, maxBytes);
+      if (outcome.tooLarge) {
+        controller.abort(); // 念のため接続ごと畳む
+        return { ok: false, reason: 'too-large', status };
+      }
+      return { ok: true, html: outcome.html ?? '', finalUrl, status };
+    },
+  });
+}
+
+/**
+ * 公開画像を 1 本だけ安全に取得し、base64 で返す（260728 クライアント要望「参考画像を選んで商品を追加」）。
+ *
+ * なぜサーバ側で取りに行くのか:
+ *   参考画像は第三者ドメインの画像なので、ブラウザからは CORS で本文を読めない
+ *   （canvas も汚染されて toDataURL が例外になる）。Vision と Gemini の両方へ同じ画像を渡すには
+ *   バイト列が要るため、サーバで取得するしかない。
+ *   ただし「URL を渡されてサーバが取りに行く」＝ SSRF そのものなので、
+ *   ページ取得とまったく同じゲート（文字列検査 + DNS 検査 + ホップ毎再検査 + 時間/サイズ上限）を通す。
+ */
+export async function safeFetchImage(
+  url: string,
+  opts?: { timeoutMs?: number; maxBytes?: number },
+): Promise<SafeFetchImageResult> {
+  const maxBytes = clamp(opts?.maxBytes ?? DEFAULT_MAX_IMAGE_BYTES, MIN_MAX_BYTES, MAX_MAX_BYTES);
+
+  return guardedFetch<Extract<SafeFetchImageResult, { ok: true }>>(url, {
+    // 画像は HTML より本文が大きいので、ページ既定の 4 秒だと大きめの商品写真で取りこぼす。
+    timeoutMs: opts?.timeoutMs ?? 8000,
+    accept: DECODABLE_IMAGE_TYPES.join(','),
+    // 「image/ で始まる」では緩すぎる（260728 敵対レビュー M1）。
+    // SVG/AVIF/GIF は Vision も Gemini も読めず、しかも Vision は HTTP 200 のまま
+    // responses[0].error で失敗を返すので上位の !ok 判定に引っかからない。結果、
+    // 課金だけ発生して最後に 500「しばらくして再度お試しください」という無意味な案内になる。
+    // 両APIが確実に解釈できる形式だけを通し、それ以外はここで not-image にして
+    // 「この画像は取得できませんでした」の穏当な案内へ流す。
+    acceptContentType: (ct) => DECODABLE_IMAGE_TYPES.includes(ct.split(';')[0].trim()),
+    wrongTypeReason: 'not-image',
+    read: async (res, controller, finalUrl, status) => {
+      const bytes = await readBytesCapped(res, maxBytes);
+      // 上限超過は「切り詰め」ではなく失敗にする。途中で切れた画像は Vision も Gemini も読めない。
+      if (!bytes) {
+        controller.abort();
+        return { ok: false, reason: 'too-large', status };
+      }
+      if (bytes.length === 0) return { ok: false, reason: 'not-image', status };
+      const mimeType = (res.headers.get('content-type') || 'image/jpeg').split(';')[0].trim().toLowerCase();
+      return { ok: true, base64: toBase64(bytes), mimeType, finalUrl, status };
+    },
+  });
+}
+
+/**
+ * 画像本文をストリームで読みつつ上限で打ち切る。上限超過は null（＝失敗）。
+ * arrayBuffer() で一気に読むと、巨大画像 1 本で関数が OOM で落ちるため必ず数えながら読む。
+ */
+async function readBytesCapped(res: Response, maxBytes: number): Promise<Uint8Array | null> {
+  const body = res.body;
+  if (!body || typeof body.getReader !== 'function') {
+    // ストリームが無い実装（fetch ポリフィル・テストダブル）向けのフォールバック。
+    // arrayBuffer() は先に全量を確保してしまうので、宣言サイズで事前に弾く（260728 敵対レビュー L2）。
+    // content-length が無い/嘘の場合に備え、確保後にもう一度確認する。
+    const declared = Number(res.headers.get('content-length'));
+    if (Number.isFinite(declared) && declared > maxBytes) return null;
+    const buf = await res.arrayBuffer();
+    return buf.byteLength > maxBytes ? null : new Uint8Array(buf);
+  }
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      const chunk = value instanceof Uint8Array ? value : new Uint8Array(value as ArrayBufferLike);
+      total += chunk.byteLength;
+      if (total > maxBytes) {
+        try {
+          await reader.cancel();
+        } catch {
+          /* 相手都合の失敗は無視 */
+        }
+        return null;
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* 解放済みなら無視 */
+    }
+  }
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
+}
+
+/** バイト列 → base64。Node/ブラウザ双方で動くよう Buffer が無ければ手組みにフォールバックする。 */
+function toBase64(bytes: Uint8Array): string {
+  const B = (globalThis as { Buffer?: { from(b: Uint8Array): { toString(enc: string): string } } }).Buffer;
+  if (B) return B.from(bytes).toString('base64');
+  let binary = '';
+  // 一度に spread するとスタックが溢れるので分割する
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(binary);
+}
+
+/**
+ * ページ取得と画像取得で共通の「安全に 1 本取りに行く」部分。
+ * SSRF ゲート（文字列検査・DNS 検査・リダイレクトのホップ毎再検査）とタイムアウトはここ 1 か所だけに置く。
+ * 表を二重に持つと、必ず片方だけ直されて穴が開く。
+ */
+type GuardedFail = { ok: false; reason: SafeFetchFailReason; status?: number };
+
+async function guardedFetch<TOk extends { ok: true }>(
+  url: string,
+  spec: {
+    timeoutMs?: number;
+    accept: string;
+    acceptContentType: (contentType: string) => boolean;
+    wrongTypeReason: SafeFetchFailReason;
+    read: (res: Response, controller: AbortController, finalUrl: string, status: number) => Promise<TOk | GuardedFail>;
+  },
+): Promise<TOk | GuardedFail> {
   if (!isFetchableUrl(url)) return { ok: false, reason: 'blocked-url' };
 
-  const timeoutMs = clamp(opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
-  const maxBytes = clamp(opts?.maxBytes ?? DEFAULT_MAX_BYTES, MIN_MAX_BYTES, MAX_MAX_BYTES);
+  const timeoutMs = clamp(spec.timeoutMs ?? DEFAULT_TIMEOUT_MS, MIN_TIMEOUT_MS, MAX_TIMEOUT_MS);
 
   const controller = new AbortController();
   // 遅い小売サイト 1 本で Vercel 関数を占有させない
@@ -446,7 +597,7 @@ export async function safeFetchPage(
         credentials: 'omit',
         headers: {
           'User-Agent': USER_AGENT,
-          Accept: 'text/html,application/xhtml+xml',
+          Accept: spec.accept,
           'Accept-Language': 'ja,en;q=0.8',
         },
       });
@@ -471,21 +622,14 @@ export async function safeFetchPage(
 
       if (status < 200 || status >= 300) return { ok: false, reason: 'bad-status', status };
 
-      // PDF や画像を HTML として解析させない
       const contentType = (res.headers.get('content-type') || '').toLowerCase();
-      if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
+      if (!spec.acceptContentType(contentType)) {
         discardBody(res);
-        return { ok: false, reason: 'not-html', status };
-      }
-
-      const outcome = await readBodyCapped(res, maxBytes);
-      if (outcome.tooLarge) {
-        controller.abort(); // 念のため接続ごと畳む
-        return { ok: false, reason: 'too-large', status };
+        return { ok: false, reason: spec.wrongTypeReason, status };
       }
 
       const finalUrl = typeof res.url === 'string' && res.url ? res.url : current;
-      return { ok: true, html: outcome.html ?? '', finalUrl, status };
+      return await spec.read(res, controller, finalUrl, status);
     }
 
     // ここに来た＝4 リクエスト目もリダイレクトだった。ループ/無限リダイレクト対策として打ち切る。

@@ -6,6 +6,12 @@
 export interface VisionMatchingPage {
   title: string;
   url: string;
+  /**
+   * そのページ上にあった一致画像のURL（260728 クライアント要望「画像を選んで商品を追加」）。
+   * visuallySimilarImages と違い「どのページに載っている画像か」が確定しているので、
+   * 利用者が画像を選んだ瞬間に、そのページを直接読んで商品情報を確定できる。
+   */
+  imageUrl?: string;
 }
 
 export interface VisionFindings {
@@ -63,7 +69,13 @@ export function parseVisionWebDetection(result: unknown): VisionFindings {
       const url = (p as { url?: unknown })?.url;
       if (!isHttpUrl(url)) continue;
       const title = str((p as { pageTitle?: unknown })?.pageTitle);
-      pages.push({ title: title || url, url });
+      // 完全一致を優先し、無ければ部分一致（切り抜き検索では部分一致しか返らないことが多い）。
+      const rec = p as { fullMatchingImages?: unknown; partialMatchingImages?: unknown };
+      const firstImage = [rec.fullMatchingImages, rec.partialMatchingImages]
+        .flatMap((list) => (Array.isArray(list) ? list : []))
+        .map((im) => (im as { url?: unknown })?.url)
+        .find((u): u is string => isHttpUrl(u));
+      pages.push({ title: title || url, url, imageUrl: firstImage });
       if (pages.length >= MAX_PAGES) break;
     }
   }

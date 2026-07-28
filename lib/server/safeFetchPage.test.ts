@@ -5,6 +5,7 @@ import {
   resolveHostAddresses,
   safeFetchPage,
   safeFetchPages,
+  safeFetchImage,
 } from './safeFetchPage.js';
 
 /**
@@ -686,5 +687,176 @@ describe('safeFetchPages', () => {
     const mock = stubFetch(async (url) => htmlResponse('<html></html>', url));
     expect(await safeFetchPages([])).toEqual([]);
     expect(mock).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// safeFetchImage（260728 参考画像クリック → 商品特定）
+//
+// ここが緩むと「エージェントに任意の URL を渡してサーバに取りに行かせる」経路が
+// もう 1 本増える。ページ取得と同じゲートを本当に通っているかを、
+// ページ側と同じ攻撃ケースで確認する（片方だけ直す事故を落とすため）。
+// ---------------------------------------------------------------------------
+
+function imageResponse(bytes: Uint8Array, url: string, contentType = 'image/jpeg'): Response {
+  return fakeResponse({
+    status: 200,
+    url,
+    headers: { 'content-type': contentType },
+    body: fakeStream([bytes]).stream,
+  });
+}
+
+describe('safeFetchImage', () => {
+  it('画像を取得して base64 と MIME を返す', async () => {
+    const bytes = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    stubFetch(async (url) => imageResponse(bytes, url));
+    const result = await safeFetchImage('https://img.example.com/p.jpg');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.mimeType).toBe('image/jpeg');
+    expect(result.finalUrl).toBe('https://img.example.com/p.jpg');
+    // そのまま data URL にでき、復号すると元のバイト列に戻る
+    expect(Buffer.from(result.base64, 'base64')).toEqual(Buffer.from(bytes));
+  });
+
+  it('content-type のパラメータは落として MIME だけにする', async () => {
+    stubFetch(async (url) => imageResponse(new Uint8Array([1, 2, 3]), url, 'IMAGE/PNG; charset=binary'));
+    const result = await safeFetchImage('https://img.example.com/p.png');
+    expect(result.ok && result.mimeType).toBe('image/png');
+  });
+
+  it('内部アドレスの URL は fetch せずに拒否する（文字列検査）', async () => {
+    const fetchMock = stubFetch(async (url) => imageResponse(new Uint8Array([1]), url));
+    const result = await safeFetchImage('http://169.254.169.254/latest/meta-data/');
+    expect(result).toEqual({ ok: false, reason: 'blocked-url' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('公開ドメインが内部アドレスに解決したら fetch しない（DNS 検査）', async () => {
+    dns.addresses.set('evil.example.com', ['169.254.169.254']);
+    const fetchMock = stubFetch(async (url) => imageResponse(new Uint8Array([1]), url));
+    const result = await safeFetchImage('https://evil.example.com/p.jpg');
+    expect(result).toEqual({ ok: false, reason: 'blocked-dns' });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('リダイレクト先が内部アドレスなら、その先を取得しない', async () => {
+    const fetchMock = stubFetch(async (url) => {
+      if (url === 'https://img.example.com/p.jpg') return redirectResponse('http://127.0.0.1/secret.png');
+      return imageResponse(new Uint8Array([1]), url);
+    });
+    const result = await safeFetchImage('https://img.example.com/p.jpg');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('blocked-host');
+    expect(fetchMock).toHaveBeenCalledTimes(1); // 1 ホップ目だけ
+  });
+
+  it('公開ドメインへのリダイレクトは追い、最終 URL を返す', async () => {
+    stubFetch(async (url) => {
+      if (url === 'https://img.example.com/p.jpg') return redirectResponse('https://cdn.example.com/p.jpg');
+      return imageResponse(new Uint8Array([7, 8]), url);
+    });
+    const result = await safeFetchImage('https://img.example.com/p.jpg');
+    expect(result.ok && result.finalUrl).toBe('https://cdn.example.com/p.jpg');
+  });
+
+  it('画像でない本文（HTML のエラーページ等）は not-image で弾く', async () => {
+    stubFetch(async (url) => htmlResponse('<html>403 Forbidden</html>', url));
+    const result = await safeFetchImage('https://img.example.com/p.jpg');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('not-image');
+  });
+
+  it('403（hotlink 拒否）は bad-status で返す', async () => {
+    stubFetch(async () => fakeResponse({ status: 403, headers: { 'content-type': 'text/html' } }));
+    const result = await safeFetchImage('https://img.example.com/p.jpg');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('bad-status');
+    expect(result.status).toBe(403);
+  });
+
+  it('上限を超える画像は途中で受信を打ち切り too-large にする（切り詰めない）', async () => {
+    const big = fakeStream([new Uint8Array(2048), new Uint8Array(2048)]);
+    stubFetch(async (url) =>
+      fakeResponse({ status: 200, url, headers: { 'content-type': 'image/png' }, body: big.stream }),
+    );
+    const result = await safeFetchImage('https://img.example.com/big.png', { maxBytes: 3000 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('too-large');
+    expect(big.wasCancelled()).toBe(true); // 残りをダウンロードし続けない
+  });
+
+  it('空の本文は not-image（Vision も Gemini も読めないため成功にしない）', async () => {
+    stubFetch(async (url) =>
+      fakeResponse({
+        status: 200,
+        url,
+        headers: { 'content-type': 'image/jpeg' },
+        body: fakeStream([]).stream,
+      }),
+    );
+    const result = await safeFetchImage('https://img.example.com/empty.jpg');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('not-image');
+  });
+
+  it('通信例外でも throw せず network を返す', async () => {
+    stubFetch(async () => {
+      throw new Error('socket hang up');
+    });
+    await expect(safeFetchImage('https://img.example.com/p.jpg')).resolves.toEqual({
+      ok: false,
+      reason: 'network',
+    });
+  });
+});
+
+describe('safeFetchImage: 復号できる形式だけ通す（260728 敵対レビュー M1）', () => {
+  // SVG/AVIF/GIF は Vision も Gemini も読めない。しかも Vision は HTTP 200 のまま
+  // responses[0].error で失敗を返すので、上位の !ok 判定に引っかからない。
+  // ここで弾かないと「課金だけ発生して最後は 500」という最悪の経路になる。
+  it.each(['image/svg+xml', 'image/avif', 'image/gif', 'image/bmp', 'image/tiff'])(
+    '%s は not-image で弾く',
+    async (ct) => {
+      stubFetch(async (url) => imageResponse(new Uint8Array([1, 2, 3]), url, ct));
+      const result = await safeFetchImage('https://img.example.com/p');
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.reason).toBe('not-image');
+    },
+  );
+
+  it.each(['image/jpeg', 'image/png', 'image/webp', 'image/heic'])('%s は通す', async (ct) => {
+    stubFetch(async (url) => imageResponse(new Uint8Array([1, 2, 3]), url, ct));
+    const result = await safeFetchImage('https://img.example.com/p');
+    expect(result.ok).toBe(true);
+  });
+
+  it('ストリームが無い実装では content-length で事前に弾く（確保してからでは遅い・L2）', async () => {
+    let arrayBufferCalled = false;
+    stubFetch(
+      async (url) =>
+        ({
+          status: 200,
+          url,
+          headers: fakeHeaders({ 'content-type': 'image/png', 'content-length': '99999999' }),
+          body: null,
+          arrayBuffer: async () => {
+            arrayBufferCalled = true;
+            return new ArrayBuffer(99999999);
+          },
+        }) as unknown as Response,
+    );
+    const result = await safeFetchImage('https://img.example.com/huge.png', { maxBytes: 1000 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.reason).toBe('too-large');
+    expect(arrayBufferCalled).toBe(false); // 巨大バッファを確保する前に止める
   });
 });

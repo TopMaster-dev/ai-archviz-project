@@ -282,6 +282,12 @@ export default defineConfig(({ mode }) => {
                         if (parsed.mode === 'vision-product') {
                             const { status, body: out } = await runVisionProductSearch({
                                 imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : '',
+                                // 参考画像をクリックした場合は URL だけが来る（本番 api/agent.ts と同一・260728）。
+                                imageUrl: typeof (parsed as { imageUrl?: unknown }).imageUrl === 'string' ? (parsed as { imageUrl?: string }).imageUrl : '',
+                                // 掲載ページが分かっている画像なら、そのページを直接読む（本番と同一・260728）。
+                                // 受け取るのは URL ではなく署名トークン（任意URLの取得代行にしないため）。
+                                pageToken:
+                                    typeof (parsed as { pageToken?: unknown }).pageToken === 'string' ? (parsed as { pageToken?: string }).pageToken : '',
                                 prompt: typeof parsed.prompt === 'string' ? parsed.prompt : '',
                                 geminiKey: apiKey,
                             });
