@@ -46,7 +46,14 @@ const AGENT_PLACEHOLDER =
  * 「クライアントの指定した任意の URL を取りに行く」口になる（敵対レビュー H1）。
  * 署名を作れるのはサーバだけなので、トークンなら取得先を Vision の結果に限定できる。
  */
-type VisionRefImage = { url: string; pageToken?: string };
+type VisionRefImage = {
+  /** 表示専用。サーバへ送っても無視される（取得先はトークンから復元される）。 */
+  url: string;
+  /** この画像自体を取得させるための署名トークン。無ければクリックできない。 */
+  token?: string;
+  /** この画像の掲載ページを読ませるための署名トークン。あれば直行経路が使える。 */
+  pageToken?: string;
+};
 
 /** 表示用の短いホスト名（どの画像を押したのか履歴から辿れるようにする・260728 L4）。 */
 function hostLabel(url: string): string {
@@ -65,10 +72,16 @@ function parseVisionRefImages(raw: unknown): VisionRefImage[] {
   if (!Array.isArray(raw)) return [];
   return raw
     .map((v): VisionRefImage | null => {
+      // 旧形式（URLの文字列だけ）は表示のみ。署名トークンが無いのでクリックはできない
+      // ＝サーバが提示していないURLを取得させられない、という不変条件を履歴側でも守る。
       if (isHttpUrl(v)) return { url: v };
       if (v && typeof v === 'object' && isHttpUrl((v as { url?: unknown }).url)) {
-        const o = v as { url: string; pageToken?: unknown };
-        return { url: o.url, pageToken: typeof o.pageToken === 'string' ? o.pageToken : undefined };
+        const o = v as { url: string; token?: unknown; pageToken?: unknown };
+        return {
+          url: o.url,
+          token: typeof o.token === 'string' ? o.token : undefined,
+          pageToken: typeof o.pageToken === 'string' ? o.pageToken : undefined,
+        };
       }
       return null;
     })
@@ -461,8 +474,8 @@ export function AgentChatPanel({
    */
   const runVisionSearch = async (
     source:
-      | { imageDataUrl: string; imageUrl?: undefined; pageToken?: undefined }
-      | { imageUrl: string; pageToken?: string; imageDataUrl?: undefined },
+      | { imageDataUrl: string; imageToken?: undefined; pageToken?: undefined }
+      | { imageToken: string; pageToken?: string; imageDataUrl?: undefined },
     opts: { userLine?: string; keepAttachments?: boolean } = {},
   ) => {
     setRegionPickerSrc(null);
@@ -485,7 +498,7 @@ export function AgentChatPanel({
       const data = await postAgent({
         mode: 'vision-product',
         imageDataUrl: source.imageDataUrl,
-        imageUrl: source.imageUrl,
+        imageToken: source.imageToken,
         pageToken: source.pageToken,
         prompt: userLine,
       });
@@ -498,7 +511,13 @@ export function AgentChatPanel({
       }
       // 商品として確定できなかったときでも視覚的な手掛かりを残す（260728 クライアント要望）。
       // 逆画像検索の「似ている画像」と「一致したページ」は Vision の応答に含まれており追加課金は無い。
-      type ApiVisionPage = { title?: unknown; url: string; imageUrl?: unknown; pageToken?: unknown };
+      type ApiVisionPage = {
+        title?: unknown;
+        url: string;
+        imageUrl?: unknown;
+        pageToken?: unknown;
+        imageToken?: unknown;
+      };
       const refPages = Array.isArray(data.visionPages)
         ? (data.visionPages as unknown[])
             .filter((p): p is ApiVisionPage => !!p && isHttpUrl((p as any).url))
@@ -507,16 +526,25 @@ export function AgentChatPanel({
               url: p.url,
               imageUrl: isHttpUrl(p.imageUrl) ? p.imageUrl : undefined,
               pageToken: typeof p.pageToken === 'string' ? p.pageToken : undefined,
+              imageToken: typeof p.imageToken === 'string' ? p.imageToken : undefined,
             }))
         : [];
       // 掲載ページが分かっている画像を先に並べる（クリック1回でそのページから商品情報を確定できるため）。
       // 続けて「視覚的に似ているだけ」の画像を並べる（こちらは選ぶと商品特定をやり直す）。
       const pageImages: VisionRefImage[] = refPages
         .filter((p): p is typeof p & { imageUrl: string } => !!p.imageUrl)
-        .map((p) => ({ url: p.imageUrl, pageToken: p.pageToken }));
+        .map((p) => ({ url: p.imageUrl, token: p.imageToken, pageToken: p.pageToken }));
+      // 類似画像はサーバから {url, token} の組で届く（旧形式の文字列も一応受ける）。
       const similar: VisionRefImage[] = (Array.isArray(data.similarImages) ? (data.similarImages as unknown[]) : [])
-        .filter(isHttpUrl)
-        .map((u) => ({ url: u }));
+        .map((v): VisionRefImage | null => {
+          if (isHttpUrl(v)) return { url: v };
+          if (v && typeof v === 'object' && isHttpUrl((v as { url?: unknown }).url)) {
+            const o = v as { url: string; token?: unknown };
+            return { url: o.url, token: typeof o.token === 'string' ? o.token : undefined };
+          }
+          return null;
+        })
+        .filter((v): v is VisionRefImage => !!v);
       // 同じ画像URLは1つにまとめる（260728 敵対レビュー M2）。Vision は同一のCDN画像を
       // 複数のページ項目で返すことがあり、放置すると「見た目が全く同じボタンなのに、
       // 押すと別々の商品が出る」状態になる。先頭（＝掲載ページが分かっている方）を残す。
@@ -891,34 +919,44 @@ export function AgentChatPanel({
               {/* 参考画像・参考ページ（260728 クライアント要望「商品画像が見たい」）。
                   商品ページとして確定できなかった場合でも、逆画像検索が見つけた視覚的な手掛かりを出す。
                   確定情報ではないので、上の商品カードとは枠と文言で明確に区別する。 */}
-              {m.role === 'assistant' && m.visionRefs && (
+              {/* 読み込めなかった画像は押しても取得できないので数に入れない。
+                  見せるものが1つも残らないときは、枠と見出しごと出さない
+                  （「参考情報が見つかった」と書いてある空箱を残さない・260728 敵対レビュー）。 */}
+              {(() => {
+                if (m.role !== 'assistant' || !m.visionRefs) return null;
+                const usable = m.visionRefs.images.filter((r) => !brokenRefImages.has(r.url));
+                if (usable.length === 0 && m.visionRefs.pages.length === 0) return null;
+                return (
                 <div className="mt-1.5 w-full max-w-[85%] rounded-lg border border-white/10 bg-white/[0.03] p-2">
                   <div className="mb-1.5 text-[10px] font-bold text-neutral-400">
                     画像から見つかった参考情報（商品ページとしては未確認）
                   </div>
-                  {(() => {
-                    // 読み込めなかった画像は押しても取得できないので、案内ごとまとめて出さない。
-                    const usable = m.visionRefs.images.filter((r) => !brokenRefImages.has(r.url));
-                    if (usable.length === 0) return null;
-                    return (
+                  {usable.length > 0 && (
                       <>
                         {/* 参考画像はクリックできる（260728 クライアント要望）。
                             押すと「その画像」で商品特定をやり直し、商品名・メーカー・価格・品番付きの
                             商品カード（＝そのまま見積へ追加できる形）に変換する。
                             室内写真より、通販サイトの商品写真の方が逆画像検索の精度が高いので、
-                            利用者にとっては「候補から選んで確定させる」操作になる。 */}
-                        <p className="mb-1 text-[10px] text-neutral-500">
-                          画像をクリックすると、その商品を特定して見積に追加できる形にします。
-                        </p>
+                            利用者にとっては「候補から選んで確定させる」操作になる。
+                            署名トークンが無い画像（旧履歴など）は表示のみでクリックできない。 */}
+                        {usable.some((r) => r.token || r.pageToken) && (
+                          <p className="mb-1 text-[10px] text-neutral-500">
+                            画像をクリックすると、その商品を特定して見積に追加できる形にします。
+                          </p>
+                        )}
                         <div className="mb-1.5 flex flex-wrap gap-1.5">
-                          {usable.map((ref, ii) => (
+                          {usable.map((ref, ii) => {
+                            const clickable = !!(ref.token || ref.pageToken);
+                            const onBroken = () =>
+                              setBrokenRefImages((prev) => (prev.has(ref.url) ? prev : new Set(prev).add(ref.url)));
+                            return (
                             <button
                               key={`${ii}-${ref.url.slice(0, 24)}`}
                               type="button"
-                              disabled={sending}
+                              disabled={sending || !clickable}
                               onClick={() =>
                                 void runVisionSearch(
-                                  { imageUrl: ref.url, pageToken: ref.pageToken },
+                                  { imageToken: ref.token ?? '', pageToken: ref.pageToken },
                                   {
                                     // どの画像を押した結果なのか履歴から辿れるようにする（260728 敵対レビュー L4）。
                                     userLine: `参考画像（${hostLabel(ref.url)}）の商品を特定してください。`,
@@ -927,11 +965,15 @@ export function AgentChatPanel({
                                 )
                               }
                               title={
-                                ref.pageToken
-                                  ? 'この画像の掲載ページから商品情報を取得する'
-                                  : 'この画像で商品を特定し直す'
+                                !clickable
+                                  ? '参考画像（この画像からの再検索は利用できません）'
+                                  : ref.pageToken
+                                    ? 'この画像の掲載ページから商品情報を取得する'
+                                    : 'この画像で商品を特定し直す'
                               }
-                              className={`focus-ring group relative h-14 w-14 shrink-0 overflow-hidden rounded border bg-black/30 transition hover:border-emerald-400 disabled:opacity-40 ${
+                              className={`focus-ring group relative h-14 w-14 shrink-0 overflow-hidden rounded border bg-black/30 transition disabled:opacity-40 ${
+                                clickable ? 'hover:border-emerald-400' : 'cursor-default'
+                              } ${
                                 // 掲載ページが分かっているものは、確度が高いことが分かるよう枠を変える
                                 ref.pageToken ? 'border-emerald-500/50' : 'border-white/10'
                               }`}
@@ -941,20 +983,20 @@ export function AgentChatPanel({
                                 alt="参考画像"
                                 loading="lazy"
                                 referrerPolicy="no-referrer"
-                                onError={() =>
-                                  setBrokenRefImages((prev) => (prev.has(ref.url) ? prev : new Set(prev).add(ref.url)))
-                                }
+                                onError={onBroken}
                                 className="h-full w-full object-cover"
                               />
-                              <span className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/60 group-hover:flex">
-                                <Search className="h-4 w-4 text-emerald-300" />
-                              </span>
+                              {clickable && (
+                                <span className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/60 group-hover:flex">
+                                  <Search className="h-4 w-4 text-emerald-300" />
+                                </span>
+                              )}
                             </button>
-                          ))}
+                            );
+                          })}
                         </div>
                       </>
-                    );
-                  })()}
+                  )}
                   {m.visionRefs.pages.length > 0 && (
                     <ul className="space-y-0.5">
                       {m.visionRefs.pages.slice(0, 5).map((p, pi) => (
@@ -973,7 +1015,8 @@ export function AgentChatPanel({
                     </ul>
                   )}
                 </div>
-              )}
+                );
+              })()}
             </div>
           ))}
           {sending && (

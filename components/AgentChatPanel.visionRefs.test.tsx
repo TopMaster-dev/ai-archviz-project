@@ -58,7 +58,7 @@ describe('参考画像から商品を特定する（260728）', () => {
         role: 'assistant',
         content: '候補です',
         visionRefs: {
-          images: [{ url: 'https://img.example.jp/a.jpg', pageToken: 'signed-token-abc' }],
+          images: [{ url: 'https://img.example.jp/a.jpg', token: 'img-token-a', pageToken: 'signed-token-abc' }],
           pages: [{ title: 'ソファ', url: 'https://shop.example.jp/item/1' }],
         },
       },
@@ -78,7 +78,8 @@ describe('参考画像から商品を特定する（260728）', () => {
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const body = sentBody(fetchMock);
     expect(body.mode).toBe('vision-product');
-    expect(body.imageUrl).toBe('https://img.example.jp/a.jpg');
+    expect(body.imageToken).toBe('img-token-a'); // 生URLは送らない
+    expect(body.imageUrl).toBeUndefined();
     expect(body.pageToken).toBe('signed-token-abc'); // 署名トークン経由でのみ直接ページを読む
     // 特定できた商品が、見積へ回せる形（商品カード）で会話に出る
     expect(await screen.findByText('ソファA')).toBeTruthy();
@@ -90,7 +91,7 @@ describe('参考画像から商品を特定する（260728）', () => {
       {
         role: 'assistant',
         content: '候補です',
-        visionRefs: { images: [{ url: 'https://img.example.jp/b.jpg' }], pages: [] },
+        visionRefs: { images: [{ url: 'https://img.example.jp/b.jpg', token: 'img-token-b' }], pages: [] },
       },
     ]);
     const fetchMock = stubAgentFetch({ success: true, reply: 'ok', recommendations: [] });
@@ -100,22 +101,59 @@ describe('参考画像から商品を特定する（260728）', () => {
 
     await waitFor(() => expect(fetchMock).toHaveBeenCalled());
     const body = sentBody(fetchMock);
-    expect(body.imageUrl).toBe('https://img.example.jp/b.jpg');
+    expect(body.imageToken).toBe('img-token-b');
     expect(body.pageToken).toBeUndefined();
   });
 
-  it('旧形式（画像URLの文字列配列）の履歴でも壊れず、押せる', async () => {
-    // 形を変える前に保存された履歴。利用者の端末に残っているのでここが壊れると既存ユーザーが被害を受ける。
+  it('旧形式（画像URLの文字列配列）の履歴でも壊れず表示される。ただし署名が無いので押せない', async () => {
+    // 形を変える前に保存された履歴。利用者の端末に残っているので、読めなくなってはいけない。
+    // 一方で署名トークンが無い＝「サーバが提示したURLである」ことを確認できないので、
+    // 取得のトリガーにはしない（ここを押せるようにすると H1 の穴が履歴経由で復活する）。
     seedChat('vr-3', [
       { role: 'assistant', content: '候補です', visionRefs: { images: ['https://img.example.jp/old.jpg'], pages: [] } },
     ]);
     const fetchMock = stubAgentFetch({ success: true, reply: 'ok', recommendations: [] });
 
     render(<AgentChatPanel open onOpenChange={() => {}} projectId="vr-3" />);
-    fireEvent.click(screen.getByTitle('この画像で商品を特定し直す'));
+    const button = screen.getByTitle('参考画像（この画像からの再検索は利用できません）');
+    expect((button as HTMLButtonElement).disabled).toBe(true); // 表示はされるが押せない
+    expect(screen.getByAltText('参考画像')).toBeTruthy();
+    fireEvent.click(button);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 
-    await waitFor(() => expect(fetchMock).toHaveBeenCalled());
-    expect(sentBody(fetchMock).imageUrl).toBe('https://img.example.jp/old.jpg');
+  it('参考画像が全部読み込めなければ、見出しごと出さない（空の箱を残さない）', async () => {
+    seedChat('vr-5', [
+      {
+        role: 'assistant',
+        content: '候補です',
+        visionRefs: { images: [{ url: 'https://img.example.jp/dead.jpg', token: 't' }], pages: [] },
+      },
+    ]);
+    render(<AgentChatPanel open onOpenChange={() => {}} projectId="vr-5" />);
+    // 最初は出ている
+    expect(screen.queryByText(/画像から見つかった参考情報/)).toBeTruthy();
+    // hotlink 拒否などで読み込みに失敗すると、枠と見出しごと消える
+    fireEvent.error(screen.getByAltText('参考画像'));
+    await waitFor(() => expect(screen.queryByText(/画像から見つかった参考情報/)).toBeNull());
+  });
+
+  it('画像が全滅しても参考ページが残っていれば、枠は残す', async () => {
+    seedChat('vr-6', [
+      {
+        role: 'assistant',
+        content: '候補です',
+        visionRefs: {
+          images: [{ url: 'https://img.example.jp/dead.jpg', token: 't' }],
+          pages: [{ title: 'ソファ', url: 'https://shop.example.jp/item/1' }],
+        },
+      },
+    ]);
+    render(<AgentChatPanel open onOpenChange={() => {}} projectId="vr-6" />);
+    fireEvent.error(screen.getByAltText('参考画像'));
+    await waitFor(() => expect(screen.queryByAltText('参考画像')).toBeNull());
+    expect(screen.getByText(/画像から見つかった参考情報/)).toBeTruthy();
+    expect(screen.getByTitle('https://shop.example.jp/item/1')).toBeTruthy();
   });
 
   it('処理中は参考画像を押せない（二重リクエストを出さない）', async () => {
@@ -123,7 +161,7 @@ describe('参考画像から商品を特定する（260728）', () => {
       {
         role: 'assistant',
         content: '候補です',
-        visionRefs: { images: [{ url: 'https://img.example.jp/c.jpg' }], pages: [] },
+        visionRefs: { images: [{ url: 'https://img.example.jp/c.jpg', token: 'img-token-c' }], pages: [] },
       },
     ]);
     // 応答を保留させ、送信中の状態を維持する

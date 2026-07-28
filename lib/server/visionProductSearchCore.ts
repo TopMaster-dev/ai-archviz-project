@@ -123,17 +123,30 @@ export function sameImage(a: string | undefined, b: string | undefined): boolean
 }
 
 /**
- * クライアントへ返すページ一覧に、署名付きトークンを添える（260728 敵対レビュー H1）。
- * URL 自体は表示（リンク・タイトル）に必要なので残すが、「あとで取得させる」操作には
- * このトークンしか受け付けない。署名できない構成ではトークンが付かず、直行経路が使えなくなるだけ
- * （＝機能は画像経路で従来どおり動く）。
+ * クライアントへ返す「あとでサーバに取得させ得るURL」すべてに署名トークンを添える（260728 敵対レビュー H1）。
+ *
+ * URL 自体は表示（サムネイル・リンク・タイトル）に必要なので残すが、
+ * 「取得させる」操作にはトークンしか受け付けない。対象は2種類あり、両方に付けること:
+ *   - ページURL（掲載ページ直読み経路）
+ *   - 画像URL（逆画像検索やり直し経路）
+ * 片方だけ署名しても、署名していない側が任意URLの取得口として残る。
+ * 署名できない構成ではトークンが付かず、その操作が使えなくなるだけ（表示は従来どおり）。
  */
 async function withPageTokens(
   pages: VisionMatchingPage[],
-): Promise<Array<VisionMatchingPage & { pageToken?: string }>> {
+): Promise<Array<VisionMatchingPage & { pageToken?: string; imageToken?: string }>> {
   return Promise.all(
-    pages.map(async (p) => ({ ...p, pageToken: (await signUrlToken(p.url)) ?? undefined })),
+    pages.map(async (p) => ({
+      ...p,
+      pageToken: (await signUrlToken(p.url)) ?? undefined,
+      imageToken: p.imageUrl ? ((await signUrlToken(p.imageUrl)) ?? undefined) : undefined,
+    })),
   );
+}
+
+/** 類似画像も同様に、URL（表示用）と署名トークン（取得用）の組で返す。 */
+async function withImageTokens(urls: string[]): Promise<Array<{ url: string; token?: string }>> {
+  return Promise.all(urls.map(async (url) => ({ url, token: (await signUrlToken(url)) ?? undefined })));
 }
 
 function resolveVisionApiKey(): string {
@@ -153,11 +166,16 @@ export interface VisionSearchResult {
 export async function runVisionProductSearch(params: {
   imageDataUrl?: string;
   /**
-   * 参考画像の URL から検索する（260728 クライアント要望「画像を選ぶと該当商品を追加できるように」）。
+   * 参考画像への署名付きトークン（260728 クライアント要望「画像を選ぶと該当商品を追加できるように」）。
    * imageDataUrl が無いときだけ使う。第三者ドメインの画像はブラウザから本文を読めない（CORS）ため、
    * サーバが safeFetchImage（ページ取得と同じ SSRF ゲート）で取得して data URL 化する。
+   *
+   * 【重要】pageToken と同じ理由で、ここも生の URL を受け取ってはいけない（敵対レビュー H1）。
+   * safeFetchImage の SSRF ゲートは「内部アドレスへ行かせない」ためのもので、
+   * 「第三者サイトへ我々の名前で大量に取りに行かせない」ことは防げない。約100バイトの
+   * リクエストで最大4MBの外向き通信を起こせるため、署名でURLの出所をサーバ側に固定する。
    */
-  imageUrl?: string;
+  imageToken?: string;
   /**
    * 選ばれた画像が載っているページへの署名付きトークン（260728）。
    * Vision の pagesWithMatchingImages は「画像 → 掲載ページ」の対応が確定しているので、
@@ -186,7 +204,9 @@ export async function runVisionProductSearch(params: {
   //   生き残り、実質 URL 取得プロキシになる。ここが機能する条件は他経路と揃える。
   // ※取得先はトークンから復元する。改ざん・期限切れ・署名不能はすべて null になり、
   //   その場合は黙って下の画像経路へ落ちる（利用者にはエラーを見せない）。
+  // 取得先はすべてトークンから復元する。クライアントが申告した URL は一切使わない。
   const pageUrl = params.pageToken ? await verifyUrlToken(params.pageToken) : null;
+  const clickedImageUrl = params.imageToken ? await verifyUrlToken(params.imageToken) : null;
   if (pageUrl) {
     const direct = await resolveProductsFromUrls([pageUrl]);
     // 【敵対レビュー H2】ページが読めただけでは「クリックした画像の商品」とは限らない。
@@ -195,7 +215,7 @@ export async function runVisionProductSearch(params: {
     // 素通しすると『商品ページ確認済み』の緑バッジ付きで無関係な商品と価格が見積に入る。
     // ページ側の商品画像がクリックされた画像と一致したときだけ確定扱いにし、
     // 一致しなければ下の画像経路（実際に画像で照合する）へ落とす。
-    if (direct.length > 0 && direct[0].name && sameImage(params.imageUrl, direct[0].imageUrl)) {
+    if (direct.length > 0 && direct[0].name && sameImage(clickedImageUrl ?? undefined, direct[0].imageUrl)) {
       return {
         status: 200,
         body: {
@@ -216,8 +236,8 @@ export async function runVisionProductSearch(params: {
 
   // URL 指定なら、まずサーバ側で画像を取得して data URL に揃える。以降の処理は完全に共通。
   let imageDataUrl = params.imageDataUrl || '';
-  if (!imageDataUrl && params.imageUrl) {
-    const fetched = await safeFetchImage(params.imageUrl);
+  if (!imageDataUrl && clickedImageUrl) {
+    const fetched = await safeFetchImage(clickedImageUrl);
     if (!fetched.ok) {
       // 取得できない参考画像は珍しくない（相手サイトが hotlink を拒否する等）。原因は出さず操作案内だけ返す。
       console.warn('[visionProductSearch] image fetch failed', fetched.reason);
@@ -300,7 +320,7 @@ export async function runVisionProductSearch(params: {
         // 商品ページとして確定できなかった場合でも、逆画像検索が見つけた「似ている画像」と
         // 「一致したページ」は視覚的な手掛かりになる。Vision の応答に既に含まれており追加課金は無い。
         // ただし確定情報ではないので、UI 側では商品カードと明確に区別して出すこと。
-        similarImages: findings.similarImageUrls.slice(0, 8),
+        similarImages: await withImageTokens(findings.similarImageUrls.slice(0, 8)),
       },
     };
   } catch (e: any) {
