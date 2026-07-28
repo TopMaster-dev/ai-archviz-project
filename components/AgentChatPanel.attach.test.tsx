@@ -79,3 +79,56 @@ describe('AgentChatPanel の添付アップロード（実際に効くこと・2
     }
   });
 });
+
+/**
+ * 260728 クライアント要望: エリア編集だけで効いていたドラッグ&ドロップを、
+ * エージェント（と コーディネート）でも同じ操作で使えるようにした。
+ * 重要なのは「選択とドロップで挙動が食い違わない」こと＝同じ検証を通ること。
+ */
+describe('AgentChatPanel のドラッグ&ドロップ添付（260728）', () => {
+  const dropFiles = (target: Element, files: File[]) => {
+    const dataTransfer = { files, types: ['Files'], items: [] } as unknown as DataTransfer;
+    fireEvent.dragEnter(target, { dataTransfer });
+    fireEvent.dragOver(target, { dataTransfer });
+    fireEvent.drop(target, { dataTransfer });
+  };
+
+  it('パネルへドロップしたファイルが添付される', async () => {
+    const { container } = render(<AgentChatPanel open onOpenChange={() => {}} projectId="test-drop-1" />);
+    dropFiles(container.firstElementChild as Element, [
+      new File(['hello'], 'dropped.txt', { type: 'text/plain' }),
+    ]);
+    expect(await screen.findByText('dropped.txt')).toBeTruthy();
+    expect(screen.getByText(/添付ファイル（1件）/)).toBeTruthy();
+  });
+
+  it('複数ファイルを一度にドロップできる', async () => {
+    const { container } = render(<AgentChatPanel open onOpenChange={() => {}} projectId="test-drop-2" />);
+    dropFiles(container.firstElementChild as Element, [
+      new File(['a'], 'a.txt', { type: 'text/plain' }),
+      new File(['b'], 'b.txt', { type: 'text/plain' }),
+    ]);
+    expect(await screen.findByText('a.txt')).toBeTruthy();
+    expect(screen.getByText('b.txt')).toBeTruthy();
+  });
+
+  it('ドロップでも「AIが読めない形式」は選択時と同じく除外され、同じ案内が出る', async () => {
+    const { container } = render(<AgentChatPanel open onOpenChange={() => {}} projectId="test-drop-3" />);
+    dropFiles(container.firstElementChild as Element, [
+      new File(['x'], 'plan.docx', {
+        type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      }),
+    ]);
+    // 選択時と同一の文言（検証ロジックを1本に統合したことの確認）。
+    expect(await screen.findByText(/AIが直接読み取れない形式のため除外しました/)).toBeTruthy();
+    expect(screen.queryByText('plan.docx')).toBeNull();
+  });
+
+  it('ドラッグ中はドロップ先が分かるオーバーレイが出る', () => {
+    const { container } = render(<AgentChatPanel open onOpenChange={() => {}} projectId="test-drop-4" />);
+    const root = container.firstElementChild as Element;
+    const dataTransfer = { files: [], types: ['Files'], items: [] } as unknown as DataTransfer;
+    fireEvent.dragEnter(root, { dataTransfer });
+    expect(screen.getByText('ここにドロップして添付')).toBeTruthy();
+  });
+});

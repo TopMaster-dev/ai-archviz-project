@@ -525,9 +525,11 @@ export function AiEditWorkspace({
     }
   };
 
-  const onPickStyleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files ?? []);
-    e.target.value = '';
+  /**
+   * スタイル参照画像を追加する（クリック選択・ドラッグ&ドロップ共通・260728）。
+   * ファイル選択とドロップで挙動が食い違わないよう、必ずこの1本を通す。
+   */
+  const addStyleFiles = async (files: File[]) => {
     const images = files.filter((f) => f.type.startsWith('image/'));
     if (images.length === 0) return;
     try {
@@ -536,6 +538,22 @@ export function AiEditWorkspace({
     } catch {
       /* ignore */
     }
+  };
+
+  const onPickStyleFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = '';
+    await addStyleFiles(files);
+  };
+
+  /** 複数画像のドロップ（コーディネートのスタイル参照用・260728 クライアント要望）。 */
+  const handleImagesDrop = async (e: React.DragEvent, cb: (files: File[]) => void | Promise<void>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDropActive(null);
+    const files = Array.from(e.dataTransfer.files ?? []).filter((x) => x.type.startsWith('image/'));
+    if (files.length === 0) return;
+    await cb(files);
   };
 
   const onPickObjectFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2160,7 +2178,22 @@ export function AiEditWorkspace({
                     rows={6}
                     className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white leading-relaxed resize-none outline-none focus:border-emerald-500"
                   />
-                  <div className="flex items-center gap-2">
+                  {/* エリア編集と同じくドラッグ&ドロップで読み込めるようにする（260728 クライアント要望：
+                      エリア編集だけD&Dが効き、コーディネートとエージェントで効かないのは操作が混乱するため）。 */}
+                  <div
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setDropActive('style');
+                    }}
+                    onDragLeave={() => setDropActive(null)}
+                    onDrop={(e) => void handleImagesDrop(e, addStyleFiles)}
+                    className={`flex items-center gap-2 rounded-lg border border-dashed p-2 transition ${
+                      dropActive === 'style'
+                        ? 'border-emerald-400 bg-emerald-500/10'
+                        : 'border-white/10 bg-transparent'
+                    }`}
+                  >
                     <button
                       type="button"
                       onClick={() => styleInputRef.current?.click()}
@@ -2169,8 +2202,10 @@ export function AiEditWorkspace({
                       <Paperclip className="h-4 w-4" />
                       ファイルを添付
                     </button>
-                    {draftStyleRefs.length > 0 && (
+                    {draftStyleRefs.length > 0 ? (
                       <span className="text-[10px] text-neutral-400">添付 {draftStyleRefs.length} / {MAX_STYLE_REFS} 枚</span>
+                    ) : (
+                      <span className="text-[10px] text-neutral-500">またはここに画像をドロップ</span>
                     )}
                   </div>
                   {/* 添付画像のサムネイル一覧（複数対応・各画像を個別に削除できる・260707）。

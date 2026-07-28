@@ -245,12 +245,12 @@ export function AgentChatPanel({
     setError(null);
   };
 
-  const onPickAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // 重要（260702 バグ修正）: input.value をリセットする前に FileList を配列へコピーする。
-    // 先に value='' すると、参照していた FileList が空になり（ブラウザ挙動）、添付が一切効かなくなる
-    // ＝「アップロードしても何も起きない」原因。必ず先にコピーしてからリセットする。
-    const picked = e.target.files ? Array.from(e.target.files) : [];
-    e.target.value = '';
+  /**
+   * 添付ファイルを追加する（クリック選択・ドラッグ&ドロップ共通・260728 クライアント要望）。
+   * 読み取り可能形式の判定・合計サイズ上限・エラー文言をここに集約し、
+   * 選択とドロップで挙動が食い違わないようにする。
+   */
+  const addAttachments = (picked: File[]) => {
     if (picked.length === 0) return;
     let running = attachedFiles.reduce((s, f) => s + f.size, 0);
     const accepted: File[] = [];
@@ -294,6 +294,43 @@ export function AgentChatPanel({
       reader.onloadend = () => setReadingCount((c) => Math.max(0, c - 1));
       reader.readAsDataURL(file);
     });
+  };
+
+  const onPickAttach = (e: React.ChangeEvent<HTMLInputElement>) => {
+    // 重要（260702 バグ修正）: input.value をリセットする前に FileList を配列へコピーする。
+    // 先に value='' すると、参照していた FileList が空になり（ブラウザ挙動）、添付が一切効かなくなる
+    // ＝「アップロードしても何も起きない」原因。必ず先にコピーしてからリセットする。
+    const picked = e.target.files ? Array.from(e.target.files) : [];
+    e.target.value = '';
+    addAttachments(picked);
+  };
+
+  // ドラッグ&ドロップ添付（260728 クライアント要望：エリア編集だけ効いていたD&Dを揃える）。
+  // パネル全体で受けると会話を読みながらでもドロップでき、操作の迷いが減る。
+  const [dropActive, setDropActive] = useState(false);
+  const dragDepthRef = useRef(0); // 子要素をまたぐと dragleave が連発するため深さで管理する
+  const handleDragEnter = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types ?? []).includes('Files')) return; // テキスト選択のドラッグ等は無視
+    e.preventDefault();
+    dragDepthRef.current += 1;
+    setDropActive(true);
+  };
+  const handleDragOver = (e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer.types ?? []).includes('Files')) return;
+    e.preventDefault(); // これが無いとブラウザがファイルを開いてしまう
+  };
+  const handleDragLeave = () => {
+    dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+    if (dragDepthRef.current === 0) setDropActive(false);
+  };
+  const handleDrop = (e: React.DragEvent) => {
+    const files = Array.from(e.dataTransfer.files ?? []);
+    if (files.length === 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepthRef.current = 0;
+    setDropActive(false);
+    addAttachments(files);
   };
 
   const removeFile = (id: string) => setAttachedFiles((prev) => prev.filter((f) => f.id !== id));
@@ -383,6 +420,10 @@ export function AgentChatPanel({
             <Paperclip className="h-4 w-4" />
             ファイルを添付
           </button>
+          {/* D&D が使えることを操作前に伝える（260728・エリア編集と操作を揃えた旨の明示）。 */}
+          {attachedFiles.length === 0 && readingCount === 0 && (
+            <span className="text-[10px] text-neutral-500">またはドラッグ&amp;ドロップ</span>
+          )}
           {/* ②「画像から商品を特定して探す」モード切替（Cloud Vision・env フラグ時のみ表示・260725）。 */}
           {VISION_PRODUCT_SEARCH_ENABLED && (
             <button
@@ -425,12 +466,24 @@ export function AgentChatPanel({
 
   return (
     <div
-      className={
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+      className={`relative ${
         inline
           ? 'flex h-full min-h-0 w-full flex-col rounded-2xl border border-white/15 bg-neutral-900/60'
           : 'fixed bottom-6 right-6 z-[10005] flex h-[28rem] w-[22rem] max-w-[92vw] flex-col rounded-2xl border border-white/15 bg-neutral-900/95 shadow-2xl backdrop-blur'
-      }
+      }`}
     >
+      {/* ドロップ中のオーバーレイ（どこへ落とせばよいか一目で分かるように）。 */}
+      {dropActive && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-emerald-400 bg-emerald-500/10">
+          <span className="rounded-lg bg-black/70 px-3 py-1.5 text-xs font-bold text-emerald-200">
+            ここにドロップして添付
+          </span>
+        </div>
+      )}
       <div className="flex items-center justify-between border-b border-white/10 px-3 py-2.5">
         <div className="flex items-center gap-2">
           <MessageCircle className="h-4 w-4 text-emerald-400" />
