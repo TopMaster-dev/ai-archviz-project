@@ -167,6 +167,34 @@ describe('projectStore — load / serialize', () => {
     expect(restored?.memo).toBe('施主支給');
   });
 
+  // 260728 クライアント要望「参考画像を選んで見積に追加」。選んだ商品の画像URLも見積項目に持たせた。
+  // 保存経路から漏れると「開き直すと写真だけ消える」＝どの商品を選んだのか分からなくなるので固定する。
+  it('AI追加アイテムの商品画像URLが保存・復元される', () => {
+    store.getState().setAiEstimateItems([
+      {
+        id: 'ai-1',
+        name: 'Castiglia 18インチ サイドテーブル',
+        brand: 'Mercury Row',
+        price: 63990,
+        modelNumber: 'MR-1801',
+        productUrl: 'https://shop.example.jp/item/1',
+        imageUrl: 'https://img.example.jp/chair.jpg',
+      },
+    ]);
+    const snapshot = store.getState().toProjectState();
+    expect(snapshot.estimate.aiItems[0].imageUrl).toBe('https://img.example.jp/chair.jpg');
+
+    store.getState().reset();
+    expect(store.getState().estimate.aiItems).toHaveLength(0);
+
+    store.getState().loadProjectState(snapshot);
+    const restored = store.getState().estimate.aiItems[0];
+    expect(restored.imageUrl).toBe('https://img.example.jp/chair.jpg');
+    expect(restored.productUrl).toBe('https://shop.example.jp/item/1');
+    expect(restored.modelNumber).toBe('MR-1801');
+    expect(restored.price).toBe(63990);
+  });
+
   it('空文字・0以下は未設定へ戻し、全部空ならエントリごと消す', () => {
     store.getState().setEstimateOverride('baseboard:default_no_tex', { brand: 'X', unitPrice: 800 });
     expect(store.getState().estimate.overrides['baseboard:default_no_tex']).toBeDefined();

@@ -824,6 +824,24 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
               const missing = !item.name.trim() || !(item.price && item.price > 0); // 名称・金額のみ（ブランドは任意）
               return (
                 <div key={item.id} className={`rounded-xl border p-2 ${missing ? 'border-amber-500/40 bg-amber-500/5' : 'border-white/10 bg-white/5'}`}>
+                  {/* 選んだ商品の写真（260728 クライアント要望）。参考画像から追加したとき、
+                      名称だけだと似た別商品と取り違えても気付けないため、選んだ現物を残す。
+                      配信元が読み込みを拒む場合は静かに消す（枠だけ残さない）。 */}
+                  {item.imageUrl && /^https?:\/\//i.test(item.imageUrl) && (
+                    <div className="mb-2 flex items-center gap-2">
+                      <img
+                        src={item.imageUrl}
+                        alt=""
+                        loading="lazy"
+                        referrerPolicy="no-referrer"
+                        onError={(e) => {
+                          e.currentTarget.parentElement?.style.setProperty('display', 'none');
+                        }}
+                        className="h-10 w-10 shrink-0 rounded border border-white/10 bg-black/30 object-cover"
+                      />
+                      <span className="text-[9px] font-bold text-neutral-500">選択した商品の画像</span>
+                    </div>
+                  )}
                   <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
                     <input
                       value={item.name}
@@ -3535,6 +3553,11 @@ const App: React.FC = () => {
         memo: buildAgentItemMemo(rec),
         modelNumber: rec.modelNumber,
         productUrl: rec.productUrl,
+        // 選んだ商品の画像も持ち越す（260728 クライアント要望）。参考画像から選んだ場合、
+        // 見積側でも「どれを選んだか」が一目で分かるようにするため。
+        // 保存する時点で http(s) だけに絞る（表示側の検査だけに頼ると、保存データに変な値が残る）。
+        imageUrl:
+          typeof rec.imageUrl === 'string' && /^https?:\/\//i.test(rec.imageUrl) ? rec.imageUrl : undefined,
         versionId: aiEditActiveVersionId ?? undefined, // 表示中の生成画像に紐付け（1c）
       },
     ]);

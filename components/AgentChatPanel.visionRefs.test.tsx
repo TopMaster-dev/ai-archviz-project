@@ -178,3 +178,93 @@ describe('参考画像から商品を特定する（260728）', () => {
     expect(mock).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * 260728 クライアント要望「参考画像を選んだら、その商品を見積に追加できるようにしたい」。
+ * 画像クリック → 商品カード → 「見積に追加」 → 見積へ商品情報が渡る、までを通しで固定する。
+ * 途中のどこが切れても機能として無意味になるので、経路全体を1本のテストで押さえる。
+ */
+describe('参考画像 → 商品カード → 見積に追加（通し）', () => {
+  it('画像を選ぶと商品カードが出て、「見積に追加」で商品情報が見積へ渡る', async () => {
+    seedChat('vr-7', [
+      {
+        role: 'assistant',
+        content: '候補です',
+        visionRefs: {
+          images: [{ url: 'https://img.example.jp/chair.jpg', token: 'img-token', pageToken: 'page-token' }],
+          pages: [],
+        },
+      },
+    ]);
+    stubAgentFetch({
+      success: true,
+      source: 'page-direct',
+      reply: '掲載ページから取得しました',
+      recommendations: [
+        {
+          name: 'Castiglia 18インチ サイドテーブル',
+          brand: 'Mercury Row',
+          price: 63990,
+          modelNumber: 'MR-1801',
+          productUrl: 'https://shop.example.jp/item/1',
+          imageUrl: 'https://img.example.jp/chair.jpg',
+          verified: true,
+        },
+      ],
+    });
+
+    const added: any[] = [];
+    render(
+      <AgentChatPanel
+        open
+        onOpenChange={() => {}}
+        projectId="vr-7"
+        onAddEstimateItem={(rec) => added.push(rec)}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle('この画像の掲載ページから商品情報を取得する'));
+
+    // 商品カードが出る
+    expect(await screen.findByText('Castiglia 18インチ サイドテーブル')).toBeTruthy();
+
+    // 「見積に追加」で商品情報が渡る
+    fireEvent.click(screen.getByTitle('この商品を概算見積もりへ追加'));
+    expect(added).toHaveLength(1);
+    expect(added[0].name).toBe('Castiglia 18インチ サイドテーブル');
+    expect(added[0].brand).toBe('Mercury Row');
+    expect(added[0].price).toBe(63990);
+    expect(added[0].modelNumber).toBe('MR-1801');
+    expect(added[0].productUrl).toBe('https://shop.example.jp/item/1');
+    // 選んだ画像そのものも見積へ渡すこと（「選択した商品の情報」に写真も含む）
+    expect(added[0].imageUrl).toBe('https://img.example.jp/chair.jpg');
+  });
+
+  it('二重追加はできない（押した後は「追加済み」になる）', async () => {
+    seedChat('vr-8', [
+      {
+        role: 'assistant',
+        content: '候補です',
+        visionRefs: { images: [{ url: 'https://img.example.jp/x.jpg', token: 't' }], pages: [] },
+      },
+    ]);
+    stubAgentFetch({
+      success: true,
+      reply: 'ok',
+      recommendations: [{ name: 'ソファA', price: 1000, verified: true }],
+    });
+
+    const added: any[] = [];
+    render(
+      <AgentChatPanel open onOpenChange={() => {}} projectId="vr-8" onAddEstimateItem={(r) => added.push(r)} />,
+    );
+    fireEvent.click(screen.getByTitle('この画像で商品を特定し直す'));
+    expect(await screen.findByText('ソファA')).toBeTruthy();
+
+    const addBtn = screen.getByTitle('この商品を概算見積もりへ追加');
+    fireEvent.click(addBtn);
+    fireEvent.click(addBtn);
+    expect(added).toHaveLength(1);
+    expect(screen.getByText('追加済み')).toBeTruthy();
+  });
+});
