@@ -319,6 +319,56 @@ function buildAgentContents(params: {
 }
 
 /** テキストから最初の JSON オブジェクトを取り出す（```json フェンスや前後の地の文・出典表記に耐える）。 */
+/**
+ * モデル応答から「利用者に見せる本文」だけを取り出す（260728 クライアント報告）。
+ *
+ * 症状: チャットに `{"reply":"画像に写っている椅子は…` という生のJSONがそのまま出ていた。
+ * 原因: 応答は JSON で返させているが、長い回答が途中で打ち切られる（MAX_TOKENS）等で
+ *       JSON.parse に失敗すると、フォールバックが「応答テキスト全体」をそのまま本文にしていた。
+ *
+ * そこで、JSON として壊れていても "reply" の値だけは救い出す。閉じ括弧が無い（＝途中で切れた）
+ * ケースでも、そこまでの本文を返せるようにする。救い出せない場合も、JSON の殻は見せない。
+ */
+export function salvageReplyText(text: string): string {
+  const raw = (text ?? '').trim();
+  if (!raw) return '';
+  // コードフェンス（```json …）を剥がす
+  const fence = raw.match(/```(?:json)?\s*([\s\S]*?)(?:```|$)/);
+  const body = fence ? fence[1].trim() : raw;
+  if (!body.includes('"reply"')) return body; // JSON ではない＝そのまま本文
+
+  const key = body.indexOf('"reply"');
+  const colon = body.indexOf(':', key + 7);
+  if (colon < 0) return body;
+  const quote = body.indexOf('"', colon + 1);
+  if (quote < 0) return body;
+
+  // エスケープを尊重しながら、閉じ引用符（または文字列の終端＝切れている）まで読む。
+  let out = '';
+  for (let i = quote + 1; i < body.length; i++) {
+    const ch = body[i];
+    if (ch === '\\') {
+      const next = body[i + 1];
+      if (next === 'n') out += '\n';
+      else if (next === 't') out += '\t';
+      else if (next === 'u') {
+        const hex = body.slice(i + 2, i + 6);
+        const code = Number.parseInt(hex, 16);
+        out += Number.isFinite(code) ? String.fromCharCode(code) : '';
+        i += 4;
+      } else if (next !== undefined) out += next;
+      i += 1;
+      continue;
+    }
+    if (ch === '"') break; // 文字列の終わり
+    out += ch;
+  }
+  const salvaged = out.trim();
+  if (salvaged) return salvaged;
+  // ここまで来たら本文を取り出せていない。JSON の殻を見せるより、定型文の方がまだ親切。
+  return '';
+}
+
 function extractJsonObject(text: string): string | null {
   let s = text.trim();
   const fence = s.match(/```(?:json)?\s*([\s\S]*?)```/);
@@ -507,9 +557,10 @@ ${recommendLine}
       }
     }
   } catch {
-    reply = text.trim();
+    // 生のJSONを本文として出さない（260728 クライアント報告）。
+    reply = salvageReplyText(text);
   }
-  if (!reply) reply = parsedOk ? '回答を取得できませんでした。もう一度お試しください。' : text.trim();
+  if (!reply) reply = parsedOk ? '回答を取得できませんでした。もう一度お試しください。' : salvageReplyText(text);
   // カタログ経路の推薦は、モデルの作文ではなく「ユーザー自身が登録した実データ」から解決している
   // （番号で選ばせ、値はこちらが差し込む）。よって検証済み扱いにし、URLを外してはならない。
   // これを付けないと、運営が手入力した本物の商品URLが Google 検索リンクに置き換わり、
@@ -659,8 +710,9 @@ export async function generateVisionProductReply(
       /* JSON 解析失敗 → 下でテキスト全体を返す */
     }
   }
+  // JSON が壊れていても本文だけは救い出す（生のJSONをチャットに出さない・260728）。
   return {
-    reply: text.trim() || '商品を特定できませんでした。対象を具体的に指定して再度お試しください。',
+    reply: salvageReplyText(text) || '商品を特定できませんでした。対象を具体的に指定して再度お試しください。',
     recommendations: [],
     usage: readUsage(result),
   };

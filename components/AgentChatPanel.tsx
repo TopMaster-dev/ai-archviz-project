@@ -7,6 +7,7 @@ import { isReadableAttachment } from '../lib/agentAttachments.js';
 import { isOutOfStock } from '../lib/productExtract.js';
 import { renderSanitizedHtml } from '../utils/sanitizeSearchSuggestion.js';
 import { ImageRegionPicker } from './ImageRegionPicker.js';
+import { ChatRichText } from './ChatRichText.js';
 import type { AgentChatMessage } from '../lib/gemini.js';
 import type { AgentCatalogEntry, AgentRecommendation } from '../types.js';
 
@@ -624,12 +625,16 @@ export function AgentChatPanel({
           {messages.map((m, i) => (
             <div key={`${m.role}-${i}`} className={`flex flex-col ${m.role === 'user' ? 'items-end' : 'items-start'}`}>
               <div
-                className={`max-w-[85%] cursor-text select-text whitespace-pre-wrap break-words rounded-xl px-3 py-2 ${
-                  m.role === 'user' ? 'bg-emerald-600 text-white' : 'bg-white/10 text-neutral-100'
+                className={`max-w-[85%] cursor-text select-text break-words rounded-xl px-3 py-2 leading-relaxed ${
+                  m.role === 'user'
+                    ? 'whitespace-pre-wrap bg-emerald-600 text-white'
+                    : 'bg-white/10 text-neutral-100'
                 }`}
                 style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
               >
-                {m.content}
+                {/* AIの回答は Markdown 記法（**強調**・箇条書き）を含むため、記号のまま見せず軽く整形する
+                    （260728 クライアント報告「回答が読みづらい」）。ユーザー発言は素のまま表示。 */}
+                {m.role === 'assistant' ? <ChatRichText text={m.content} /> : m.content}
               </div>
               {m.role === 'user' && m.attachmentNames && m.attachmentNames.length > 0 && (
                 <div className="mt-1 flex max-w-[85%] flex-wrap justify-end gap-1">
