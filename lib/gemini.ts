@@ -330,6 +330,71 @@ function extractJsonObject(text: string): string | null {
 }
 
 /** Web検索由来の推薦（モデルが直接返した実在商品フィールド）を AgentRecommendation へ正規化。 */
+/** Web検索グラウンディングが実際に参照した出典（モデルの作文ではない実在URL）。 */
+export interface GroundingSource {
+  /** 参照ページのURL。Vertex のリダイレクトURLの場合があるため、永続保存には向かない。 */
+  uri: string;
+  /** ページタイトル（多くはドメイン名）。 */
+  title: string;
+}
+
+export interface AgentReplyResult {
+  reply: string;
+  recommendations: AgentRecommendation[];
+  usage: TokenUsage | null;
+  /** グラウンディングが参照した実在URL（260728 要望③: 個別商品URLの根拠にする）。 */
+  sources?: GroundingSource[];
+  /** 実際に投げられた検索クエリ（デバッグ・再検索リンク用）。 */
+  searchQueries?: string[];
+  /**
+   * Google が返す「検索候補」の表示用HTML（searchEntryPoint.renderedContent）。
+   * グラウンディングの利用規約は、これをそのまま表示することを求めている。
+   */
+  searchSuggestionHtml?: string;
+}
+
+/**
+ * candidates[0].groundingMetadata から出典・検索クエリ・検索候補HTMLを取り出す（260728）。
+ * 応答形状はモデル/バージョンで揺れるため、全て任意として防御的に読む（欠けていても落とさない）。
+ */
+export function parseGroundingMetadata(result: unknown): {
+  sources: GroundingSource[];
+  searchQueries: string[];
+  searchSuggestionHtml?: string;
+} {
+  const empty = { sources: [] as GroundingSource[], searchQueries: [] as string[] };
+  const md = (result as { candidates?: Array<{ groundingMetadata?: unknown }> } | null)?.candidates?.[0]
+    ?.groundingMetadata as
+    | {
+        groundingChunks?: unknown;
+        webSearchQueries?: unknown;
+        searchEntryPoint?: { renderedContent?: unknown };
+      }
+    | undefined;
+  if (!md || typeof md !== 'object') return empty;
+
+  const sources: GroundingSource[] = [];
+  if (Array.isArray(md.groundingChunks)) {
+    for (const c of md.groundingChunks as unknown[]) {
+      const web = (c as { web?: { uri?: unknown; title?: unknown } })?.web;
+      const uri = typeof web?.uri === 'string' ? web.uri.trim() : '';
+      if (!/^https?:\/\//i.test(uri)) continue;
+      const title = typeof web?.title === 'string' && web.title.trim() ? web.title.trim() : uri;
+      if (!sources.some((s) => s.uri === uri)) sources.push({ uri, title });
+      if (sources.length >= 12) break;
+    }
+  }
+
+  const searchQueries = Array.isArray(md.webSearchQueries)
+    ? (md.webSearchQueries as unknown[]).filter((q): q is string => typeof q === 'string' && q.trim().length > 0)
+    : [];
+
+  const rendered = md.searchEntryPoint?.renderedContent;
+  const searchSuggestionHtml = typeof rendered === 'string' && rendered.trim() ? rendered : undefined;
+
+  return { sources, searchQueries, searchSuggestionHtml };
+}
+
 function parseAgentWebRecommendations(v: unknown): AgentRecommendation[] {
   if (!Array.isArray(v)) return [];
   const out: AgentRecommendation[] = [];
@@ -445,7 +510,11 @@ ${recommendLine}
     reply = text.trim();
   }
   if (!reply) reply = parsedOk ? '回答を取得できませんでした。もう一度お試しください。' : text.trim();
-  const recommendations = resolveAgentRecommendations(catalog, picks);
+  // カタログ経路の推薦は、モデルの作文ではなく「ユーザー自身が登録した実データ」から解決している
+  // （番号で選ばせ、値はこちらが差し込む）。よって検証済み扱いにし、URLを外してはならない。
+  // これを付けないと、運営が手入力した本物の商品URLが Google 検索リンクに置き換わり、
+  // 「未確認（要確認）」と表示されてしまう（260728 敵対レビュー B3）。
+  const recommendations = resolveAgentRecommendations(catalog, picks).map((r) => ({ ...r, verified: true }));
   return { reply, recommendations, usage: readUsage(result) };
 }
 
@@ -470,7 +539,7 @@ export async function generateAgentReply(
     /** ユーザーの現在のプロジェクト情報（部屋の寸法・家具・建材・予算など）。システムプロンプトへ添える。260725 ① */
     projectContext?: string;
   }
-): Promise<{ reply: string; recommendations: AgentRecommendation[]; usage: TokenUsage | null }> {
+): Promise<AgentReplyResult> {
   const catalog = params.catalog ?? [];
   const contents = buildAgentContents(params);
   const model = params.model || resolveAgentModel();
@@ -489,6 +558,9 @@ export async function generateAgentReply(
 - 出力は必ず次の JSON のみ（前後に説明・マークダウン・出典表記を付けない）:
 {"reply":"<日本語の助言。必須>","recommendations":[{"name":"<商品名>","brand":"<メーカー>","modelNumber":"<品番>","price":<参考価格の数値・任意>,"productUrl":"<商品ページURL>","reason":"<短い推薦理由>"}]}${projectBlock}`;
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  // グラウンディング情報は try の外で保持する。JSON 抽出に失敗してカタログ経路へ落ちても、
+  // 検索自体は実行・課金されているため、検索候補の表示義務は残る（260728 敵対レビュー C5）。
+  let grounding: ReturnType<typeof parseGroundingMetadata> | undefined;
   try {
     const response = await fetch(endpoint, {
       method: 'POST',
@@ -506,12 +578,23 @@ export async function generateAgentReply(
         .filter((p: { text?: string }) => typeof p.text === 'string')
         .map((p: { text?: string }) => p.text as string)
         .join('\n');
+      // グラウンディングの付随情報（実際に参照された実在URL・検索クエリ・検索候補の表示HTML）。
+      // 従来はテキストだけ読んで捨てていたが、ここに「モデルが作文したのではない本物のURL」が入っている。
+      // 個別商品URLの提示（260728 要望③）と、利用規約が求める検索候補の表示に使う。
+      grounding = parseGroundingMetadata(result);
       const jsonStr = text ? extractJsonObject(text) : null;
       if (jsonStr) {
         const parsed = JSON.parse(jsonStr) as { reply?: unknown; recommendations?: unknown };
         const reply = typeof parsed.reply === 'string' ? parsed.reply.trim() : '';
         if (reply) {
-          return { reply, recommendations: parseAgentWebRecommendations(parsed.recommendations), usage: readUsage(result) };
+          return {
+            reply,
+            recommendations: parseAgentWebRecommendations(parsed.recommendations),
+            usage: readUsage(result),
+            sources: grounding.sources,
+            searchQueries: grounding.searchQueries,
+            searchSuggestionHtml: grounding.searchSuggestionHtml,
+          };
         }
       }
       // ok だが JSON を取り出せない → フォールバックへ
@@ -520,7 +603,9 @@ export async function generateAgentReply(
     /* グラウンディング非対応/ネットワーク等 → フォールバックへ */
   }
   // フォールバック: 従来のカタログ index 方式（グラウンディングが使えなくても提案が動く）。
-  return await catalogAgentReply(apiKey, contents, catalog, { model, projectContext });
+  // 検索は実際に課金されているので、JSON 抽出に失敗しても検索候補の表示義務は残る（260728 敵対レビュー C5）。
+  const fb = await catalogAgentReply(apiKey, contents, catalog, { model, projectContext });
+  return { ...fb, sources: grounding?.sources, searchQueries: grounding?.searchQueries, searchSuggestionHtml: grounding?.searchSuggestionHtml };
 }
 
 /**

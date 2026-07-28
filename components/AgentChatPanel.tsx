@@ -4,6 +4,9 @@ import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import { isReadableAttachment } from '../lib/agentAttachments.js';
+import { isOutOfStock } from '../lib/productExtract.js';
+import { renderSanitizedHtml } from '../utils/sanitizeSearchSuggestion.js';
+import { ImageRegionPicker } from './ImageRegionPicker.js';
 import type { AgentChatMessage } from '../lib/gemini.js';
 import type { AgentCatalogEntry, AgentRecommendation } from '../types.js';
 
@@ -119,7 +122,6 @@ export function AgentChatPanel({
   // 読み込み中の件数（FileReader は非同期のため、選択直後に「読み込み中…」を出して即時フィードバックする・260702）。
   const [readingCount, setReadingCount] = useState(0);
   // 「画像から商品を特定して探す」モード（②・Cloud Vision・260725）。ON のとき送信は Vision 経路へ。
-  const [visionMode, setVisionMode] = useState(false);
   const attachInputRef = useRef<HTMLInputElement>(null);
   const idRef = useRef(0);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -151,6 +153,48 @@ export function AgentChatPanel({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
   }, [messages, open, sending]);
+
+  /**
+   * /api/agent への送信を1本化する（260728 敵対レビュー C3）。
+   *
+   * ページ取得が挟まったことで応答が遅くなり、Vercel の関数上限(60秒)に当たると
+   * JSON ではないゲートウェイ応答が返る。従来は無条件に res.json() していたため、
+   * 利用者には「Unexpected token 'A' ... is not valid JSON」という無意味な文言が出ていた。
+   * クライアント側でも打ち切り、非JSONは日本語のメッセージに変換する。
+   */
+  const postAgent = async (payload: Record<string, unknown>): Promise<any> => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), 55_000); // 関数上限より少し手前
+    try {
+      const res = await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      // 502/504 等はHTMLやプレーンテキストで返るため、そのまま res.json() すると
+      // 「Unexpected token 'A' ...」という利用者に意味のない例外になる。
+      // content-type が分かる場合は事前に弾き、分からない場合は解析失敗を捕まえて日本語にする。
+      const ct = res.headers?.get?.('content-type') ?? '';
+      const gatewayMessage =
+        res.status >= 500
+          ? '応答に時間がかかりすぎたため中断しました。条件を絞って再度お試しください。'
+          : '通信に失敗しました。時間をおいて再度お試しください。';
+      if (ct && !ct.includes('application/json')) throw new Error(gatewayMessage);
+      try {
+        return await res.json();
+      } catch {
+        throw new Error(gatewayMessage);
+      }
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        throw new Error('応答に時間がかかりすぎたため中断しました。条件を絞って再度お試しください。');
+      }
+      throw e;
+    } finally {
+      window.clearTimeout(timer);
+    }
+  };
 
   const send = async () => {
     const text = input.trim();
@@ -186,43 +230,24 @@ export function AgentChatPanel({
         ]);
       };
 
-      // ②「画像から商品を特定して探す」モード（Cloud Vision 経路・260725）。
-      // 使う画像は「添付した画像」を優先し、無ければ現在のグラウンディング画像。
-      const attachedImage = filesToSend.find(isImageFile);
-      const visionImage = attachedImage?.dataUrl || grounding || null;
-      if (visionMode && VISION_PRODUCT_SEARCH_ENABLED && visionImage) {
-        // 画像から商品を特定する専用モード。Hobby の関数上限に配慮し /api/agent へ相乗り（mode で分岐・260726）。
-        const res = await fetch('/api/agent', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-          body: JSON.stringify({ mode: 'vision-product', imageDataUrl: visionImage, prompt: content }),
-        });
-        const data = await res.json();
-        if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');
-        if (!data.success) throw new Error(data.error || '商品の特定に失敗しました');
-        void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
-        appendAssistant(data);
-        return;
-      }
-
-      const res = await fetch('/api/agent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify({
-          messages: next.slice(-12).map((m) => ({ role: m.role, content: m.content })),
-          imageDataUrl: grounding,
-          catalog,
-          projectContext: projectSummary || undefined,
-          files: filesToSend.map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
-        }),
+      // 画像からの商品特定は「画像から商品を特定」ボタン専用の経路へ移した（260728 要望①）。
+      // 送信時に入力文から自動で経路を切り替える判定は廃止（意図と噛み合わないため）。
+      const data = await postAgent({
+        messages: next.slice(-12).map((m) => ({ role: m.role, content: m.content })),
+        imageDataUrl: grounding,
+        catalog,
+        projectContext: projectSummary || undefined,
+        files: filesToSend.map((f) => ({ name: f.name, dataUrl: f.dataUrl })),
       });
-      const data = await res.json();
       if (!data.success) throw new Error(data.error || '応答の取得に失敗しました');
       // トークン計測（row 58・無効時は no-op）。エージェントはテキスト（グラウンディング画像＋添付画像を計上）。
       const imageCount = (grounding ? 1 : 0) + filesToSend.filter(isImageFile).length;
       void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount });
       // Tier2: 推薦はサーバ側でカタログ実データへ解決済み（index ずれ・捏造防止）。型のみ軽く検証。
       appendAssistant(data);
+      // Google 検索グラウンディングの利用規約は、返却された「検索候補」の表示を求めている（260728 対応）。
+      // 応答に含まれるときだけ最新のものを保持して表示する。
+      setSearchSuggestionHtml(typeof data.searchSuggestionHtml === 'string' ? data.searchSuggestionHtml : null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'エラー');
     } finally {
@@ -333,6 +358,77 @@ export function AgentChatPanel({
     addAttachments(files);
   };
 
+  /**
+   * 「画像から商品を特定」の専用フロー（260728 クライアント要望①）。
+   * 対象画像は「添付した画像」を優先し、無ければ現在表示中の生成画像。どちらも無ければ案内だけ出す
+   * （従来は自動判定で黙って通常チャットに落ちており、なぜ効かないのか分からなかった）。
+   */
+  const [regionPickerSrc, setRegionPickerSrc] = useState<string | null>(null);
+  const [visionNotice, setVisionNotice] = useState<string | null>(null);
+  // Google 検索グラウンディングが返す検索候補の表示用HTML（規約上の表示義務・260728）。
+  const [searchSuggestionHtml, setSearchSuggestionHtml] = useState<string | null>(null);
+  const searchSuggestionRef = useRef<HTMLDivElement>(null);
+  // 検索候補はサニタイズ後のノードとして流し込む（文字列へ再直列化しない＝mXSS を避ける）。
+  useEffect(() => {
+    const el = searchSuggestionRef.current;
+    if (!el) return;
+    renderSanitizedHtml(el, searchSuggestionHtml ?? '');
+  }, [searchSuggestionHtml]);
+
+  const openRegionPicker = async () => {
+    setVisionNotice(null);
+    const attachedImage = attachedFiles.find(isImageFile);
+    if (attachedImage) {
+      setRegionPickerSrc(attachedImage.dataUrl);
+      return;
+    }
+    if (imageDataUrl) {
+      try {
+        setRegionPickerSrc(await ensureDataUrl(imageDataUrl));
+        return;
+      } catch {
+        /* 取得失敗時は下の案内へ */
+      }
+    }
+    setVisionNotice('検索したい画像がありません。画像を添付するか、AI画像を生成してからお試しください。');
+  };
+
+  /** 範囲指定を終えたら、その切り出し画像だけで商品特定を実行する。 */
+  const runVisionSearch = async (croppedDataUrl: string) => {
+    setRegionPickerSrc(null);
+    setError(null);
+    setVisionNotice(null);
+    setSending(true);
+    const userLine = input.trim() || '画像に写っている商品を特定して、実在する商品を探してください。';
+    setInput('');
+    // どの画像で検索したかを会話に残す（通常送信と同じ体裁・260728 敵対レビュー C4）。
+    const searchedNames = attachedFiles.filter(isImageFile).map((f) => f.name);
+    setMessages([
+      ...messages,
+      { role: 'user', content: userLine, attachmentNames: searchedNames.length ? searchedNames : undefined },
+    ]);
+    setAttachedFiles([]); // 検索に使った画像が次の通常送信へ持ち越されないようにする
+    setSearchSuggestionHtml(null); // 前回のテキスト検索の検索候補が残らないようにする
+    try {
+      const data = await postAgent({ mode: 'vision-product', imageDataUrl: croppedDataUrl, prompt: userLine });
+      if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');
+      if (!data.success) throw new Error(data.error || '商品の特定に失敗しました');
+      void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: typeof data.reply === 'string' ? data.reply : '',
+          recommendations: Array.isArray(data.recommendations) ? data.recommendations : undefined,
+        },
+      ]);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '商品の特定に失敗しました');
+    } finally {
+      setSending(false);
+    }
+  };
+
   const removeFile = (id: string) => setAttachedFiles((prev) => prev.filter((f) => f.id !== id));
 
   // 初期状態フォームと会話中フッターで共有する部品（複数添付・260702）。※同時に描画されるのは片方のみ。
@@ -424,29 +520,25 @@ export function AgentChatPanel({
           {attachedFiles.length === 0 && readingCount === 0 && (
             <span className="text-[10px] text-neutral-500">またはドラッグ&amp;ドロップ</span>
           )}
-          {/* ②「画像から商品を特定して探す」モード切替（Cloud Vision・env フラグ時のみ表示・260725）。 */}
+          {/*
+            「画像から商品を特定」は独立した専用ボタンにする（260728 クライアント要望①）。
+            従来はトグル＋送信時の自動判定だったが、入力文の語で経路が変わるため意図と噛み合わなかった。
+            押した時点で必ずこの経路に入り、範囲指定 → 検索まで一直線に進む。
+          */}
           {VISION_PRODUCT_SEARCH_ENABLED && (
             <button
               type="button"
-              aria-pressed={visionMode}
-              onClick={() => setVisionMode((v) => !v)}
-              title="添付画像または現在の画像から、写っている商品を特定して実在商品を探します"
-              className={`flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-[11px] font-bold transition ${
-                visionMode
-                  ? 'border-emerald-500 bg-emerald-600/20 text-emerald-200'
-                  : 'border-white/10 bg-black/40 text-neutral-200 hover:bg-white/10 hover:text-white'
-              }`}
+              onClick={openRegionPicker}
+              disabled={sending}
+              title="画像内の探したい対象を範囲指定して、実在する商品を特定します"
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-emerald-500/60 bg-emerald-600/15 px-3 py-1.5 text-[11px] font-bold text-emerald-100 transition hover:bg-emerald-600/30 disabled:opacity-40"
             >
               <Search className="h-4 w-4" />
-              画像から商品を特定{visionMode ? '：ON' : ''}
+              画像から商品を特定
             </button>
           )}
         </div>
-        {VISION_PRODUCT_SEARCH_ENABLED && visionMode && (
-          <p className="text-[10px] leading-relaxed text-emerald-300/90">
-            画像から商品を特定して探します。特定したい対象（例:「このソファ」）を記入し、対象の画像を添付するか、現在表示中の画像を使います。画像が無い場合は通常のチャットとして送信されます。
-          </p>
-        )}
+        {visionNotice && <p className="text-[10px] leading-relaxed text-amber-300">{visionNotice}</p>}
         <button
           type="button"
           onClick={() => void send()}
@@ -476,6 +568,15 @@ export function AgentChatPanel({
           : 'fixed bottom-6 right-6 z-[10005] flex h-[28rem] w-[22rem] max-w-[92vw] flex-col rounded-2xl border border-white/15 bg-neutral-900/95 shadow-2xl backdrop-blur'
       }`}
     >
+      {/* 画像内の対象を範囲指定してから商品特定を実行する（260728 要望①）。 */}
+      {regionPickerSrc && (
+        <ImageRegionPicker
+          imageUrl={regionPickerSrc}
+          busy={sending}
+          onCancel={() => setRegionPickerSrc(null)}
+          onConfirm={(cropped) => void runVisionSearch(cropped)}
+        />
+      )}
       {/* ドロップ中のオーバーレイ（どこへ落とせばよいか一目で分かるように）。 */}
       {dropActive && (
         <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-2xl border-2 border-dashed border-emerald-400 bg-emerald-500/10">
@@ -574,29 +675,69 @@ export function AgentChatPanel({
                     ]
                       .filter(Boolean)
                       .join(' ・ ');
-                    // 商品リンクは「検索」に統一する（260727・クライアント報告: AIが返す商品ページURLはリンク切れ/404が多い）。
-                    // モデルが生成した直リンクは信頼できないため、メーカー+商品名+品番の Google 検索へ誘導し、確実に到達できるようにする。
-                    // この検索URLは表示リンクにも「見積に追加」時の商品URLにも使い、見積側にも404が保存されないようにする。
+                    // 260728 要望③: 提示するURLは「実際にページを開いて到達を確認できた個別商品URL」だけ。
+                    // サーバ側で検索が返した実URLのみを採用し、開けなかったものは productUrl を落としてある
+                    // （＝ここに URL があれば実在が確認済み）。確認できないものは従来どおり検索リンクへ退避する。
                     const searchQuery = [rec.brand, rec.name, rec.modelNumber].filter(Boolean).join(' ').trim();
                     const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery || (rec.name ?? ''))}`;
+                    const hasDirectUrl = typeof rec.productUrl === 'string' && /^https?:\/\//i.test(rec.productUrl);
+                    const outOfStock = isOutOfStock(rec.availability);
+                    // 見積へ渡す値。個別URLがあればそれを、無ければ確実に開ける検索URLを入れる（404を保存しない）。
+                    const estimateItem = { ...rec, productUrl: hasDirectUrl ? rec.productUrl : searchUrl };
                     return (
                       <div key={key} className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-2">
                         <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
+                          {/* サムネイル（260728 要望③）。他社サイトの画像を直接参照するため、
+                              読めなかったら要素ごと隠して代替表示に切り替える（壊れた画像アイコンを出さない）。 */}
+                          {rec.imageUrl && (
+                            <img
+                              src={rec.imageUrl}
+                              alt=""
+                              loading="lazy"
+                              referrerPolicy="no-referrer"
+                              onError={(e) => {
+                                e.currentTarget.style.display = 'none';
+                                e.currentTarget.nextElementSibling?.classList.remove('hidden');
+                              }}
+                              className="h-14 w-14 shrink-0 rounded border border-white/10 bg-black/30 object-cover"
+                            />
+                          )}
+                          {rec.imageUrl && (
+                            <div className="hidden h-14 w-14 shrink-0 items-center justify-center rounded border border-white/10 bg-black/30 text-[9px] text-neutral-500">
+                              画像なし
+                            </div>
+                          )}
+                          <div className="min-w-0 flex-1">
                             <div className="truncate text-[12px] font-bold text-neutral-100">{rec.name}</div>
                             {meta && <div className="mt-0.5 text-[10px] text-neutral-400">{meta}</div>}
+                            <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                              {/* 実測（ページの構造化データ由来）か、モデルの推測かを明示する。 */}
+                              {rec.verified ? (
+                                <span className="rounded bg-emerald-600/25 px-1.5 py-0.5 text-[9px] font-bold text-emerald-200">
+                                  商品ページ確認済み
+                                </span>
+                              ) : (
+                                <span className="rounded bg-amber-600/20 px-1.5 py-0.5 text-[9px] font-bold text-amber-200">
+                                  未確認（要確認）
+                                </span>
+                              )}
+                              {outOfStock && (
+                                <span className="rounded bg-red-600/20 px-1.5 py-0.5 text-[9px] font-bold text-red-200">
+                                  在庫切れ/廃番の可能性
+                                </span>
+                              )}
+                            </div>
                             {rec.reason && (
                               <div className="mt-0.5 text-[10px] leading-relaxed text-neutral-500">{rec.reason}</div>
                             )}
-                            {/* AI生成の直リンクは404が多いため表示せず、必ず到達できる商品検索リンクにする（260727・クライアント報告対応）。 */}
                             <a
-                              href={searchUrl}
+                              href={hasDirectUrl ? rec.productUrl : searchUrl}
                               target="_blank"
                               rel="noopener noreferrer"
                               className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
-                              title="メーカー名・商品名・品番で検索します（確実に開けます）"
+                              title={hasDirectUrl ? '商品ページを開きます（到達確認済み）' : 'メーカー名・商品名・品番で検索します'}
                             >
-                              商品を検索 ↗
+                              {hasDirectUrl ? '商品ページを開く ↗' : '商品を検索 ↗'}
                             </a>
                           </div>
                           {onAddEstimateItem && (
@@ -604,8 +745,7 @@ export function AgentChatPanel({
                               type="button"
                               disabled={added}
                               onClick={() => {
-                                // 見積にも 404 の直リンクを載せないよう、確実に開ける検索URLを商品URLとして渡す（260727）。
-                                onAddEstimateItem({ ...rec, productUrl: searchUrl });
+                                onAddEstimateItem(estimateItem);
                                 setAddedKeys((s) => new Set(s).add(key));
                               }}
                               className="tap inline-flex shrink-0 items-center gap-0.5 rounded-md bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
@@ -639,6 +779,13 @@ export function AgentChatPanel({
           )}
         </div>
 
+        {/* Google 検索グラウンディングの利用規約が求める「検索候補」の表示（260728）。
+            チップの文言は webSearchQueries 由来＝元をたどればユーザーの入力文なので、
+            「Googleの応答だから安全」とは言えない。このアプリには CSP が無いため、
+            許可タグ/属性だけを残すサニタイズを通してから描画する（260728 敵対レビュー A3）。 */}
+        {searchSuggestionHtml && (
+          <div ref={searchSuggestionRef} className="shrink-0 overflow-x-auto border-t border-white/10 px-2.5 py-1.5" />
+        )}
         {/* チャット開始後も記入欄は縮ませず、初期状態と同じ大きさ・形式で下部に置く（260702）。 */}
         <div className="border-t border-white/10 p-2.5">{renderComposer('chat')}</div>
         </>

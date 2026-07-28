@@ -1,7 +1,8 @@
 import { generateAgentReply, resolveAgentModelForTier, type AgentAttachment, type AgentChatMessage } from '../lib/gemini.js';
 import { isBase64DataUrl, resolveAttachmentMime, parseDataUrl } from '../lib/agentAttachments.js';
 import { analyzeAgentRequest } from '../lib/agentRouting.js';
-import { runVisionProductSearch } from '../lib/server/visionProductSearchCore.js';
+import { runVisionProductSearch, mergeResolvedIntoRecommendations } from '../lib/server/visionProductSearchCore.js';
+import { resolveProductsFromUrls } from '../lib/server/productResolver.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 import type { AgentCatalogEntry } from '../types.js';
 
@@ -113,18 +114,37 @@ export default async function handler(req: any, res: any) {
     });
     const model = resolveAgentModelForTier(route.tier);
 
-    const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
-      messages,
-      imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : null,
-      catalog,
-      files,
+    const { reply, recommendations, usage, sources, searchQueries, searchSuggestionHtml } = await generateAgentReply(
+      apiKey,
+      {
+        messages,
+        imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : null,
+        catalog,
+        files,
+        model,
+        useSearch: route.useSearch,
+        projectContext,
+      },
+    );
+
+    // 【260728 要望③】提示するURLはモデルの作文ではなく、検索が実際に返した実在URLだけにする。
+    // その実URLを開いて構造化データから 商品名/メーカー/価格/品番/サムネイル を実測し、推薦へ反映する。
+    // 開けなかったURLは落ちる＝リンク切れを提示しない（到達確認を兼ねる・要望④）。
+    const resolvedProducts = sources?.length ? await resolveProductsFromUrls(sources.map((s) => s.uri)) : [];
+    const mergedRecommendations = mergeResolvedIntoRecommendations(recommendations, resolvedProducts);
+
+    return res.status(200).json({
+      success: true,
+      reply,
+      recommendations: mergedRecommendations,
+      usage,
       model,
-      useSearch: route.useSearch,
-      projectContext,
+      route: { tier: route.tier, useSearch: route.useSearch },
+      resolvedProducts: resolvedProducts.slice(0, 6),
+      // グラウンディング利用時は、規約が求める「検索候補」の表示用HTMLをクライアントへ渡す。
+      searchSuggestionHtml,
+      searchQueries,
     });
-    return res
-      .status(200)
-      .json({ success: true, reply, recommendations, usage, model, route: { tier: route.tier, useSearch: route.useSearch } });
   } catch (e: any) {
     console.error('agent error:', e);
     res.status(500).json({ success: false, error: e.message });

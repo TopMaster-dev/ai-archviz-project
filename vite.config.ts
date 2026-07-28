@@ -10,7 +10,8 @@ import { sanitizeThumbnailPublicId } from './utils/furnitureThumbnailUrl.js';
 import { generateAgentReply, generateGeminiImage, resolveAgentModelForTier, GEMINI_IMAGE_MODEL, type AgentChatMessage, type AgentAttachment } from './lib/gemini.js';
 import { analyzeAgentRequest } from './lib/agentRouting.js';
 import { resolveAttachmentMime, parseDataUrl, isBase64DataUrl } from './lib/agentAttachments.js';
-import { runVisionProductSearch } from './lib/server/visionProductSearchCore.js';
+import { runVisionProductSearch, mergeResolvedIntoRecommendations } from './lib/server/visionProductSearchCore.js';
+import { resolveProductsFromUrls } from './lib/server/productResolver.js';
 import type { AgentCatalogEntry } from './types.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
@@ -332,7 +333,7 @@ export default defineConfig(({ mode }) => {
                         });
                         const model = resolveAgentModelForTier(route.tier);
                         const projectContext = typeof parsed.projectContext === 'string' && parsed.projectContext.trim() ? parsed.projectContext.trim().slice(0, 2000) : undefined;
-                        const { reply, recommendations, usage } = await generateAgentReply(apiKey, {
+                        const { reply, recommendations, usage, sources, searchQueries, searchSuggestionHtml } = await generateAgentReply(apiKey, {
                             messages,
                             imageDataUrl: typeof parsed.imageDataUrl === 'string' ? parsed.imageDataUrl : null,
                             catalog,
@@ -341,9 +342,23 @@ export default defineConfig(({ mode }) => {
                             useSearch: route.useSearch,
                             projectContext,
                         });
+                        // 本番（api/agent.ts）と同じ後処理: 検索が返した実URLを開いて商品情報を実測し、
+                        // モデルが書いたURLは採用しない（260728 要望③）。ここを揃えないと dev だけ旧挙動になる。
+                        const resolvedProducts = sources?.length ? await resolveProductsFromUrls(sources.map((s) => s.uri)) : [];
+                        const mergedRecommendations = mergeResolvedIntoRecommendations(recommendations, resolvedProducts);
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');
-                        return res.end(JSON.stringify({ success: true, reply, recommendations, usage, model, route: { tier: route.tier, useSearch: route.useSearch } }));
+                        return res.end(JSON.stringify({
+                            success: true,
+                            reply,
+                            recommendations: mergedRecommendations,
+                            usage,
+                            model,
+                            route: { tier: route.tier, useSearch: route.useSearch },
+                            resolvedProducts: resolvedProducts.slice(0, 6),
+                            searchSuggestionHtml,
+                            searchQueries,
+                        }));
                     } catch (e: any) {
                         console.error('agent local error:', e);
                         res.statusCode = 500;

@@ -234,6 +234,18 @@ export interface AgentRecommendation {
   price?: number;
   productUrl?: string;
   reason?: string;
+  /**
+   * 商品ページから取得したサムネイル画像URL（260728 要望③）。
+   * 他社サイトの画像を直接参照するため、読み込み失敗時は代替表示へ切り替える前提。
+   */
+  imageUrl?: string;
+  /** 在庫状況（schema.org の InStock / OutOfStock 等）。取得できた場合のみ。 */
+  availability?: string;
+  /**
+   * 商品ページから実測した値か（true=ページの構造化データ由来、false/未設定=モデルの推測）。
+   * 表示・見積で「要確認」を出し分けるために使う。
+   */
+  verified?: boolean;
 }
 
 /** 3D カメラプリセット。cameraMode 省略時は自由視点（Orbit） */

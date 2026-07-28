@@ -57,6 +57,7 @@ import { listUserUploads, uploadUserFile, checkStorageCapacity, updateUserUpload
 import { toStoredImage, ensureDataUrl } from './lib/db/aiRenderStorage.js';
 import { getFurnitureProductMeta } from './lib/furnitureProductMeta.js';
 import { buildAgentCatalog } from './lib/agentCatalog.js';
+import { buildAgentItemMemo } from './lib/agentItemMemo.js';
 import { buildAgentProjectSummary } from './lib/agentProjectContext.js';
 import { uploadToFurnitureItem, ensureUploadFootprint, uploadToProduct, deriveUploadName, persistUserModelThumbnail, TEXTURE_CATEGORIES, TEXTURE_CATEGORY_OPTIONS, UPLOAD_FURNITURE_TYPE, USER_UPLOAD_BRAND } from './lib/uploadsCatalog.js';
 import { persistUploadMetaByProductId } from './lib/uploadsMeta.js';
@@ -3531,7 +3532,7 @@ const App: React.FC = () => {
         name: rec.name || '家具',
         brand: rec.brand ?? '',
         price: rec.price,
-        memo: rec.reason ?? '',
+        memo: buildAgentItemMemo(rec),
         modelNumber: rec.modelNumber,
         productUrl: rec.productUrl,
         versionId: aiEditActiveVersionId ?? undefined, // 表示中の生成画像に紐付け（1c）
