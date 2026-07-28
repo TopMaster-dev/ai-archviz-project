@@ -148,3 +148,54 @@ describe('buildCandidateRecommendations（詳細が取れなくても候補を�
     expect(out.map((r) => r.productUrl)).toEqual(['https://a.jp/1', 'https://b.jp/1']);
   });
 });
+
+/**
+ * 260729 実機報告「候補が1件も出ない」の原因と対策。
+ *
+ * pagesWithMatchingImages は「この画像そのものが載っているページ」を探す機能なので、
+ * Web に存在しない AI 生成画像では一致ページが無いか、あっても無関係なノイズしか返らない。
+ * ノイズを除くと候補が空になる＝コメントだけが出る、という状態だった。
+ * ここでは「1段目が空でも、似ている画像の掲載ページから候補が作れる」ことを固定する。
+ */
+describe('AI生成画像で1段目が空になるケース', () => {
+  const page = (url: string, matchRank: 0 | 1 | 2, imageUrl?: string) => ({ title: `T:${url}`, url, imageUrl, matchRank });
+
+  it('一致ページが動画・SNSしか無ければ候補は空になる（＝2段目が必要な状況）', () => {
+    const out = pickVisualCandidates(
+      [page('https://www.youtube.com/watch?v=a', 1), page('https://jp.pinterest.com/pin/2', 1)],
+      3,
+    );
+    expect(out).toHaveLength(0);
+  });
+
+  it('似ている画像から辿ったページを足せば候補が埋まる', () => {
+    // 2段目で得たページ（掲載元が実在の通販サイト）。サムネイルは「似ていると判定された画像」を使う。
+    const expanded = [
+      { ...page('https://shop-a.example.jp/item/1', 1), imageUrl: 'https://img.example.jp/similar-1.jpg' },
+      { ...page('https://shop-b.example.jp/item/2', 1), imageUrl: 'https://img.example.jp/similar-2.jpg' },
+    ];
+    const out = pickVisualCandidates([page('https://www.youtube.com/watch?v=a', 1), ...expanded], 3);
+    expect(out.map((p) => p.url)).toEqual([
+      'https://shop-a.example.jp/item/1',
+      'https://shop-b.example.jp/item/2',
+    ]);
+    // サムネイルは元画像に似ていると判定された画像のまま（判断材料を差し替えない）
+    expect(out[0].imageUrl).toBe('https://img.example.jp/similar-1.jpg');
+  });
+
+  it('2段目のページも同一ホストは1件まで（同じ店で埋まらない）', () => {
+    const out = pickVisualCandidates(
+      [
+        { ...page('https://shop-a.example.jp/item/1', 1), imageUrl: 'https://img/1.jpg' },
+        { ...page('https://shop-a.example.jp/item/2', 1), imageUrl: 'https://img/2.jpg' },
+        { ...page('https://shop-b.example.jp/item/3', 1), imageUrl: 'https://img/3.jpg' },
+      ],
+      3,
+    );
+    expect(out).toHaveLength(2);
+  });
+
+  it('候補が0件でも例外にはならない（カードは出ないがコメントは返す）', () => {
+    expect(buildCandidateRecommendations([], [])).toEqual([]);
+  });
+});

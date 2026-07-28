@@ -100,6 +100,55 @@ export function mergeResolvedIntoRecommendations(
 const MAX_CANDIDATES = 3;
 
 /**
+ * 「似ている画像」を何枚まで再検索するか（260729）。
+ * 1枚につき Vision 1回ぶんの費用がかかるので、増やすほど線形に高くなる。
+ * 2枚あれば候補3件はたいてい埋まるので、既定は 2。
+ */
+const MAX_SIMILAR_EXPANSIONS = 2;
+
+interface VisionCallResult {
+  ok: boolean;
+  status: number;
+  findings: ReturnType<typeof parseVisionWebDetection>;
+}
+
+/**
+ * Vision Web Detection を1回呼ぶ。画像は「バイト列」でも「URL」でも渡せる。
+ * URL 指定（imageUri）は Google 側が取得するので、我々のサーバが第三者へ取りに行くことはない。
+ * 失敗しても throw せず ok:false を返す（1枚の失敗で全体を止めない）。
+ */
+async function callVisionWebDetection(
+  apiKey: string,
+  image: { content: string } | { imageUri: string },
+): Promise<VisionCallResult> {
+  const empty = parseVisionWebDetection(null);
+  try {
+    const body = {
+      requests: [
+        {
+          image: 'content' in image ? { content: image.content } : { source: { imageUri: image.imageUri } },
+          features: [{ type: 'WEB_DETECTION', maxResults: 15 }],
+        },
+      ],
+    };
+    const res = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(apiKey)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const t = await res.text().catch(() => '');
+      console.error('[visionProductSearch] Vision error', res.status, t.slice(0, 300));
+      return { ok: false, status: res.status, findings: empty };
+    }
+    return { ok: true, status: 200, findings: parseVisionWebDetection(await res.json()) };
+  } catch (e: any) {
+    console.error('[visionProductSearch] Vision call failed', e?.message || e);
+    return { ok: false, status: 500, findings: empty };
+  }
+}
+
+/**
  * 商品ページになり得ないホスト（260729）。
  *
  * Vision の一致ページには動画・SNS・ピン留めサイトが普通に混ざる（実際クライアントの検証でも
@@ -229,17 +278,11 @@ export async function runVisionProductSearch(params: {
     return { status: 400, body: { success: false, error: '画像が大きすぎます。縮小して再度お試しください。' } };
   }
   try {
-    const visionRes = await fetch(`https://vision.googleapis.com/v1/images:annotate?key=${encodeURIComponent(visionKey)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requests: [{ image: { content: base64 }, features: [{ type: 'WEB_DETECTION', maxResults: 15 }] }] }),
-    });
-    if (!visionRes.ok) {
-      const t = await visionRes.text().catch(() => '');
-      console.error('[visionProductSearch] Vision error', visionRes.status, t.slice(0, 300));
-      return { status: 502, body: { success: false, error: `画像解析に失敗しました (${visionRes.status})` } };
+    const first = await callVisionWebDetection(visionKey, { content: base64 });
+    if (!first.ok) {
+      return { status: 502, body: { success: false, error: `画像解析に失敗しました (${first.status})` } };
     }
-    const findings = parseVisionWebDetection(await visionRes.json());
+    const findings = first.findings;
 
     /*
      * 【260729 クライアント要望「見た目一致を絶対優先」】ここが本機能の設計の要。
@@ -256,7 +299,45 @@ export async function runVisionProductSearch(params: {
      *   Gemini の役割は本文（reply）を書くことだけに限定し、候補の取捨選択はさせない。
      *   キーワード検索による水増しは行わない（要望）。
      */
-    const candidatePages = pickVisualCandidates(findings.pages, MAX_CANDIDATES);
+    let candidatePages = pickVisualCandidates(findings.pages, MAX_CANDIDATES);
+
+    /*
+     * 【260729・重要】1段目だけでは AI 生成画像に対して候補が出ない。
+     *
+     * pagesWithMatchingImages は「この画像そのものが載っているページ」を探す機能なので、
+     * Web に存在しない AI 生成画像では、そもそも一致するページが無いか、
+     * あっても無関係なノイズ（動画・ピン留めサイト）しか返らない。
+     * 一方 visuallySimilarImages（似ている画像）は実在する商品写真がちゃんと返る。
+     * ただしこちらは画像URLだけで、どのページの画像かが分からない。
+     *
+     * そこで「似ている画像」をもう一度だけ逆画像検索して、その画像の掲載ページを得る。
+     * 実在する写真なので今度は掲載ページが見つかる。
+     * これはキーワード検索ではなく画像から画像への連鎖なので、
+     * 「見た目の一致を最優先」という方針は保たれる（クライアント要望の趣旨どおり）。
+     */
+    let expandedFrom = 0;
+    if (candidatePages.length < MAX_CANDIDATES && findings.similarImageUrls.length > 0) {
+      const seeds = findings.similarImageUrls.slice(0, MAX_SIMILAR_EXPANSIONS);
+      const expansions = await Promise.all(
+        seeds.map(async (imageUri) => {
+          const r = await callVisionWebDetection(visionKey, { imageUri });
+          if (!r.ok) return [];
+          // 掲載ページのサムネイルは「元画像に似ていると判定された画像」で固定する。
+          // 利用者はこれを見て似ているかを判断するので、ページ側の別カットに差し替えてはいけない。
+          return r.findings.pages.map((p) => ({ ...p, imageUrl: p.imageUrl ?? imageUri }));
+        }),
+      );
+      expandedFrom = seeds.length;
+      candidatePages = pickVisualCandidates([...findings.pages, ...expansions.flat()], MAX_CANDIDATES);
+    }
+
+    console.info(
+      '[visionProductSearch] pages=%d similar=%d expandedFrom=%d candidates=%d',
+      findings.pages.length,
+      findings.similarImageUrls.length,
+      expandedFrom,
+      candidatePages.length,
+    );
 
     // 詳細（価格・品番・メーカー）は取れれば付ける、取れなくても候補は落とさない。
     // 到達確認だけは通すのでリンク切れは出ない（要望「リンクさえあれば詳細は自分で入れる」）。
@@ -275,11 +356,18 @@ export async function runVisionProductSearch(params: {
       model: resolveAgentModel(),
     });
 
+    // 候補が1件も出せなかったときは、その事実と次の一手を明示する。
+    // 何も出ないまま一般論のコメントだけが返ると、利用者には「壊れている」ようにしか見えない。
+    const noCandidateNote =
+      recommendations.length === 0
+        ? '\n\n※今回は見た目が一致する商品ページを見つけられませんでした。対象をもう少し大きく囲む、正面から写っている画像を選ぶ、家具1点だけを囲む、のいずれかで見つかりやすくなります。'
+        : '';
+
     return {
       status: 200,
       body: {
         success: true,
-        reply,
+        reply: `${reply}${noCandidateNote}`,
         recommendations,
         usage,
         model: resolveAgentModel(),
