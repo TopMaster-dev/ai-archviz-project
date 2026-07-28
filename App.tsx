@@ -5405,9 +5405,14 @@ const App: React.FC = () => {
                                     家具ギズモに被って選択できない問題を、任意位置・任意サイズへ動かして回避できる。
                                     fixed 配置のためこの flex 行のレイアウト（デバッグ左・家具ストリップ右）には影響しない。 */}
                                 <MovablePanel
-                                    storageKey="arise.camera-panel.v2"
+                                    // 保存キーを v3 へ上げているのは、既存利用者の保存位置（左下）が
+                                    // 既定アンカーより優先されるため。上げないと中央へ移動しない。
+                                    storageKey="arise.camera-panel.v3"
                                     label="視点操作"
-                                    anchor="bottom-left"
+                                    // 3Dエリアの下部中央へ（260730 クライアント要望）。
+                                    // 中央は getPreviewBounds（＝右サイドパネルを除いた3D表示領域）基準なので、
+                                    // レールが出ていてもその中で中央に来る。
+                                    anchor="bottom-center"
                                     getBounds={getPreviewBounds}
                                     zIndex={panelZ('camera')}
                                     onFocus={() => bringPanelToFront('camera')}
