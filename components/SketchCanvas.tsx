@@ -3341,8 +3341,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         </div>
       </div>
 
-      {/* Floating Toolbar (Right) — 全幅で右中央。スナップ設定を左パネルへ移したので上部ツールバーは低くなり干渉しない。 */}
-      <div className="absolute top-1/2 -translate-y-1/2 right-4 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
+      {/* Floating Toolbar (Right) — 全幅で右中央。スナップ設定を左パネルへ移したので上部ツールバーは低くなり干渉しない。
+          260730 クライアント要望: 中央から 30px 下げる（中心位置をずらすので、上下の余白比だけが変わる）。 */}
+      <div className="absolute top-[calc(50%+30px)] -translate-y-1/2 right-4 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
         <button onClick={() => handleZoomButton('in')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">+</button>
         <button onClick={() => handleZoomButton('out')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">-</button>
         <button onClick={handleFitToScreen} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-xs font-black text-neutral-400 hover:bg-white/10 transition-all uppercase tracking-tighter">全体</button>
