@@ -427,6 +427,31 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     return () => ro.disconnect();
   }, []);
 
+  /**
+   * 描画領域の幅が変わったとき、見ていた場所が中央に留まるようにオフセットを補正する（260730 要望③）。
+   *
+   * ズームとパンは ref なので、右サイドパネルが出て領域が狭くなっても値は変わらない。
+   * その結果、図面が右へはみ出したまま切れて見える（利用者が「全体」を押すまで戻らない）。
+   * ここでは幅・高さの変化量の半分だけオフセットを寄せて、中央にあったものが中央のままになるようにする。
+   * 「全体」のような再フィットにはしない。利用者が設定したズームを勝手に変えないため。
+   */
+  // 初期値は「実測前の仮の大きさ」なので比較対象にしない。
+  // 仮の値と比べてしまうと、マウント直後の最初の実測でいきなり視点がずれる（本来は動かしてはいけない場面）。
+  const prevCanvasSizeRef = useRef<{ width: number; height: number } | null>(null);
+  useEffect(() => {
+    const prev = prevCanvasSizeRef.current;
+    prevCanvasSizeRef.current = canvasSize;
+    if (!prev) return; // 初回の実測は基準にするだけ
+    if (prev.width === canvasSize.width && prev.height === canvasSize.height) return;
+    const dx = (canvasSize.width - prev.width) / 2;
+    const dy = (canvasSize.height - prev.height) / 2;
+    if (dx === 0 && dy === 0) return;
+    viewOffsetRef.current = clampViewOffset({
+      x: viewOffsetRef.current.x + dx,
+      y: viewOffsetRef.current.y + dy,
+    });
+  }, [canvasSize]);
+
   // 上部ツールバーが最上段(md以上: top-6)にあるとき、その実測下端を共有ストアへ。
   // 別ツリーの UndoRedoBar / ホームボタンがその直下へ退避し、最上段ツールバーと重ならないようにする。
   // 下段(top-[136px], md未満)のときは rect.top が大きいので 0 を入れ、従来位置のままにする。

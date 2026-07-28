@@ -14,7 +14,7 @@ import { MovablePanel } from './components/MovablePanel.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
-import { FurnitureAssetStrip, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
+import { ModelCatalogRail, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -29,6 +29,7 @@ import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
 import { wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } from './utils/beamArea.js';
 import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
+import { THUMBNAIL_CAMERA, thumbnailFitScale } from './utils/thumbnailFraming.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl, isOfficialCatalogModelUrl } from './utils/furnitureThumbnailUrl.js';
 import * as THREE from 'three';
 
@@ -319,8 +320,9 @@ const ModelThumbnailScene = ({ scene, uprightXDeg = 0, forwardYawDeg = 0, onRend
         wrapper.rotation.x = Math.PI / 12;
         const sphere = new THREE.Sphere();
         box.getBoundingSphere(sphere);
-        const scale = 1.8 / (sphere.radius || 1);
-        wrapper.scale.setScalar(scale);
+        // 寄り具合は utils/thumbnailFraming に集約（260730 クライアント要望④）。
+        // 従来は 1.8 決め打ちでフレームの約50%にしか写らず、周囲が半分余白になっていた。
+        wrapper.scale.setScalar(thumbnailFitScale(sphere.radius));
         // クレイ（無彩色）上書きを廃止し、モデル本来の色・テクスチャでサムネイルを描く（260723・クライアント要望①）。
         // 色情報を持つ形式（GLB/GLTF・テクスチャ埋め込みFBX等）は本来の見た目に、色を持たない形式（単体OBJ等）は
         // ローダ既定マテリアルで描かれる（クレイ一色ではなくなる）。※既存のクレイ済みキャッシュPNGは
@@ -462,7 +464,9 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
         // 従来の 256px のままだと拡大時に明らかにボケる。dpr は 1 に固定して、端末の解像度で
         // 出力サイズが変わらないようにする（高DPR機で 1024px 相当が生成されるのを防ぐ）。
         <div style={{ position: 'absolute', top: -9999, left: -9999, width: THUMBNAIL_RENDER_PX, height: THUMBNAIL_RENDER_PX, zIndex: -100 }}>
-            <Canvas gl={{ preserveDrawingBuffer: true }} dpr={1} frameloop="demand">
+            {/* カメラは明示する。既定任せだと、ライブラリ既定(fov/位置)が変わった瞬間に
+                全サムネイルの寄りが黙って変わる（テストでも気付けない）。 */}
+            <Canvas camera={THUMBNAIL_CAMERA} gl={{ preserveDrawingBuffer: true }} dpr={1} frameloop="demand">
                 <ambientLight intensity={1.5} />
                 <directionalLight position={[5, 10, 5]} intensity={1.5} />
                 <Suspense fallback={null}>
@@ -1174,7 +1178,19 @@ const App: React.FC = () => {
   const [estimateGuardOpen, setEstimateGuardOpen] = useState(false);
   const [pendingExportKind, setPendingExportKind] = useState<'pdf' | 'csv' | null>(null);
   const [showDebugModal, setShowDebugModal] = useState(false);
-  const [catalogGridSize, setCatalogGridSize] = useState(2); // grid columns via 5 - size; slider maps with CATALOG_SLIDER_TO_GRID
+  // 列数は 5 - この値。スライダー位置との対応は CATALOG_SLIDER_TO_GRID / CATALOG_GRID_TO_SLIDER。
+  // 建材カタログと3Dモデルカタログで共有する（見た目を揃えるため・260730 要望②）。
+  const [catalogGridSize, setCatalogGridSize] = useState(2);
+  // 右レールのカタログ切替（建材 / 3Dモデル・260730 クライアント要望②）。
+  const [catalogTab, setCatalogTab] = useState<'material' | 'model'>('material');
+  // 3Dモデルカタログ側で選択中のカテゴリ（レール版は常にどれか1つが選ばれている）。
+  const [railModelCategory, setRailModelCategory] = useState<string>(ALL_CATEGORY);
+  // 2Dビューでは面（壁・床・天井）を選べないため建材は貼れない。トグルを無効化して理由を示す。
+  const materialCatalogAvailable = viewMode === '3D';
+  // 2Dでは建材タブを選べないので、表示上だけ3Dモデルタブへ倒す（state は書き換えない）。
+  // state を書き換えると、起動時（初期は2Dビュー）に建材タブの既定が潰され、
+  // 3Dへ移っても二度と建材が既定に戻らなくなる。
+  const effectiveCatalogTab = materialCatalogAvailable ? catalogTab : 'model';
   const [catalogSortMenuOpen, setCatalogSortMenuOpen] = useState(false);
   const catalogSortMenuRef = useRef<HTMLDivElement>(null);
   const [estimateDownloadMenuOpen, setEstimateDownloadMenuOpen] = useState(false);
@@ -1364,7 +1380,6 @@ const App: React.FC = () => {
   // 生成が必要な全URLリスト
   const allUrls = useMemo(() => Array.from(new Set(furnitureCatalog.map(i => i.url))), [furnitureCatalog]);
 
-  const [selectedAssetCategory, setSelectedAssetCategory] = useState<string | null>(null);
   
   // URLのファイル名からカテゴリを自動判定し、日本語化する
   const processedCatalog = useMemo(() => {
@@ -4161,7 +4176,7 @@ const App: React.FC = () => {
                     {viewMode === '3D' && !renderState.isRendering && (
                       <UndoRedoBar inline />
                     )}
-                    {viewMode === '3D' && (
+      {viewMode === '3D' && (
                       // 上部の操作群（天井高/背景/スケルトン天井/上部壁）は左群と同じ1行に右寄せで並べる（260701・クライアント要望=1行）。
                       // 入りきらない極端に狭い幅でのみ flex-wrap で折り返す（重なり防止の保険）。
                       <div className="flex items-center justify-end gap-2 flex-wrap ml-auto">
@@ -4270,33 +4285,7 @@ const App: React.FC = () => {
                         }}
                      />
                      
-                     {!renderState.isRendering && (
-                        // 2Dビューのカタログも移動・リサイズできるようにする（260729 クライアント要望①）。
-                        // 3D側と保存キーを分けるのは、2Dと3Dで使いやすい置き場所・大きさが違うため。
-                        <MovablePanel
-                            storageKey="arise.asset-strip-2d.v1"
-                            label="3Dオブジェクト"
-                            anchor="bottom-right"
-                            getBounds={getPreviewBounds}
-                            zIndex={40}
-                            minWidth={320}
-                            minHeight={88}
-                            defaultHeight={72}
-                        >
-                            <FurnitureAssetStrip
-                                className="h-full w-full"
-                                processedCatalog={processedCatalog}
-                                assetCategories={assetCategories}
-                                selectedAssetCategory={selectedAssetCategory}
-                                onSelectedAssetCategoryChange={setSelectedAssetCategory}
-                                onPickItem={handleAddFurniture}
-                                renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} forwardYawDeg={item.forwardYawDeg} thumbnailUrl={item.thumbnailUrl} />}
-                                fetchStatus={furnitureCatalogFetchStatus}
-                                fetchErrorMessage={furnitureCatalogErrorText}
-                                onUploadModel={handleUploadModelClick}
-                            />
-                        </MovablePanel>
-                     )}
+                     {/* 3Dオブジェクトの浮かぶパネルは廃止し、右サイドパネルの「3Dモデル」タブへ移した（260730 クライアント要望②③）。 */}
                 </div>
              )}
 
@@ -4454,13 +4443,12 @@ const App: React.FC = () => {
                                 getBounds={getPreviewBounds}
                                 zIndex={panelZ('info')}
                                 onFocus={() => bringPanelToFront('info')}
-                                // 未リサイズ時は従来の見た目（幅は画面幅比・高さは中身なり）。
-                                // 枠をドラッグすると明示サイズに切り替わり、以降は中身が w-full/h-full で追従する（260729 要望①）。
-                                defaultWidth="clamp(min(260px, 88vw), 30vw, 380px)"
-                                minWidth={260}
-                                minHeight={140}
+                                // 260730 クライアント要望①: 枠を広げても中の項目が追従せず余白が増えるだけだったため、
+                                // このパネルは枠ドラッグでのリサイズを取りやめ、固定サイズへ戻した。
+                                // （大きさを変えたいときは従来どおりヘッダの ± 倍率を使う）
+                                resizable={false}
                             >
-                            <div className="panel-fill flex h-full w-full flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark">
+                            <div className="w-[min(30vw,380px)] min-w-[min(260px,88vw)] flex flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark">
                                 {!hasAnySelection && (
                                     <div className={`${propertyCardBaseClass} px-4 py-4`}>
                                         <p className="text-[11px] font-black uppercase tracking-widest text-emerald-300">プロパティ</p>
@@ -5424,10 +5412,10 @@ const App: React.FC = () => {
                                     zIndex={panelZ('camera')}
                                     onFocus={() => bringPanelToFront('camera')}
                                     onRect={setCameraPanelRect}
-                                    minWidth={240}
-                                    minHeight={110}
+                                    // 260730 クライアント要望①: 同上（中身が追従しないためリサイズを取りやめ）。
+                                    resizable={false}
                                 >
-                                    <div className="panel-fill flex h-full w-full flex-wrap items-stretch justify-center gap-1.5 overflow-auto scroll-dark md:gap-2">
+                                    <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2">
                                         <CameraPresetBar
                                             presets={cameraPresets}
                                             lastAppliedId={lastAppliedPresetId}
@@ -5466,32 +5454,6 @@ const App: React.FC = () => {
                                     </div>
                                 </MovablePanel>
 
-                                {/* マテリアル/家具カタログもフローティング化（移動・拡大・最前面・プレビュー内制限・260703(2)）。 */}
-                                <MovablePanel
-                                    storageKey="arise.asset-strip.v1"
-                                    label="3Dオブジェクト"
-                                    anchor="bottom-right"
-                                    getBounds={getPreviewBounds}
-                                    zIndex={panelZ('assets')}
-                                    onFocus={() => bringPanelToFront('assets')}
-                                    minWidth={320}
-                                    minHeight={88}
-                                    // 高さを定めないと中の h-full が auto に解決され、カテゴリボタンが潰れる。
-                                    defaultHeight={72}
-                                >
-                                    <FurnitureAssetStrip
-                                        className="h-full w-full"
-                                        processedCatalog={processedCatalog}
-                                        assetCategories={assetCategories}
-                                        selectedAssetCategory={selectedAssetCategory}
-                                        onSelectedAssetCategoryChange={setSelectedAssetCategory}
-                                        onPickItem={handleAddFurniture}
-                                        renderThumbnail={(item) => <ModelThumbnail url={item.url} name={item.name} uprightXDeg={item.modelUprightXDeg} forwardYawDeg={item.forwardYawDeg} thumbnailUrl={item.thumbnailUrl} />}
-                                        fetchStatus={furnitureCatalogFetchStatus}
-                                        fetchErrorMessage={furnitureCatalogErrorText}
-                                        onUploadModel={handleUploadModelClick}
-                                    />
-                                </MovablePanel>
                             </div>
                     </>
                 </div>
@@ -5524,7 +5486,9 @@ const App: React.FC = () => {
       </div>
 
       {/* --- RIGHT SIDEBAR (Catalog + Cost) --- xl未満はドロワー、xl以上は固定カラム --- */}
-      {viewMode === '3D' && (
+      {/* 3Dビューに加えて2Dビューでも出す（260730 クライアント要望③）。
+          レイアウトは flex なので、出すだけで描画エリアと上部UIが自動的に左へ寄る。 */}
+      {(viewMode === '3D' || viewMode === 'sketch') && (
         <>
           {/* 狭幅: ドロワーを開くタブ（閉じている間だけ表示） */}
           {!sidebarOpen && (
@@ -5550,10 +5514,69 @@ const App: React.FC = () => {
           {/* 1. ESTIMATED COST (Top) */}
           {renderEstimatePanel(false)}
 
-          {/* MATERIAL CATALOG */}
+          {/* CATALOG（建材 / 3Dモデル をトグルで切替・260730 クライアント要望②③） */}
           <div className="flex-1 flex flex-col min-h-0 relative z-10 bg-[#050505]">
+            {/*
+              カタログの切替。3Dモデルカタログは従来「画面下の横長パネル」だったが、
+              作業領域を覆いすぎるという指摘でここへ移した。
+              2Dビューでは面に建材を貼れない（面の選択自体が3D専用）ため、建材側は選べないようにする。
+            */}
+            <div className="flex items-center gap-1 px-6 pb-2 md:px-8">
+              <button
+                type="button"
+                onClick={() => setCatalogTab('material')}
+                disabled={!materialCatalogAvailable}
+                aria-pressed={effectiveCatalogTab === 'material'}
+                title={materialCatalogAvailable ? '建材カタログ' : '2Dビューでは建材を貼れません（3Dビューで選択してください）'}
+                className={`flex-1 rounded-lg border px-3 py-1.5 text-[11px] font-black transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                  effectiveCatalogTab === 'material'
+                    ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
+                    : 'border-white/10 bg-[#111] text-neutral-400 hover:text-white'
+                }`}
+              >
+                建材カタログ
+              </button>
+              <button
+                type="button"
+                onClick={() => setCatalogTab('model')}
+                aria-pressed={effectiveCatalogTab === 'model'}
+                className={`flex-1 rounded-lg border px-3 py-1.5 text-[11px] font-black transition-all ${
+                  effectiveCatalogTab === 'model'
+                    ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
+                    : 'border-white/10 bg-[#111] text-neutral-400 hover:text-white'
+                }`}
+              >
+                3Dモデル
+              </button>
+            </div>
             <div className="flex-1 overflow-y-auto px-6 pt-0 pb-6 space-y-2 md:px-8 md:pb-8 md:space-y-3 scroll-dark">
-                
+                {effectiveCatalogTab === 'model' ? (
+                  <ModelCatalogRail
+                    items={processedCatalog}
+                    categories={assetCategories}
+                    selectedCategory={railModelCategory}
+                    onSelectCategory={setRailModelCategory}
+                    gridSize={catalogGridSize}
+                    onGridSizeChange={setCatalogGridSize}
+                    sliderToGrid={CATALOG_SLIDER_TO_GRID}
+                    gridToSlider={CATALOG_GRID_TO_SLIDER}
+                    onPickItem={handleAddFurniture}
+                    renderThumbnail={(item) => (
+                      <ModelThumbnail
+                        url={item.url}
+                        name={item.name}
+                        uprightXDeg={item.modelUprightXDeg}
+                        forwardYawDeg={item.forwardYawDeg}
+                        thumbnailUrl={item.thumbnailUrl}
+                      />
+                    )}
+                    fetchStatus={furnitureCatalogFetchStatus}
+                    fetchErrorMessage={furnitureCatalogErrorText}
+                    onUploadModel={handleUploadModelClick}
+                  />
+                ) : (
+                  <>
+
                 {/* サムネ表示密度（左） / 並び替え（右） */}
                 <div className="flex items-center justify-end gap-3 mb-2 flex-wrap">
                     <div
@@ -5699,6 +5722,8 @@ const App: React.FC = () => {
                       </div>
                     )}
                 </div>
+                  </>
+                )}
             </div>
           </div>
 

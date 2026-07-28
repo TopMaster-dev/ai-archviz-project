@@ -1,4 +1,5 @@
 import type { FurnitureCatalogItem, Product, MaterialCategory } from '../types.js';
+import { THUMBNAIL_FRAMING_VERSION } from '../constants/cloudinaryThumbnails.js';
 import type { UserUpload } from './db/uploads.js';
 import type { MaterialPhysical } from './materialPhysical.js';
 import { updateUserUploadMetadata, listUserUploads, uploadUserThumbnailPng, getUserUpload } from './db/uploads.js';
@@ -64,7 +65,11 @@ export function uploadToFurnitureItem(upload: UserUpload): FurnitureCatalogItem 
   const metaBrand = str(meta.brand);
   const metaModelNumber = str(meta.modelNumber);
   const metaProductUrl = str(meta.productUrl);
-  const metaThumb = str(meta.thumbnailUrl); // 260727: 永続化済みサムネイル(Supabase 公開URL)
+  // 260727: 永続化済みサムネイル(Supabase 公開URL)。
+  // 260730: 生成ロジックの版が今と違うものは「無い」ものとして扱い、作り直させる。
+  // こうしないと、公式カタログだけ新しい寄りで再生成され、ユーザーのモデルだけ旧の寄りのまま残る。
+  const metaThumb =
+    str(meta.thumbVersion) === THUMBNAIL_FRAMING_VERSION ? str(meta.thumbnailUrl) : '';
   return {
     id: `upload-${upload.id}`,
     type: UPLOAD_FURNITURE_TYPE,
@@ -148,8 +153,16 @@ export async function persistUserModelThumbnail(modelUrl: string, dataUrlPng: st
   // 読み取り失敗は throw、行が消えていれば null。どちらも「古い値で上書きしない」ために書かない。
   const fresh = await getUserUpload(up.id);
   if (!fresh) return null;
-  await updateUserUploadMetadata(up.id, { ...(fresh.metadata ?? {}), thumbnailUrl: publicUrl });
-  return publicUrl;
+  // 生成ロジックの版も一緒に記録する（260730）。次に版が上がったとき、これを見て作り直す。
+  // URL にも版を付けてキャッシュを外す。保存先パスは固定なので、URL が同じままだと
+  // ブラウザ/CDN が古い画像を出し続けて「再生成したのに変わらない」ことになる。
+  const versioned = `${publicUrl}${publicUrl.includes('?') ? '&' : '?'}v=${THUMBNAIL_FRAMING_VERSION}`;
+  await updateUserUploadMetadata(up.id, {
+    ...(fresh.metadata ?? {}),
+    thumbnailUrl: versioned,
+    thumbVersion: THUMBNAIL_FRAMING_VERSION,
+  });
+  return versioned;
 }
 
 /**

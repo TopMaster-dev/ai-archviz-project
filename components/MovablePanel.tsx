@@ -112,7 +112,12 @@ export function MovablePanel({
    * こちらは実際のレイアウト幅・高さなので中身が再配置される（例: カタログの列数が増える）。
    */
   const [size, setSize] = useState<{ w: number; h: number } | null>(
-    persisted.current?.w && persisted.current?.h ? { w: persisted.current.w, h: persisted.current.h } : null,
+    // resizable=false のパネルは保存済みサイズを読まない（260730 クライアント要望①のロールバック）。
+    // 読んでしまうと、既にドラッグして広げた利用者だけが変な大きさのまま固定され、
+    // ハンドルも無いので直す手段が無くなる。保存値は無視して既定サイズへ戻す。
+    resizable && persisted.current?.w && persisted.current?.h
+      ? { w: persisted.current.w, h: persisted.current.h }
+      : null,
   );
   const dragRef = useRef<null | { sx: number; sy: number; ox: number; oy: number }>(null);
   const resizeRef = useRef<null | {
@@ -213,12 +218,13 @@ export function MovablePanel({
     try {
       localStorage.setItem(
         storageKey,
-        JSON.stringify({ x: pos.x, y: pos.y, scale, w: size?.w, h: size?.h }),
+        // resizable=false ならサイズは書き戻さない（古い値を残して次回また効かせない）。
+        JSON.stringify({ x: pos.x, y: pos.y, scale, w: resizable ? size?.w : undefined, h: resizable ? size?.h : undefined }),
       );
     } catch {
       /* quota/private mode */
     }
-  }, [pos, scale, size, storageKey]);
+  }, [pos, scale, size, storageKey, resizable]);
 
   // 矩形通知（倍率込みの top/bottom）。位置に応じた重なり回避に使う。ObserverはonRect安定時に1回だけ購読し、
   // 消滅時のみ null で通知（ドラッグ中の pos 変化で毎フレーム null→rect と点滅しないよう分離・260703(2) 検証F）。

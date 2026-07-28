@@ -17,4 +17,15 @@ export const CLOUDINARY_THUMBNAIL_FOLDER = '3d_assets_thumbnails';
  * サムネイル生成ロジックを変えて再生成させたいときは、フォルダを増やさずこの値だけを上げる（例: '260726' → '260727'）。
  * 空文字にすると付与しない（後方互換）。旧 _v2/_v3 フォルダの残存物と public_id が衝突しないよう、移行時は非空の値にする。
  */
-export const CLOUDINARY_THUMBNAIL_CACHE_BUST = '260729';
+export const CLOUDINARY_THUMBNAIL_CACHE_BUST = '260730';
+
+/**
+ * サムネイルの「作り方」の版（260730）。生成ロジック（寄り・解像度・向き等）を変えたら上げる。
+ *
+ * Cloudinary 側（公式カタログ）は上の CLOUDINARY_THUMBNAIL_CACHE_BUST で無効化できるが、
+ * ユーザーがアップロードしたモデルのサムネイルは Supabase にあり、URL が台帳(metadata)に
+ * 焼き付いているため、そちらは別に無効化しないと古い見た目のまま残る。
+ * 公式だけ作り直されてユーザー分が旧のままだと、一覧で寄りがバラバラになる。
+ * 保存時にこの版を metadata へ書き、読み出し時に版が違えば「サムネイル無し」として扱って再生成させる。
+ */
+export const THUMBNAIL_FRAMING_VERSION = '260730';

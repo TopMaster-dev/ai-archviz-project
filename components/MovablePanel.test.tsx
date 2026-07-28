@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { render, screen, fireEvent, cleanup } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
 import { MovablePanel } from './MovablePanel.js';
 
 /**
@@ -270,5 +270,39 @@ describe('拡大率とリサイズの併存', () => {
     expect(contentEl().style.width).toBe('');
     expect(contentEl().style.height).toBe('');
     expect(screen.getByText('100%')).toBeTruthy();
+  });
+});
+
+/**
+ * 260730 クライアント要望①のロールバック。
+ * 「枠を広げても中身が追従せず余白が増えるだけ」だったため、視点操作・オブジェクト情報は
+ * 固定サイズへ戻した。ここで守るのは「既に広げてしまった人が元に戻ること」。
+ * 保存値を読んだままハンドルだけ消すと、その人だけ変な大きさで固定され、直す手段が無くなる。
+ */
+describe('リサイズ無効時（固定サイズへのロールバック）', () => {
+  it('保存済みサイズを読まない（既に広げていた人も既定へ戻る）', () => {
+    localStorage.setItem(KEY, JSON.stringify({ x: 10, y: 10, scale: 1, w: 900, h: 700 }));
+    setup({ resizable: false });
+    expect(contentEl().style.width).toBe('');
+    expect(contentEl().style.height).toBe('');
+  });
+
+  it('位置と倍率は従来どおり保存・復元される（そこは巻き戻さない）', () => {
+    localStorage.setItem(KEY, JSON.stringify({ x: 120, y: 60, scale: 1.2, w: 900, h: 700 }));
+    setup({ resizable: false });
+    const root = screen.getByTestId('body').closest('.fixed') as HTMLElement;
+    expect(root.style.left).toBe('120px');
+    expect(root.style.transform).toBe('scale(1.2)');
+  });
+
+  it('古いサイズを保存し直さない（次回また効いてしまうのを防ぐ）', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ x: 10, y: 10, scale: 1, w: 900, h: 700 }));
+    setup({ resizable: false });
+    // 位置の保存 effect が走った後、w/h は落ちていること。
+    await waitFor(() => {
+      const saved = JSON.parse(localStorage.getItem(KEY) as string);
+      expect(saved.w).toBeUndefined();
+      expect(saved.h).toBeUndefined();
+    });
   });
 });
