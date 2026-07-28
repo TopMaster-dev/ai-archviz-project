@@ -119,6 +119,46 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
   const uploadCategory = assetCategories.includes(UPLOAD_CATEGORY) ? UPLOAD_CATEGORY : null;
   const scrollableCategories = assetCategories.filter((c) => c !== UPLOAD_CATEGORY);
 
+  /**
+   * スクロールできることが一目で分かるようにするための状態（260728 クライアント指摘）。
+   * スクロールバーを隠している（高さ72pxのバーでは太すぎてボタンが潰れる）ので、
+   * 代わりに「現在位置を示す細いインジケータ」と「左右の矢印ボタン」を出す。
+   */
+  const [scrollState, setScrollState] = useState({
+    overflowing: false,
+    atStart: true,
+    atEnd: true,
+    thumbPct: 100,
+    thumbLeftPct: 0,
+  });
+  const updateScrollState = useCallback(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const { scrollLeft, scrollWidth, clientWidth } = el;
+    const overflow = scrollWidth - clientWidth;
+    if (overflow <= 1) {
+      setScrollState({ overflowing: false, atStart: true, atEnd: true, thumbPct: 100, thumbLeftPct: 0 });
+      return;
+    }
+    // つまみは「見えている割合」。細くなり過ぎると掴みどころが無いので最低12%は確保する。
+    const thumbPct = Math.max(12, (clientWidth / scrollWidth) * 100);
+    const leftPct = (scrollLeft / scrollWidth) * 100;
+    setScrollState({
+      overflowing: true,
+      atStart: scrollLeft <= 1,
+      atEnd: scrollLeft >= overflow - 1,
+      thumbPct,
+      thumbLeftPct: Math.min(100 - thumbPct, leftPct),
+    });
+  }, []);
+
+  /** 矢印ボタン: 見えている幅の約6割ぶん送る（1ボタンずつだと遅く、全幅だと飛びすぎる）。 */
+  const scrollByStep = useCallback((dir: -1 | 1) => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    el.scrollBy({ left: dir * Math.max(80, el.clientWidth * 0.6), behavior: 'smooth' });
+  }, []);
+
   // 5個ぶんの実幅を測ってスクロール領域の上限にする（260728）。
   // ボタンは内容に合わせた可変幅（長い名称を折り返さないため・260727）なので、固定幅では
   // 「カウンターチェア」のような長い名称が切れてしまう。実測なら文字を削らずちょうど5個で切れる。
@@ -141,13 +181,22 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
       const width = last.getBoundingClientRect().right - first.getBoundingClientRect().left;
       if (width > 0) setScrollerMaxWidth(Math.ceil(width));
     };
-    measure();
+    const run = () => {
+      measure();
+      updateScrollState();
+    };
+    run();
     // フォント読み込みやカテゴリ増減で幅が変わるので追従する。
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(run);
     ro.observe(el);
     for (const k of Array.from(el.children)) ro.observe(k as HTMLElement);
     return () => ro.disconnect();
-  }, [scrollableCategories.join('|')]);
+  }, [scrollableCategories.join('|'), updateScrollState]);
+
+  // maxWidth が確定した直後にも状態を取り直す（初回は制限前の幅で測ってしまうため）。
+  useLayoutEffect(() => {
+    updateScrollState();
+  }, [scrollerMaxWidth, updateScrollState]);
 
   /** 縦ホイールを横スクロールへ（トラックパッド以外でも送れるように）。 */
   const handleScrollerWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
@@ -156,6 +205,7 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
     if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // 既に横スクロール操作
     el.scrollLeft += e.deltaY;
   }, []);
+
 
   /** カテゴリボタン1個（スクロール領域と右端固定の両方で使う）。 */
   const renderCategoryButton = (cat: string) => (
@@ -297,19 +347,65 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
 
       {/* カテゴリは横1行。6個目以降は横スクロール、「アップロード」は右端に固定（260728 クライアント要望）。 */}
       <div className={barClass}>
-        <div
-          ref={scrollerRef}
-          onWheel={handleScrollerWheel}
-          style={scrollerMaxWidth != null ? { maxWidth: scrollerMaxWidth } : undefined}
-          className="flex h-full items-center gap-1.5 overflow-x-auto overflow-y-hidden scrollbar-none overscroll-x-contain"
-        >
-          {scrollableCategories.map(renderCategoryButton)}
+        {/* 左矢印（はみ出している時だけ） */}
+        {scrollState.overflowing && (
+          <button
+            type="button"
+            onClick={() => scrollByStep(-1)}
+            disabled={scrollState.atStart}
+            aria-label="カテゴリを左へスクロール"
+            title="左へ"
+            className="flex h-full w-5 shrink-0 items-center justify-center rounded-lg text-white/70 transition hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-25"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M15 5l-7 7 7 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+
+        {/* スクロール領域＋位置インジケータ。インジケータは絶対配置なのでボタンの高さを変えない。 */}
+        <div className="relative h-full" style={scrollerMaxWidth != null ? { maxWidth: scrollerMaxWidth } : undefined}>
+          <div
+            ref={scrollerRef}
+            onScroll={updateScrollState}
+            onWheel={handleScrollerWheel}
+            className={`flex h-full items-center gap-1.5 overflow-x-auto overflow-y-hidden scrollbar-none overscroll-x-contain ${
+              scrollState.overflowing ? 'pb-1.5' : ''
+            }`}
+          >
+            {scrollableCategories.map(renderCategoryButton)}
+          </div>
+          {/* 位置インジケータ（見えている範囲と現在位置）。スクロールバーの代わり。 */}
+          {scrollState.overflowing && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-1 rounded-full bg-white/10" aria-hidden>
+              <div
+                className="h-full rounded-full bg-white/60 transition-[margin] duration-100"
+                style={{ width: `${scrollState.thumbPct}%`, marginLeft: `${scrollState.thumbLeftPct}%` }}
+              />
+            </div>
+          )}
         </div>
+
+        {/* 右矢印（はみ出している時だけ） */}
+        {scrollState.overflowing && (
+          <button
+            type="button"
+            onClick={() => scrollByStep(1)}
+            disabled={scrollState.atEnd}
+            aria-label="カテゴリを右へスクロール"
+            title="右へ"
+            className="flex h-full w-5 shrink-0 items-center justify-center rounded-lg text-white/70 transition hover:bg-white/10 hover:text-white disabled:pointer-events-none disabled:opacity-25"
+          >
+            <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3">
+              <path d="M9 5l7 7-7 7" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </button>
+        )}
+
         {uploadCategory && (
           // スクロール領域の外に置くことで、いくつカテゴリが増えても常に右端に見える。
           <div className="flex h-full shrink-0 items-center gap-1.5">
-            {/* スクロールできることが分かるよう、はみ出している時だけ区切り線を出す。 */}
-            {scrollerMaxWidth != null && <div className="h-8 w-px shrink-0 bg-white/15" aria-hidden />}
+            {scrollState.overflowing && <div className="h-8 w-px shrink-0 bg-white/15" aria-hidden />}
             {renderCategoryButton(uploadCategory)}
           </div>
         )}
