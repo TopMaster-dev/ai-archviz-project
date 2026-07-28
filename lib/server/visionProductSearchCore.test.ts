@@ -1,48 +1,150 @@
 import { describe, it, expect } from 'vitest';
-import { sameImage } from './visionProductSearchCore.js';
+import { pickVisualCandidates, buildCandidateRecommendations } from './visionProductSearchCore.js';
 
 /**
- * 260728 敵対レビュー H2 の対策。
+ * 260729 クライアント要望「見た目の一致を絶対優先」。
  *
- * 逆画像検索は「その画像を単に埋め込んでいるだけのページ」（特集記事・一覧・関連商品枠）も返す。
- * そういうページの schema.org/Product はたいてい "そのページの主役商品" ＝ 押した画像とは別物なので、
- * 素通しすると『商品ページ確認済み』の緑バッジ付きで無関係な商品名と価格が見積に入る。
- * 「押した画像」と「ページが商品画像として名乗っている画像」が一致したときだけ確定扱いにする。
- *
- * 判定は保守的でよい。取りこぼしても画像経路（実際に画像で照合する）へ落ちるだけだが、
- * 誤って一致と判断すると利用者の見積に誤った金額が入る。
+ * 以前は候補一覧を Gemini が書いていた。だがモデルには候補ページの見た目が渡っていない
+ * （タイトルとURLの文字列だけ）ので、見た目の一致を判断できるはずがなかった。
+ * 現在は Vision の画像一致順からサーバが決定論的に組み立てる。ここはその順序と中身を固定する。
  */
-describe('sameImage（押した画像とページの商品画像が同じか）', () => {
-  it('完全に同じURLは一致', () => {
-    expect(sameImage('https://img.example.jp/a/chair.jpg', 'https://img.example.jp/a/chair.jpg')).toBe(true);
+describe('pickVisualCandidates（見た目一致で候補を選ぶ）', () => {
+  const page = (url: string, matchRank: 0 | 1 | 2, imageUrl?: string) => ({
+    title: url,
+    url,
+    imageUrl,
+    matchRank,
   });
 
-  it('CDNのサイズ・書式クエリが違っても一致（?w=800&fm=webp などは日常的に付く）', () => {
-    expect(
-      sameImage('https://img.example.jp/a/chair.jpg?w=800&fm=webp', 'https://img.example.jp/a/chair.jpg?w=200'),
-    ).toBe(true);
+  it('完全一致を部分一致より先に出す（Vision の返却順ではなく一致度で並べる）', () => {
+    const out = pickVisualCandidates(
+      [page('https://a.example/1', 1), page('https://b.example/2', 2), page('https://c.example/3', 0)],
+      3,
+    );
+    expect(out.map((p) => p.url)).toEqual([
+      'https://b.example/2', // 完全一致
+      'https://a.example/1', // 部分一致
+      'https://c.example/3', // 一致画像なし
+    ]);
   });
 
-  it('www の有無・大文字小文字は無視する', () => {
-    expect(sameImage('https://WWW.Img.Example.jp/a/Chair.JPG', 'https://img.example.jp/a/chair.jpg')).toBe(true);
+  it('同じ一致度なら Vision の順序を保つ（安定ソート）', () => {
+    const out = pickVisualCandidates([page('https://a.example/1', 2), page('https://b.example/2', 2)], 3);
+    expect(out.map((p) => p.url)).toEqual(['https://a.example/1', 'https://b.example/2']);
   });
 
-  it('別のファイル名は不一致（＝そのページの主役商品は別物）', () => {
-    expect(sameImage('https://img.example.jp/a/chair.jpg', 'https://img.example.jp/a/sofa.jpg')).toBe(false);
+  it('商品ページになり得ないホストは除く（動画・SNS）', () => {
+    // 検証時、参考情報に YouTube のリンクが並んでいた。これらを商品カードにすると
+    // 「商品ではないもの」が見積の候補として出てしまう。詳細の有無とは別の理由で落とす。
+    const out = pickVisualCandidates(
+      [
+        page('https://www.youtube.com/watch?v=x', 2),
+        page('https://jp.pinterest.com/pin/1', 2),
+        page('https://shop.example.jp/item/1', 1),
+      ],
+      3,
+    );
+    expect(out.map((p) => p.url)).toEqual(['https://shop.example.jp/item/1']);
   });
 
-  it('ホストが違えば不一致（別サイトの同名ファイルを同一視しない）', () => {
-    expect(sameImage('https://img.a.jp/p/1.jpg', 'https://img.b.jp/p/1.jpg')).toBe(false);
+  it('同じサイトからは1件だけ（色違い・サイズ違いで候補が埋まらないように）', () => {
+    const out = pickVisualCandidates(
+      [
+        page('https://shop.example.jp/item/1', 2),
+        page('https://shop.example.jp/item/2', 2),
+        page('https://other.example.jp/item/9', 1),
+      ],
+      3,
+    );
+    expect(out.map((p) => p.url)).toEqual(['https://shop.example.jp/item/1', 'https://other.example.jp/item/9']);
   });
 
-  it('片方でも欠けていれば不一致（判断できないものは確定扱いにしない）', () => {
-    expect(sameImage(undefined, 'https://img.example.jp/a/chair.jpg')).toBe(false);
-    expect(sameImage('https://img.example.jp/a/chair.jpg', undefined)).toBe(false);
-    expect(sameImage(undefined, undefined)).toBe(false);
+  it('件数は上限で切る（既定3件）', () => {
+    const out = pickVisualCandidates(
+      [page('https://a.jp/1', 2), page('https://b.jp/1', 2), page('https://c.jp/1', 2), page('https://d.jp/1', 2)],
+      3,
+    );
+    expect(out).toHaveLength(3);
+  });
+});
+
+describe('buildCandidateRecommendations（詳細が取れなくても候補を落とさない）', () => {
+  const page = (url: string, matchRank: 0 | 1 | 2, imageUrl?: string) => ({ title: `T:${url}`, url, imageUrl, matchRank });
+
+  it('詳細が取れたページは確認済み・値入りで出す', () => {
+    const out = buildCandidateRecommendations(
+      [page('https://shop.jp/1', 2, 'https://img.jp/a.jpg')],
+      [
+        {
+          requestedUrl: 'https://shop.jp/1',
+          finalUrl: 'https://shop.jp/1?ref=x',
+          name: 'ソファA',
+          brand: 'カリモク',
+          sku: 'K-1',
+          price: 120000,
+          source: 'json-ld',
+        } as any,
+      ],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].verified).toBe(true);
+    expect(out[0].name).toBe('ソファA');
+    expect(out[0].price).toBe(120000);
+    expect(out[0].productUrl).toBe('https://shop.jp/1?ref=x'); // 到達確認済みの最終URL
   });
 
-  it('URLとして壊れていれば不一致', () => {
-    expect(sameImage('not a url', 'https://img.example.jp/a/chair.jpg')).toBe(false);
-    expect(sameImage('https://img.example.jp/', 'https://img.example.jp/')).toBe(false); // ファイル名が無い
+  it('詳細が取れなくても落とさず、未確認・空欄で出す（要望の核心）', () => {
+    const out = buildCandidateRecommendations(
+      [page('https://blog.jp/1', 2, 'https://img.jp/b.jpg')],
+      [
+        {
+          requestedUrl: 'https://blog.jp/1',
+          finalUrl: 'https://blog.jp/1',
+          name: '',
+          pageTitle: 'この椅子の紹介',
+          source: 'unresolved',
+        } as any,
+      ],
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0].verified).toBe(false);
+    expect(out[0].name).toBe('この椅子の紹介'); // ページタイトルを手掛かりに出す
+    expect(out[0].price).toBeUndefined(); // 推測しない
+    expect(out[0].modelNumber).toBeUndefined();
+    expect(out[0].productUrl).toBe('https://blog.jp/1'); // リンクは残す
+  });
+
+  it('サムネイルは「Vision が一致と判断した画像」を優先する', () => {
+    // ページの og:image は別カット・別商品のことがある。利用者が似ているか判断する材料は
+    // あくまで「一致した画像」なので、そちらを優先しなければ判断材料にならない。
+    const out = buildCandidateRecommendations(
+      [page('https://shop.jp/1', 2, 'https://img.jp/matched.jpg')],
+      [
+        {
+          requestedUrl: 'https://shop.jp/1',
+          finalUrl: 'https://shop.jp/1',
+          name: 'ソファ',
+          imageUrl: 'https://img.jp/og-different.jpg',
+          source: 'json-ld',
+        } as any,
+      ],
+    );
+    expect(out[0].imageUrl).toBe('https://img.jp/matched.jpg');
+  });
+
+  it('ページを1件も開けなくても、Vision の候補はそのまま出す', () => {
+    const out = buildCandidateRecommendations([page('https://shop.jp/1', 1, 'https://img.jp/c.jpg')], []);
+    expect(out).toHaveLength(1);
+    expect(out[0].productUrl).toBe('https://shop.jp/1');
+    expect(out[0].imageUrl).toBe('https://img.jp/c.jpg');
+    expect(out[0].verified).toBe(false);
+  });
+
+  it('並び順は Vision の一致順のまま（詳細が取れた方を先に繰り上げない）', () => {
+    const out = buildCandidateRecommendations(
+      [page('https://a.jp/1', 2), page('https://b.jp/1', 1)],
+      [{ requestedUrl: 'https://b.jp/1', finalUrl: 'https://b.jp/1', name: '詳細あり', source: 'json-ld' } as any],
+    );
+    expect(out.map((r) => r.productUrl)).toEqual(['https://a.jp/1', 'https://b.jp/1']);
   });
 });

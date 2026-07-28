@@ -12,6 +12,13 @@ export interface VisionMatchingPage {
    * 利用者が画像を選んだ瞬間に、そのページを直接読んで商品情報を確定できる。
    */
   imageUrl?: string;
+  /**
+   * 見た目の一致度（260729 クライアント要望「見た目一致を最優先」）。
+   * 2=完全一致（fullMatchingImages）/ 1=部分一致 / 0=一致画像なし。
+   * Vision が返す「元画像と一致した画像がどのページにあるか」は、我々が持つ唯一の視覚的根拠。
+   * 従来はこの区別を捨てていたため、並び順に見た目の近さを反映できていなかった。
+   */
+  matchRank: 0 | 1 | 2;
 }
 
 export interface VisionFindings {
@@ -63,6 +70,11 @@ export function parseVisionWebDetection(result: unknown): VisionFindings {
         .map((e) => e.description)
     : [];
 
+  const firstUrlOf = (list: unknown): string | undefined =>
+    (Array.isArray(list) ? list : [])
+      .map((im) => (im as { url?: unknown })?.url)
+      .find((u): u is string => isHttpUrl(u));
+
   const pages: VisionMatchingPage[] = [];
   if (Array.isArray(wd.pagesWithMatchingImages)) {
     for (const p of wd.pagesWithMatchingImages as unknown[]) {
@@ -70,15 +82,22 @@ export function parseVisionWebDetection(result: unknown): VisionFindings {
       if (!isHttpUrl(url)) continue;
       const title = str((p as { pageTitle?: unknown })?.pageTitle);
       // 完全一致を優先し、無ければ部分一致（切り抜き検索では部分一致しか返らないことが多い）。
+      // どちらで当たったかは「見た目の近さ」そのものなので、順位付けのために保持する（260729）。
       const rec = p as { fullMatchingImages?: unknown; partialMatchingImages?: unknown };
-      const firstImage = [rec.fullMatchingImages, rec.partialMatchingImages]
-        .flatMap((list) => (Array.isArray(list) ? list : []))
-        .map((im) => (im as { url?: unknown })?.url)
-        .find((u): u is string => isHttpUrl(u));
-      pages.push({ title: title || url, url, imageUrl: firstImage });
+      const full = firstUrlOf(rec.fullMatchingImages);
+      const partial = firstUrlOf(rec.partialMatchingImages);
+      pages.push({
+        title: title || url,
+        url,
+        imageUrl: full ?? partial,
+        matchRank: full ? 2 : partial ? 1 : 0,
+      });
       if (pages.length >= MAX_PAGES) break;
     }
   }
+  // 見た目の一致が強い順に並べ替える（Vision の返却順は一致度順とは限らない）。
+  // 同順位のときは Vision の元の順序を保つ（安定ソート）。
+  pages.sort((a, b) => b.matchRank - a.matchRank);
 
   const similarImageUrls: string[] = [];
   if (Array.isArray(wd.visuallySimilarImages)) {

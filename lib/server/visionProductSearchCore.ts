@@ -2,9 +2,6 @@ import { generateVisionProductReply, resolveAgentModel } from '../gemini.js';
 import { parseDataUrl } from '../agentAttachments.js';
 import { parseVisionWebDetection, buildVisionFindingsText, type VisionMatchingPage } from '../visionProductSearch.js';
 import { resolveProductsFromUrls, buildResolvedProductsText, type ResolvedProduct } from './productResolver.js';
-import { findProductPageCandidates, buildProductQuery } from './customSearch.js';
-import { safeFetchImage } from './safeFetchPage.js';
-import { signUrlToken, verifyUrlToken } from './urlToken.js';
 import type { AgentRecommendation } from '../../types.js';
 
 /**
@@ -97,56 +94,101 @@ export function mergeResolvedIntoRecommendations(
 }
 
 /**
- * 2つの画像URLが「同じ画像」を指すかを保守的に判定する（260728 敵対レビュー H2）。
- *
- * CDN はクエリでサイズ・書式を変える（?w=800&fm=webp）ので完全一致では取りこぼす。
- * 逆に緩くしすぎると別商品を同一視して誤った商品を確定扱いにしてしまうため、
- * 「ホストが同じ」かつ「ファイル名（最後のパス要素）が同じ」を条件にする。
- * どちらか一方でも欠けていれば false＝確定扱いにしない（判断できないものは通さない）。
+ * 提示する候補の数（260729 クライアント要望「精度が高ければ3つほどで十分」）。
+ * 少なく出すほど1件あたりの精度が問われるので、順位付け（matchRank）とセットで意味を持つ。
  */
-export function sameImage(a: string | undefined, b: string | undefined): boolean {
-  const parse = (raw: string | undefined): { host: string; file: string } | null => {
-    if (!raw) return null;
-    try {
-      const u = new URL(raw);
-      const file = u.pathname.split('/').filter(Boolean).pop() || '';
-      if (!file) return null;
-      return { host: u.hostname.replace(/^www\./i, '').toLowerCase(), file: file.toLowerCase() };
-    } catch {
-      return null;
-    }
-  };
-  const x = parse(a);
-  const y = parse(b);
-  if (!x || !y) return false;
-  return x.host === y.host && x.file === y.file;
+const MAX_CANDIDATES = 3;
+
+/**
+ * 商品ページになり得ないホスト（260729）。
+ *
+ * Vision の一致ページには動画・SNS・ピン留めサイトが普通に混ざる（実際クライアントの検証でも
+ * YouTube のリンクが並んでいた）。これらを商品カードとして出すと「商品ではないもの」が
+ * 見積の候補として並ぶことになり、要望の意図（見た目の一致した"商品"を出す）から外れる。
+ * ここで落とすのは「詳細が取れないから」ではなく「そもそも商品ページではないから」。
+ */
+const NON_PRODUCT_HOSTS = [
+  'youtube.com',
+  'youtu.be',
+  'pinterest.com',
+  'pinterest.jp',
+  'instagram.com',
+  'facebook.com',
+  'twitter.com',
+  'x.com',
+  'tiktok.com',
+];
+
+function isNonProductHost(url: string): boolean {
+  const h = hostOf(url);
+  if (!h) return true; // ホストが取れないURLは出さない
+  return NON_PRODUCT_HOSTS.some((bad) => h === bad || h.endsWith(`.${bad}`));
 }
 
 /**
- * クライアントへ返す「あとでサーバに取得させ得るURL」すべてに署名トークンを添える（260728 敵対レビュー H1）。
- *
- * URL 自体は表示（サムネイル・リンク・タイトル）に必要なので残すが、
- * 「取得させる」操作にはトークンしか受け付けない。対象は2種類あり、両方に付けること:
- *   - ページURL（掲載ページ直読み経路）
- *   - 画像URL（逆画像検索やり直し経路）
- * 片方だけ署名しても、署名していない側が任意URLの取得口として残る。
- * 署名できない構成ではトークンが付かず、その操作が使えなくなるだけ（表示は従来どおり）。
+ * 見た目の一致だけを根拠に、提示する候補ページを選ぶ（260729）。
+ * 並びは matchRank（完全一致→部分一致）優先。同一ホストは1件までにして、
+ * 同じ通販サイトの色違い・サイズ違いで候補が埋まるのを防ぐ。
  */
-async function withPageTokens(
-  pages: VisionMatchingPage[],
-): Promise<Array<VisionMatchingPage & { pageToken?: string; imageToken?: string }>> {
-  return Promise.all(
-    pages.map(async (p) => ({
-      ...p,
-      pageToken: (await signUrlToken(p.url)) ?? undefined,
-      imageToken: p.imageUrl ? ((await signUrlToken(p.imageUrl)) ?? undefined) : undefined,
-    })),
-  );
+export function pickVisualCandidates(pages: VisionMatchingPage[], max = MAX_CANDIDATES): VisionMatchingPage[] {
+  const seenHost = new Set<string>();
+  const out: VisionMatchingPage[] = [];
+  // matchRank 降順（同順位は Vision の順序を維持＝安定ソート）。
+  const ordered = [...(pages ?? [])].sort((a, b) => (b.matchRank ?? 0) - (a.matchRank ?? 0));
+  for (const p of ordered) {
+    if (!p?.url || isNonProductHost(p.url)) continue;
+    const h = hostOf(p.url);
+    if (seenHost.has(h)) continue;
+    seenHost.add(h);
+    out.push(p);
+    if (out.length >= max) break;
+  }
+  return out;
 }
 
-/** 類似画像も同様に、URL（表示用）と署名トークン（取得用）の組で返す。 */
-async function withImageTokens(urls: string[]): Promise<Array<{ url: string; token?: string }>> {
-  return Promise.all(urls.map(async (url) => ({ url, token: (await signUrlToken(url)) ?? undefined })));
+/**
+ * Vision の一致ページ（＝見た目の根拠）を主、ページから取れた詳細を従として商品カードを作る（260729）。
+ *
+ * 重要な性質:
+ *  - 並び順は Vision の一致順のまま。詳細が取れたかどうかで順位を変えない。
+ *  - サムネイルは「Vision が一致と判断した画像」を最優先に使う。利用者はこれを見て似ているか判断するので、
+ *    ページ側の og:image（別カットや別商品のことがある）より一致画像の方が正しい。
+ *  - 詳細が取れなければ空のまま出す（要望「情報が付与できなくても表示なし（または空欄）で問題ない」）。
+ */
+export function buildCandidateRecommendations(
+  pages: VisionMatchingPage[],
+  resolved: ResolvedProduct[],
+): AgentRecommendation[] {
+  const byUrl = new Map<string, ResolvedProduct>();
+  for (const r of resolved) {
+    // requestedUrl（渡した元URL）で引く。リダイレクトで finalUrl が変わるため finalUrl では引けない。
+    if (r.requestedUrl) byUrl.set(r.requestedUrl, r);
+  }
+  return pages.map((p) => {
+    const r = byUrl.get(p.url);
+    const detailed = !!r && r.source !== 'unresolved';
+    return {
+      // 名称はページから取れた商品名 → ページタイトル → Vision のタイトルの順。
+      name: (detailed ? r?.name : '') || r?.pageTitle || p.title || '',
+      brand: detailed ? r?.brand : undefined,
+      modelNumber: detailed ? r?.sku : undefined,
+      price: detailed ? r?.price : undefined,
+      // 到達確認できていればその最終URL、できていなければ Vision のURL（表示はするが未確認）。
+      productUrl: r?.finalUrl ?? p.url,
+      // 見た目の根拠そのもの。ページ側の画像しか無い場合のみそちらへ退く。
+      imageUrl: p.imageUrl ?? r?.imageUrl,
+      availability: detailed ? r?.availability : undefined,
+      reason:
+        p.matchRank === 2
+          ? '画像が完全に一致したページ'
+          : p.matchRank === 1
+            ? '画像の一部が一致したページ'
+            : '画像から見つかったページ',
+      // 「確認済み」は商品ページとして中身まで取れたものだけ。
+      // 見た目一致だけの候補は未確認として出す（バッジで区別する）。
+      verified: detailed,
+    };
+  });
 }
 
 function resolveVisionApiKey(): string {
@@ -165,29 +207,6 @@ export interface VisionSearchResult {
 
 export async function runVisionProductSearch(params: {
   imageDataUrl?: string;
-  /**
-   * 参考画像への署名付きトークン（260728 クライアント要望「画像を選ぶと該当商品を追加できるように」）。
-   * imageDataUrl が無いときだけ使う。第三者ドメインの画像はブラウザから本文を読めない（CORS）ため、
-   * サーバが safeFetchImage（ページ取得と同じ SSRF ゲート）で取得して data URL 化する。
-   *
-   * 【重要】pageToken と同じ理由で、ここも生の URL を受け取ってはいけない（敵対レビュー H1）。
-   * safeFetchImage の SSRF ゲートは「内部アドレスへ行かせない」ためのもので、
-   * 「第三者サイトへ我々の名前で大量に取りに行かせない」ことは防げない。約100バイトの
-   * リクエストで最大4MBの外向き通信を起こせるため、署名でURLの出所をサーバ側に固定する。
-   */
-  imageToken?: string;
-  /**
-   * 選ばれた画像が載っているページへの署名付きトークン（260728）。
-   * Vision の pagesWithMatchingImages は「画像 → 掲載ページ」の対応が確定しているので、
-   * その画像を選んだのなら、逆画像検索をやり直すまでもなくそのページを読めばよい。
-   * Vision も Gemini も呼ばない＝速く、安く、モデルの推測が混ざらない。
-   *
-   * 【重要】URL そのものではなくトークンを受け取ること（敵対レビュー H1）。
-   * 生の URL を受けると「任意の公開URLを我々のサーバに取りに行かせる口」になり、
-   * リクエスト・ロンダリングと増幅DoS の踏み台になる。署名を作れるのはサーバだけなので、
-   * トークン経由なら取得先は常に「Vision が実際に見つけたページ」に限定される。
-   */
-  pageToken?: string;
   prompt: string;
   geminiKey: string;
 }): Promise<VisionSearchResult> {
@@ -199,58 +218,7 @@ export async function runVisionProductSearch(params: {
     return { status: 400, body: { success: false, error: 'Gemini APIキーが見つかりません。' } };
   }
 
-  // 掲載ページが分かっているなら、まずそのページを直接読む（Vision を消費しない）。
-  // ※キー検査より後に置くこと。前に置くと、機能が無効な構成でも「任意のURLを取得させる口」だけが
-  //   生き残り、実質 URL 取得プロキシになる。ここが機能する条件は他経路と揃える。
-  // ※取得先はトークンから復元する。改ざん・期限切れ・署名不能はすべて null になり、
-  //   その場合は黙って下の画像経路へ落ちる（利用者にはエラーを見せない）。
-  // 取得先はすべてトークンから復元する。クライアントが申告した URL は一切使わない。
-  const pageUrl = params.pageToken ? await verifyUrlToken(params.pageToken) : null;
-  const clickedImageUrl = params.imageToken ? await verifyUrlToken(params.imageToken) : null;
-  if (pageUrl) {
-    const direct = await resolveProductsFromUrls([pageUrl]);
-    // 【敵対レビュー H2】ページが読めただけでは「クリックした画像の商品」とは限らない。
-    // 逆画像検索は、その画像を単に埋め込んでいるだけのページ（特集記事・一覧・関連商品枠）も返す。
-    // そういうページの schema.org/Product はたいてい「そのページの主役商品」＝別物なので、
-    // 素通しすると『商品ページ確認済み』の緑バッジ付きで無関係な商品と価格が見積に入る。
-    // ページ側の商品画像がクリックされた画像と一致したときだけ確定扱いにし、
-    // 一致しなければ下の画像経路（実際に画像で照合する）へ落とす。
-    if (direct.length > 0 && direct[0].name && sameImage(clickedImageUrl ?? undefined, direct[0].imageUrl)) {
-      return {
-        status: 200,
-        body: {
-          success: true,
-          reply:
-            '選択された画像の掲載ページから、商品情報を取得しました。内容をご確認のうえ「見積に追加」してください。',
-          recommendations: mergeResolvedIntoRecommendations([], direct, {
-            resolvedReason: '選択した参考画像の掲載ページから取得',
-          }),
-          resolvedProducts: direct.slice(0, 6),
-          // AI を1回も呼んでいないことを呼び出し側へ伝える（利用量メーターに計上させない・L1）。
-          source: 'page-direct',
-        },
-      };
-    }
-    // ページから商品情報が取れなかった／別商品のページだった。下の画像経路へ落ちる。
-  }
-
-  // URL 指定なら、まずサーバ側で画像を取得して data URL に揃える。以降の処理は完全に共通。
-  let imageDataUrl = params.imageDataUrl || '';
-  if (!imageDataUrl && clickedImageUrl) {
-    const fetched = await safeFetchImage(clickedImageUrl);
-    if (!fetched.ok) {
-      // 取得できない参考画像は珍しくない（相手サイトが hotlink を拒否する等）。原因は出さず操作案内だけ返す。
-      console.warn('[visionProductSearch] image fetch failed', fetched.reason);
-      return {
-        status: 200,
-        body: {
-          success: false,
-          error: 'この画像は取得できませんでした（配信元が外部からの読み込みを許可していません）。別の画像をお試しください。',
-        },
-      };
-    }
-    imageDataUrl = `data:${fetched.mimeType};base64,${fetched.base64}`;
-  }
+  const imageDataUrl = params.imageDataUrl || '';
 
   const { base64, mimeType } = parseDataUrl(imageDataUrl);
   const prompt = (params.prompt || '').trim().slice(0, 500);
@@ -273,54 +241,49 @@ export async function runVisionProductSearch(params: {
     }
     const findings = parseVisionWebDetection(await visionRes.json());
 
-    // 【260728 要望②】Vision が返すのは「一致画像のあるページのタイトルとURL」だけで、本文は含まれない。
-    // 従来はそれをそのまま Gemini に渡していたため、価格・品番・メーカーはタイトルからの推測になっていた。
-    // ここで実際にページを開き、構造化データ（schema.org/Product）から確定値を取り出して渡す。
-    // 開けなかったURLは提示対象から外れる＝リンク切れを出さない（到達確認を兼ねる・要望④）。
-    // 候補URLを2系統から集める（260728 クライアント承認）。
-    //  (a) Vision の逆画像検索が見つけたページ（画像が一致する＝同じ商品である確度が高い）
-    //  (b) Vision の推定名・キーワードで Custom Search した「実際に売っているページ」
-    // (a) だけだと Pinterest やまとめサイト（構造化データ無し＝価格も品番も取れない）に偏るため、
-    // (b) で商品ページの候補を補う。未設定なら (b) は空になり、従来どおり (a) だけで動く。
-    const searchQueries = [
-      buildProductQuery([findings.bestGuess[0], findings.entities[0]]),
-      buildProductQuery([findings.entities[0], findings.entities[1], '通販']),
-    ].filter(Boolean);
-    const searchHits = await findProductPageCandidates(searchQueries);
+    /*
+     * 【260729 クライアント要望「見た目一致を絶対優先」】ここが本機能の設計の要。
+     *
+     * 従来: Vision の一致ページを「URLの供給源」としてしか使わず、
+     *       ①キーワード検索（Custom Search）で候補を水増しし、
+     *       ②商品情報を取り出せたページだけに絞り込み、
+     *       ③最終的な候補一覧は Gemini に書かせていた。
+     *   だが Gemini は候補ページの見た目を一切見ていない（渡しているのはタイトルとURLの文字列だけ）。
+     *   つまり「見た目が似た商品を選ぶ」判断を、見た目を見られない相手にさせていた。
+     *   結果、画像一致で見つけた本命ほど②で落ち、モデルが名前から推測した候補が先頭に並んでいた。
+     *
+     * 変更後: 候補一覧はサーバが Vision の一致順から決定論的に組み立てる。
+     *   Gemini の役割は本文（reply）を書くことだけに限定し、候補の取捨選択はさせない。
+     *   キーワード検索による水増しは行わない（要望）。
+     */
+    const candidatePages = pickVisualCandidates(findings.pages, MAX_CANDIDATES);
 
-    // 値の確定は従来どおり productResolver が行う（実際にページを開いて構造化データを読む＋到達確認）。
-    // 検索はあくまで候補URLを増やすだけなので、未検証の情報が利用者へ出ることはない。
-    const resolved = await resolveProductsFromUrls([
-      ...findings.pages.map((p) => p.url),
-      ...searchHits.map((h) => h.url),
-    ]);
+    // 詳細（価格・品番・メーカー）は取れれば付ける、取れなくても候補は落とさない。
+    // 到達確認だけは通すのでリンク切れは出ない（要望「リンクさえあれば詳細は自分で入れる」）。
+    const resolved = await resolveProductsFromUrls(
+      candidatePages.map((p) => p.url),
+      { keepUnresolved: true, limit: Math.max(6, MAX_CANDIDATES) },
+    );
 
-    const { reply, recommendations, usage } = await generateVisionProductReply(params.geminiKey, {
+    // Vision の一致順を保ったまま、取れた詳細を重ねて商品カードにする。
+    const recommendations = buildCandidateRecommendations(candidatePages, resolved);
+
+    const { reply, usage } = await generateVisionProductReply(params.geminiKey, {
       imageDataUrl,
       prompt,
       visionFindingsText: [buildVisionFindingsText(findings), buildResolvedProductsText(resolved)].join('\n\n'),
       model: resolveAgentModel(),
     });
 
-    // 取得済みの確定情報をクライアントへも返す（サムネイル表示・個別URL・見積へのそのまま反映に使う）。
-    // モデルの出力より、こちらの実測値を優先させるため recommendations とは別に渡す。
     return {
       status: 200,
       body: {
         success: true,
         reply,
-        recommendations: mergeResolvedIntoRecommendations(recommendations, resolved, {
-          resolvedReason: '画像と一致した商品ページから取得',
-        }),
+        recommendations,
         usage,
         model: resolveAgentModel(),
-        visionPages: await withPageTokens(findings.pages.slice(0, 5)),
-        resolvedProducts: resolved.slice(0, 6),
-        // 参考画像（260728 クライアント要望「商品画像が見たい」）。
-        // 商品ページとして確定できなかった場合でも、逆画像検索が見つけた「似ている画像」と
-        // 「一致したページ」は視覚的な手掛かりになる。Vision の応答に既に含まれており追加課金は無い。
-        // ただし確定情報ではないので、UI 側では商品カードと明確に区別して出すこと。
-        similarImages: await withImageTokens(findings.similarImageUrls.slice(0, 8)),
+        resolvedProducts: resolved.slice(0, MAX_CANDIDATES),
       },
     };
   } catch (e: any) {

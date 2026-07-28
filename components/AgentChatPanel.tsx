@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Copy, FileText, Loader2, MessageCircle, Paperclip, Search, Send, X, Plus } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
@@ -36,64 +36,10 @@ const AGENT_PLACEHOLDER =
   '例2）最近のトレンドを取り入れた、美容室のアクセントカラーを教えて\n' +
   '例3）この間取りで、より広く見せるための照明の配置アイデアは？';
 
-/**
- * 逆画像検索が見つけた参考画像（260728 クライアント要望「画像を選んで該当商品を追加」）。
- * pageToken があるものは「その画像がどのページに載っているか」まで確定しているので、
- * クリック時にそのページを直接読んで商品情報を確定できる（速く・安く・推測が混ざらない）。
- * pageToken が無いものは視覚的に似ているだけなので、その画像で商品特定をやり直す。
- *
- * URL ではなくトークンを持つ理由: 生の URL を送り返す形にすると、サーバが
- * 「クライアントの指定した任意の URL を取りに行く」口になる（敵対レビュー H1）。
- * 署名を作れるのはサーバだけなので、トークンなら取得先を Vision の結果に限定できる。
- */
-type VisionRefImage = {
-  /** 表示専用。サーバへ送っても無視される（取得先はトークンから復元される）。 */
-  url: string;
-  /** この画像自体を取得させるための署名トークン。無ければクリックできない。 */
-  token?: string;
-  /** この画像の掲載ページを読ませるための署名トークン。あれば直行経路が使える。 */
-  pageToken?: string;
-};
-
-/** 表示用の短いホスト名（どの画像を押したのか履歴から辿れるようにする・260728 L4）。 */
-function hostLabel(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./i, '');
-  } catch {
-    return '参考画像';
-  }
-}
-
-/** http(s) のみ通す。javascript: 等が href / img src に載るのを入口で塞ぐ（260728 敵対レビュー L3）。 */
-const isHttpUrl = (v: unknown): v is string => typeof v === 'string' && /^https?:\/\//i.test(v);
-
-/** 過去の履歴（旧形式＝画像URLの文字列配列）も読めるようにする。 */
-function parseVisionRefImages(raw: unknown): VisionRefImage[] {
-  if (!Array.isArray(raw)) return [];
-  return raw
-    .map((v): VisionRefImage | null => {
-      // 旧形式（URLの文字列だけ）は表示のみ。署名トークンが無いのでクリックはできない
-      // ＝サーバが提示していないURLを取得させられない、という不変条件を履歴側でも守る。
-      if (isHttpUrl(v)) return { url: v };
-      if (v && typeof v === 'object' && isHttpUrl((v as { url?: unknown }).url)) {
-        const o = v as { url: string; token?: unknown; pageToken?: unknown };
-        return {
-          url: o.url,
-          token: typeof o.token === 'string' ? o.token : undefined,
-          pageToken: typeof o.pageToken === 'string' ? o.pageToken : undefined,
-        };
-      }
-      return null;
-    })
-    .filter((v): v is VisionRefImage => !!v);
-}
-
 /** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）、ユーザー発話には送信した添付ファイル名が付く。 */
 type ChatMessage = AgentChatMessage & {
   recommendations?: AgentRecommendation[];
   attachmentNames?: string[];
-  /** 商品として確定できなかった場合の視覚的手掛かり（逆画像検索の類似画像・一致ページ）。 */
-  visionRefs?: { images: VisionRefImage[]; pages: { title: string; url: string }[] };
 };
 
 /** エージェント相談に添付するファイル（画像・PDF・資料・音声・動画・コード等・複数対応 260702）。 */
@@ -134,17 +80,6 @@ function loadStoredChat(projectId: string | null | undefined): ChatMessage[] {
         attachmentNames: Array.isArray(m.attachmentNames)
           ? (m.attachmentNames as unknown[]).filter((n): n is string => typeof n === 'string')
           : undefined,
-        visionRefs:
-          m.visionRefs && typeof m.visionRefs === 'object'
-            ? {
-                images: parseVisionRefImages((m.visionRefs as { images?: unknown }).images),
-                pages: Array.isArray((m.visionRefs as { pages?: unknown }).pages)
-                  ? ((m.visionRefs as { pages: unknown[] }).pages.filter(
-                      (p) => !!p && isHttpUrl((p as { url?: unknown }).url),
-                    ) as { title: string; url: string }[])
-                  : [],
-              }
-            : undefined,
       }));
   } catch {
     return [];
@@ -165,6 +100,8 @@ export function AgentChatPanel({
   projectSummary,
   onAddEstimateItem,
   inline = false,
+  onRequestPreviewCrop,
+  onVisionSearchReady,
 }: {
   imageDataUrl?: string | null;
   projectId?: string | null;
@@ -178,6 +115,17 @@ export function AgentChatPanel({
   onAddEstimateItem?: (rec: AgentRecommendation) => void;
   /** 右レール内にタブとしてインライン表示する（260624）。false=従来のフローティング。 */
   inline?: boolean;
+  /**
+   * 「画像から商品を特定」が押されたときに、プレビュー画面側でクロップ枠を出してもらう（260729）。
+   * 未指定なら従来のポップアップにフォールバックする。
+   */
+  onRequestPreviewCrop?: () => void;
+  /**
+   * 切り出した画像で検索を実行する関数を、プレビュー画面側へ渡す（260729）。
+   * 検索の実処理・会話履歴・送信中状態はこのパネルが持っているため、
+   * キャンバス上のボタンから直接は呼べない。ここで受け渡す。
+   */
+  onVisionSearchReady?: (run: ((croppedDataUrl: string) => void) | null, busy: boolean) => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => loadStoredChat(projectId));
   const [input, setInput] = useState('');
@@ -198,7 +146,13 @@ export function AgentChatPanel({
   const skipSave = useRef(false);
 
   // プロジェクトが変わったら該当履歴を読み込み直す。
+  // 初回マウント時は useState の初期化子が既に同じ内容を読んでいるので何もしない。
+  // ここで読み直すと中身が同じ配列を作り直すだけで、下のスクロール effect が
+  // もう一度走ってアニメーションが二重にかかる（260729 クライアント指摘）。
+  const loadedProjectId = useRef(projectId);
   useEffect(() => {
+    if (loadedProjectId.current === projectId) return;
+    loadedProjectId.current = projectId;
     skipSave.current = true;
     setMessages(loadStoredChat(projectId));
     setAddedKeys(new Set());
@@ -219,8 +173,21 @@ export function AgentChatPanel({
     }
   }, [messages, projectId]);
 
-  useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  /**
+   * 最新メッセージへスクロール（260729 クライアント要望）。
+   *
+   * タブを開くたびにパネルは作り直される（表示/非表示ではなくマウントし直し）ので、
+   * 履歴があると毎回「上から下へ流れる」アニメーションが見えていた。
+   * 開いた瞬間は既に最下部にいる状態にしたいので、初回だけ即座に飛ばし、
+   * 以降（新しい発言が増えたとき）だけ滑らかに追従させる。
+   * useLayoutEffect にするのは、描画前に位置を決めて「上から始まる一瞬」を出さないため。
+   */
+  const didInitialScroll = useRef(false);
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: didInitialScroll.current ? 'smooth' : 'auto' });
+    didInitialScroll.current = true;
   }, [messages, open, sending]);
 
   /**
@@ -433,10 +400,6 @@ export function AgentChatPanel({
    * （従来は自動判定で黙って通常チャットに落ちており、なぜ効かないのか分からなかった）。
    */
   const [regionPickerSrc, setRegionPickerSrc] = useState<string | null>(null);
-  // 読み込めなかった参考画像のURL（260728 敵対レビュー L5）。
-  // hotlink 拒否の画像は珍しくない。DOM を直接書き換えて隠すと React の管理外になり、
-  // 「全部消えたのに『画像をクリックすると…』の案内だけ残る」ことになるため状態で持つ。
-  const [brokenRefImages, setBrokenRefImages] = useState<Set<string>>(new Set());
   const [visionNotice, setVisionNotice] = useState<string | null>(null);
   // Google 検索グラウンディングが返す検索候補の表示用HTML（規約上の表示義務・260728）。
   const [searchSuggestionHtml, setSearchSuggestionHtml] = useState<string | null>(null);
@@ -448,6 +411,13 @@ export function AgentChatPanel({
     renderSanitizedHtml(el, searchSuggestionHtml ?? '');
   }, [searchSuggestionHtml]);
 
+  /**
+   * 「画像から商品を特定」ボタン。
+   *
+   * 260729 クライアント要望で、生成画像はプレビュー画面上で直接クロップする方式に変わった
+   * （onRequestPreviewCrop がその依頼口）。ポップアップは「チャットに添付した画像」を
+   * 切り抜くときだけ残す。添付画像はプレビューには映っていないので、切り抜く場所が他に無いため。
+   */
   const openRegionPicker = async () => {
     setVisionNotice(null);
     const attachedImage = attachedFiles.find(isImageFile);
@@ -455,6 +425,11 @@ export function AgentChatPanel({
       setRegionPickerSrc(attachedImage.dataUrl);
       return;
     }
+    if (onRequestPreviewCrop) {
+      onRequestPreviewCrop();
+      return;
+    }
+    // プレビュー上のクロップが使えない配置（フローティング表示など）では従来どおりポップアップ。
     if (imageDataUrl) {
       try {
         setRegionPickerSrc(await ensureDataUrl(imageDataUrl));
@@ -467,15 +442,11 @@ export function AgentChatPanel({
   };
 
   /**
-   * 商品特定（Vision）の実行本体。入力は「切り出した画像そのもの」か「参考画像のURL」のどちらか。
-   * URL 経路は 260728 クライアント要望「参考画像を選ぶと、その商品を追加できるように」。
-   * 参考画像は第三者ドメインなのでブラウザからは本文を読めない（CORS）ため、URL のままサーバへ渡し、
-   * サーバが安全に取得して同じ経路（Vision → ページ取得 → Gemini）に流す。
+   * 商品特定（Vision）の実行本体。入力はプレビュー（または添付画像）から切り出した画像のみ。
+   * 候補の選定はサーバ側が Vision の画像一致順で行う（260729 クライアント要望「見た目一致を最優先」）。
    */
   const runVisionSearch = async (
-    source:
-      | { imageDataUrl: string; imageToken?: undefined; pageToken?: undefined }
-      | { imageToken: string; pageToken?: string; imageDataUrl?: undefined },
+    source: { imageDataUrl: string },
     opts: { userLine?: string; keepAttachments?: boolean } = {},
   ) => {
     setRegionPickerSrc(null);
@@ -498,69 +469,20 @@ export function AgentChatPanel({
       const data = await postAgent({
         mode: 'vision-product',
         imageDataUrl: source.imageDataUrl,
-        imageToken: source.imageToken,
-        pageToken: source.pageToken,
         prompt: userLine,
       });
       if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');
       if (!data.success) throw new Error(data.error || '商品の特定に失敗しました');
-      // 掲載ページ直読み（source='page-direct'）は Vision も Gemini も呼んでいないので計上しない。
-      // 計上すると運営ダッシュボードの「AI呼び出し回数」だけが水増しされる（260728 敵対レビュー L1）。
-      if (data.source !== 'page-direct') {
-        void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
-      }
-      // 商品として確定できなかったときでも視覚的な手掛かりを残す（260728 クライアント要望）。
-      // 逆画像検索の「似ている画像」と「一致したページ」は Vision の応答に含まれており追加課金は無い。
-      type ApiVisionPage = {
-        title?: unknown;
-        url: string;
-        imageUrl?: unknown;
-        pageToken?: unknown;
-        imageToken?: unknown;
-      };
-      const refPages = Array.isArray(data.visionPages)
-        ? (data.visionPages as unknown[])
-            .filter((p): p is ApiVisionPage => !!p && isHttpUrl((p as any).url))
-            .map((p) => ({
-              title: String(p.title ?? p.url),
-              url: p.url,
-              imageUrl: isHttpUrl(p.imageUrl) ? p.imageUrl : undefined,
-              pageToken: typeof p.pageToken === 'string' ? p.pageToken : undefined,
-              imageToken: typeof p.imageToken === 'string' ? p.imageToken : undefined,
-            }))
-        : [];
-      // 掲載ページが分かっている画像を先に並べる（クリック1回でそのページから商品情報を確定できるため）。
-      // 続けて「視覚的に似ているだけ」の画像を並べる（こちらは選ぶと商品特定をやり直す）。
-      const pageImages: VisionRefImage[] = refPages
-        .filter((p): p is typeof p & { imageUrl: string } => !!p.imageUrl)
-        .map((p) => ({ url: p.imageUrl, token: p.imageToken, pageToken: p.pageToken }));
-      // 類似画像はサーバから {url, token} の組で届く（旧形式の文字列も一応受ける）。
-      const similar: VisionRefImage[] = (Array.isArray(data.similarImages) ? (data.similarImages as unknown[]) : [])
-        .map((v): VisionRefImage | null => {
-          if (isHttpUrl(v)) return { url: v };
-          if (v && typeof v === 'object' && isHttpUrl((v as { url?: unknown }).url)) {
-            const o = v as { url: string; token?: unknown };
-            return { url: o.url, token: typeof o.token === 'string' ? o.token : undefined };
-          }
-          return null;
-        })
-        .filter((v): v is VisionRefImage => !!v);
-      // 同じ画像URLは1つにまとめる（260728 敵対レビュー M2）。Vision は同一のCDN画像を
-      // 複数のページ項目で返すことがあり、放置すると「見た目が全く同じボタンなのに、
-      // 押すと別々の商品が出る」状態になる。先頭（＝掲載ページが分かっている方）を残す。
-      const byUrl = new Map<string, VisionRefImage>();
-      for (const r of [...pageImages, ...similar]) if (!byUrl.has(r.url)) byUrl.set(r.url, r);
-      const refImages = [...byUrl.values()].slice(0, 12);
+      void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
+      // 候補はサーバが Vision の画像一致順で確定して返す（260729 クライアント要望）。
+      // 以前あった「参考情報」（テキストリンクの一覧＋クリックで再検索する画像）は廃止した。
+      // 見た目が一致したものは全て商品カードとして出るので、別枠を持つ理由が無くなったため。
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           content: typeof data.reply === 'string' ? data.reply : '',
           recommendations: Array.isArray(data.recommendations) ? data.recommendations : undefined,
-          visionRefs:
-            refImages.length || refPages.length
-              ? { images: refImages, pages: refPages.map((p) => ({ title: p.title, url: p.url })) }
-              : undefined,
         },
       ]);
     } catch (e) {
@@ -569,6 +491,18 @@ export function AgentChatPanel({
       setSending(false);
     }
   };
+
+  // プレビュー画面（AiEditWorkspace）のクロップ枠から検索を起動できるようにする（260729）。
+  // 実処理・履歴・送信中状態はこのパネルが持っているので、関数ごと預ける形にする。
+  // 依存に runVisionSearch を入れないのは毎レンダで参照が変わり無限ループになるため、
+  // 送信中フラグの変化だけを伝える（呼ばれる中身は常に最新のクロージャ）。
+  const runVisionSearchRef = useRef(runVisionSearch);
+  runVisionSearchRef.current = runVisionSearch;
+  useEffect(() => {
+    if (!onVisionSearchReady) return;
+    onVisionSearchReady((cropped: string) => void runVisionSearchRef.current({ imageDataUrl: cropped }), sending);
+    return () => onVisionSearchReady(null, false);
+  }, [onVisionSearchReady, sending]);
 
   const removeFile = (id: string) => setAttachedFiles((prev) => prev.filter((f) => f.id !== id));
 
@@ -650,19 +584,27 @@ export function AgentChatPanel({
           className={`w-full resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[12px] leading-relaxed text-white outline-none focus:border-emerald-500 ${isInitial ? 'min-h-[140px] flex-1' : ''}`}
         />
         {attachmentsPanel}
-        <div className="flex flex-wrap items-center gap-2">
-          <button
-            type="button"
-            onClick={() => attachInputRef.current?.click()}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
-          >
-            <Paperclip className="h-4 w-4" />
-            ファイルを添付
-          </button>
-          {/* D&D が使えることを操作前に伝える（260728・エリア編集と操作を揃えた旨の明示）。 */}
-          {attachedFiles.length === 0 && readingCount === 0 && (
-            <span className="text-[10px] text-neutral-500">またはドラッグ&amp;ドロップ</span>
-          )}
+        {/*
+          左に「ファイルを添付」＋その真下にドラッグ&ドロップの案内、右に「画像から商品を特定」
+          （260729 クライアント要望）。以前は3つを横一列に並べていたため、レール幅では
+          中途半端に折り返して並びが乱れていた。左右2列にして折り返しに依存しない形にする。
+          items-start にするのは、左が2行になっても右のボタンが上端で揃うようにするため。
+        */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 flex-col items-start gap-1">
+            <button
+              type="button"
+              onClick={() => attachInputRef.current?.click()}
+              className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-black/40 px-3 py-1.5 text-[11px] font-bold text-neutral-200 transition hover:bg-white/10 hover:text-white"
+            >
+              <Paperclip className="h-4 w-4" />
+              ファイルを添付
+            </button>
+            {/* D&D が使えることを操作前に伝える（260728・エリア編集と操作を揃えた旨の明示）。 */}
+            {attachedFiles.length === 0 && readingCount === 0 && (
+              <span className="pl-0.5 text-[10px] text-neutral-500">またはドラッグ&amp;ドロップ</span>
+            )}
+          </div>
           {/*
             「画像から商品を特定」は独立した専用ボタンにする（260728 クライアント要望①）。
             従来はトグル＋送信時の自動判定だったが、入力文の語で経路が変わるため意図と噛み合わなかった。
@@ -822,21 +764,25 @@ export function AgentChatPanel({
                     ]
                       .filter(Boolean)
                       .join(' ・ ');
-                    // 260728 要望③: 提示するURLは「実際にページを開いて到達を確認できた個別商品URL」だけ。
-                    // サーバ側で検索が返した実URLのみを採用し、開けなかったものは productUrl を落としてある
-                    // （＝ここに URL があれば実在が確認済み）。確認できないものは従来どおり検索リンクへ退避する。
-                    const searchQuery = [rec.brand, rec.name, rec.modelNumber].filter(Boolean).join(' ').trim();
-                    const searchUrl = `https://www.google.com/search?q=${encodeURIComponent(searchQuery || (rec.name ?? ''))}`;
+                    // 提示するURLは Vision が画像一致で見つけたページ（サーバ側で到達確認済み）だけ。
+                    // 260729 クライアント要望「退避処理の廃止」により、URLが無いときに
+                    // Google の文字検索へ逃がすフォールバックは廃止した（見た目の一致が薄まるため）。
                     const hasDirectUrl = typeof rec.productUrl === 'string' && /^https?:\/\//i.test(rec.productUrl);
                     const outOfStock = isOutOfStock(rec.availability);
-                    // 見積へ渡す値。個別URLがあればそれを、無ければ確実に開ける検索URLを入れる（404を保存しない）。
-                    const estimateItem = { ...rec, productUrl: hasDirectUrl ? rec.productUrl : searchUrl };
+                    // 見積へはカードの内容をそのまま渡す。価格・品番が空でも追加できる
+                    // （要望「リンクさえあれば詳細はユーザー自身で入力できる」）。
+                    const estimateItem = rec;
                     return (
                       <div key={key} className="rounded-lg border border-emerald-500/20 bg-emerald-500/[0.06] p-2">
-                        <div className="flex items-start justify-between gap-2">
-                          {/* サムネイル（260728 要望③）。他社サイトの画像を直接参照するため、
-                              読めなかったら要素ごと隠して代替表示に切り替える（壊れた画像アイコンを出さない）。 */}
-                          {rec.imageUrl && (
+                        {/*
+                          サムネイルはカード幅いっぱいの大きな1枚にする（260729 クライアント要望）。
+                          この機能の判断基準は「元画像と見た目が一致しているか」なので、
+                          利用者が最初に見るべきものは商品名ではなく写真。56px角では判断できないという指摘。
+                          object-contain にするのは、切り抜くと形（脚の形状・アーム有無）が分からなくなるため。
+                          背景は明るめにして、白背景で切り抜かれた商品写真が沈まないようにする。
+                        */}
+                        {rec.imageUrl && (
+                          <>
                             <img
                               src={rec.imageUrl}
                               alt=""
@@ -846,16 +792,16 @@ export function AgentChatPanel({
                                 e.currentTarget.style.display = 'none';
                                 e.currentTarget.nextElementSibling?.classList.remove('hidden');
                               }}
-                              className="h-14 w-14 shrink-0 rounded border border-white/10 bg-black/30 object-cover"
+                              className="mb-2 h-40 w-full rounded border border-white/10 bg-[var(--thumb-bg)] object-contain"
                             />
-                          )}
-                          {rec.imageUrl && (
-                            <div className="hidden h-14 w-14 shrink-0 items-center justify-center rounded border border-white/10 bg-black/30 text-[9px] text-neutral-500">
-                              画像なし
+                            <div className="mb-2 hidden h-40 w-full items-center justify-center rounded border border-white/10 bg-black/30 text-[10px] text-neutral-500">
+                              画像を読み込めませんでした
                             </div>
-                          )}
+                          </>
+                        )}
+                        <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0 flex-1">
-                            <div className="truncate text-[12px] font-bold text-neutral-100">{rec.name}</div>
+                            <div className="line-clamp-2 text-[12px] font-bold text-neutral-100">{rec.name}</div>
                             {meta && <div className="mt-0.5 text-[10px] text-neutral-400">{meta}</div>}
                             <div className="mt-0.5 flex flex-wrap items-center gap-1">
                               {/* 実測（ページの構造化データ由来）か、モデルの推測かを明示する。 */}
@@ -877,15 +823,17 @@ export function AgentChatPanel({
                             {rec.reason && (
                               <div className="mt-0.5 text-[10px] leading-relaxed text-neutral-500">{rec.reason}</div>
                             )}
-                            <a
-                              href={hasDirectUrl ? rec.productUrl : searchUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
-                              title={hasDirectUrl ? '商品ページを開きます（到達確認済み）' : 'メーカー名・商品名・品番で検索します'}
-                            >
-                              {hasDirectUrl ? '商品ページを開く ↗' : '商品を検索 ↗'}
-                            </a>
+                            {hasDirectUrl && (
+                              <a
+                                href={rec.productUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="mt-0.5 inline-block text-[10px] text-emerald-300 hover:underline"
+                                title="このページを開きます（到達確認済み）"
+                              >
+                                ページを開く ↗
+                              </a>
+                            )}
                           </div>
                           {onAddEstimateItem && (
                             <button
@@ -916,107 +864,6 @@ export function AgentChatPanel({
                 </div>
               )}
 
-              {/* 参考画像・参考ページ（260728 クライアント要望「商品画像が見たい」）。
-                  商品ページとして確定できなかった場合でも、逆画像検索が見つけた視覚的な手掛かりを出す。
-                  確定情報ではないので、上の商品カードとは枠と文言で明確に区別する。 */}
-              {/* 読み込めなかった画像は押しても取得できないので数に入れない。
-                  見せるものが1つも残らないときは、枠と見出しごと出さない
-                  （「参考情報が見つかった」と書いてある空箱を残さない・260728 敵対レビュー）。 */}
-              {(() => {
-                if (m.role !== 'assistant' || !m.visionRefs) return null;
-                const usable = m.visionRefs.images.filter((r) => !brokenRefImages.has(r.url));
-                if (usable.length === 0 && m.visionRefs.pages.length === 0) return null;
-                return (
-                <div className="mt-1.5 w-full max-w-[85%] rounded-lg border border-white/10 bg-white/[0.03] p-2">
-                  <div className="mb-1.5 text-[10px] font-bold text-neutral-400">
-                    画像から見つかった参考情報（商品ページとしては未確認）
-                  </div>
-                  {usable.length > 0 && (
-                      <>
-                        {/* 参考画像はクリックできる（260728 クライアント要望）。
-                            押すと「その画像」で商品特定をやり直し、商品名・メーカー・価格・品番付きの
-                            商品カード（＝そのまま見積へ追加できる形）に変換する。
-                            室内写真より、通販サイトの商品写真の方が逆画像検索の精度が高いので、
-                            利用者にとっては「候補から選んで確定させる」操作になる。
-                            署名トークンが無い画像（旧履歴など）は表示のみでクリックできない。 */}
-                        {usable.some((r) => r.token || r.pageToken) && (
-                          <p className="mb-1 text-[10px] text-neutral-500">
-                            画像をクリックすると、その商品を特定して見積に追加できる形にします。
-                          </p>
-                        )}
-                        <div className="mb-1.5 flex flex-wrap gap-1.5">
-                          {usable.map((ref, ii) => {
-                            const clickable = !!(ref.token || ref.pageToken);
-                            const onBroken = () =>
-                              setBrokenRefImages((prev) => (prev.has(ref.url) ? prev : new Set(prev).add(ref.url)));
-                            return (
-                            <button
-                              key={`${ii}-${ref.url.slice(0, 24)}`}
-                              type="button"
-                              disabled={sending || !clickable}
-                              onClick={() =>
-                                void runVisionSearch(
-                                  { imageToken: ref.token ?? '', pageToken: ref.pageToken },
-                                  {
-                                    // どの画像を押した結果なのか履歴から辿れるようにする（260728 敵対レビュー L4）。
-                                    userLine: `参考画像（${hostLabel(ref.url)}）の商品を特定してください。`,
-                                    keepAttachments: true,
-                                  },
-                                )
-                              }
-                              title={
-                                !clickable
-                                  ? '参考画像（この画像からの再検索は利用できません）'
-                                  : ref.pageToken
-                                    ? 'この画像の掲載ページから商品情報を取得する'
-                                    : 'この画像で商品を特定し直す'
-                              }
-                              className={`focus-ring group relative h-14 w-14 shrink-0 overflow-hidden rounded border bg-black/30 transition disabled:opacity-40 ${
-                                clickable ? 'hover:border-emerald-400' : 'cursor-default'
-                              } ${
-                                // 掲載ページが分かっているものは、確度が高いことが分かるよう枠を変える
-                                ref.pageToken ? 'border-emerald-500/50' : 'border-white/10'
-                              }`}
-                            >
-                              <img
-                                src={ref.url}
-                                alt="参考画像"
-                                loading="lazy"
-                                referrerPolicy="no-referrer"
-                                onError={onBroken}
-                                className="h-full w-full object-cover"
-                              />
-                              {clickable && (
-                                <span className="pointer-events-none absolute inset-0 hidden items-center justify-center bg-black/60 group-hover:flex">
-                                  <Search className="h-4 w-4 text-emerald-300" />
-                                </span>
-                              )}
-                            </button>
-                            );
-                          })}
-                        </div>
-                      </>
-                  )}
-                  {m.visionRefs.pages.length > 0 && (
-                    <ul className="space-y-0.5">
-                      {m.visionRefs.pages.slice(0, 5).map((p, pi) => (
-                        <li key={`${pi}-${p.url.slice(0, 24)}`}>
-                          <a
-                            href={p.url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="block truncate text-[10px] text-neutral-300 hover:text-emerald-300 hover:underline"
-                            title={p.url}
-                          >
-                            {p.title} ↗
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                );
-              })()}
             </div>
           ))}
           {sending && (

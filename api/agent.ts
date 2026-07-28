@@ -43,12 +43,6 @@ export default async function handler(req: any, res: any) {
     if (body.mode === 'vision-product') {
       const { status, body: out } = await runVisionProductSearch({
         imageDataUrl: typeof body.imageDataUrl === 'string' ? body.imageDataUrl : '',
-        // 参考画像クリック経路（260728）。画像もページも、受け取るのは URL ではなく署名トークン。
-        // 生URLを受けると任意URLの取得代行（増幅DoS/リクエスト・ロンダリング）になる（敵対レビュー H1）。
-        imageToken:
-          typeof (body as { imageToken?: unknown }).imageToken === 'string' ? (body as { imageToken?: string }).imageToken : '',
-        pageToken:
-          typeof (body as { pageToken?: unknown }).pageToken === 'string' ? (body as { pageToken?: string }).pageToken : '',
         prompt: typeof body.prompt === 'string' ? body.prompt : '',
         geminiKey: apiKey,
       });

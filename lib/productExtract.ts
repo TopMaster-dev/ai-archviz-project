@@ -25,7 +25,10 @@ export interface ProductFacts {
   imageUrl?: string; // サムネイル（絶対URL）
   url?: string; // 商品の個別URL（canonical / og:url 優先）
   availability?: string; // 'InStock' | 'OutOfStock' 等（在庫切れ表示に使う）
-  source: 'json-ld' | 'microdata' | 'ogp'; // どこから取れたか（信頼度の判断用）
+  // どこから取れたか（信頼度の判断用）。
+  // 'unresolved' は「ページには到達できたが商品情報を取り出せなかった」＝
+  // 見た目一致だけを根拠に提示する候補（260729 クライアント要望）。
+  source: 'json-ld' | 'microdata' | 'ogp' | 'unresolved';
 }
 
 // ---------------------------------------------------------------------------

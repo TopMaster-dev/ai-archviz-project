@@ -31,7 +31,8 @@ describe('parseVisionWebDetection', () => {
     expect(f.bestGuess).toEqual(['grey fabric sofa']);
     expect(f.entities[0]).toBe('Couch'); // スコア降順
     expect(f.entities).not.toContain(''); // 空は除外
-    expect(f.pages).toEqual([{ title: '商品A', url: 'https://example.com/p1' }]); // 非URLは除外
+    // 非URLは除外。matchRank は一致画像が無いので 0。
+    expect(f.pages).toEqual([{ title: '商品A', url: 'https://example.com/p1', imageUrl: undefined, matchRank: 0 }]);
     expect(f.similarImageUrls).toEqual(['https://img/1.jpg']);
     expect(hasVisionSignal(f)).toBe(true);
   });

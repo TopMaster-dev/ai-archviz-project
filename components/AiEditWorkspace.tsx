@@ -9,6 +9,7 @@ import {
   MessageCircle,
   Paperclip,
   Plus,
+  Search,
   Sparkles,
   ThumbsDown,
   ThumbsUp,
@@ -60,6 +61,8 @@ import {
 } from '../lib/aiEditPrompt.js';
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
+import { LensCropFrame } from './LensCropFrame.js';
+import { cropToDataUrl, type NormRect } from '../utils/cropRegion.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
 import { EditorHelpButton } from './EditorHelpButton.js';
@@ -367,6 +370,40 @@ export function AiEditWorkspace({
   const [dragStart, setDragStart] = useState<{ nx: number; ny: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ nx: number; ny: number } | null>(null);
   const [imgLayout, setImgLayout] = useState({ ox: 0, oy: 0, dw: 1, dh: 1 });
+
+  /*
+   * Google レンズ風クロップ（260729 クライアント要望）。
+   * 「画像から商品を特定」を押すとポップアップではなく、このプレビュー上に枠が出る。
+   * 枠は既定で画像全体（＝これまでの「画像全体で検索」と同じ状態）から始まり、
+   * 利用者が対象へ絞り込む。実際の検索はエージェントパネル側の処理を借りて実行する。
+   */
+  const [cropActive, setCropActive] = useState(false);
+  const [cropRect, setCropRect] = useState<NormRect>({ x: 0, y: 0, w: 1, h: 1 });
+  const [cropBusy, setCropBusy] = useState(false);
+  const [cropError, setCropError] = useState<string | null>(null);
+  // エージェントパネルから預かる検索関数（パネルが履歴と送信状態を持っているため）。
+  const visionSearchRef = useRef<((cropped: string) => void) | null>(null);
+  // 切り出しが走っている最中か。ref は同期的な二重起動の抑止用（state は更新が非同期なので
+  // 素早い連打をすり抜ける）、state はボタンを実際に押せなくする表示用。両方必要。
+  const cropRunningRef = useRef(false);
+  const [cropWorking, setCropWorking] = useState(false);
+  // 切り出しの待機中に中断されたか（「やめる」・タブ移動・画像切替）。
+  const cropAbortRef = useRef(false);
+  const onVisionSearchReady = useCallback((run: ((cropped: string) => void) | null, busy: boolean) => {
+    visionSearchRef.current = run;
+    setCropBusy(busy);
+  }, []);
+  const requestPreviewCrop = useCallback(() => {
+    setCropError(null);
+    setCropRect({ x: 0, y: 0, w: 1, h: 1 }); // 毎回いったん全体に戻す（前回の枠が残っていると誤検索の元）
+    setCropActive(true);
+  }, []);
+  /** 画面座標 → 画像内の正規化座標。既存のレターボックス対応の変換をそのまま使う。 */
+  const cropToNormalized = useCallback((clientX: number, clientY: number) => {
+    const img = imgRef.current;
+    if (!img) return null;
+    return clientToNormalized(clientX, clientY, img, img.naturalWidth, img.naturalHeight);
+  }, []);
   // マスクの描画方式（260623 クライアント要望）: 多角形（クリックで頂点）/ 矩形（従来のドラッグ）。既定=多角形。
   const [maskMode, setMaskMode] = useState<'polygon' | 'rect'>('polygon');
   // 作図中の多角形の頂点（正規化）。3点以上で「確定」または始点付近クリックで閉じる。
@@ -381,6 +418,43 @@ export function AiEditWorkspace({
   const { userId: authUserId } = useAuth();
 
   const baseDisplayUrl = activeVersion?.outputImageDataUrl ?? null;
+
+  /**
+   * 枠の範囲を元解像度で切り出して検索する。
+   * 表示URLは第三者/クラウド上のURLのことがあるので、ensureDataUrl で必ず自前のデータへ落としてから切る
+   * （そのまま canvas に描くと汚染されて toDataURL が例外になる）。
+   */
+  const runCropSearch = useCallback(async () => {
+    // 二重起動を自前で止める（260729 敵対レビュー）。
+    // cropBusy はエージェントパネル側の送信状態が返ってきて初めて true になるが、それは
+    // 下の2つの await（画像の取得と切り出し・実測で1〜3秒）が終わった後。その間ボタンは
+    // 押せたままなので、反応が無いと思ってもう一度押されると検索が2回走る（Vision も Gemini も二重課金）。
+    if (!baseDisplayUrl || cropBusy || cropRunningRef.current) return;
+    if (!visionSearchRef.current) {
+      setCropError('エージェントの準備ができていません。少し待ってから再度お試しください。');
+      return;
+    }
+    cropRunningRef.current = true;
+    setCropWorking(true);
+    cropAbortRef.current = false;
+    setCropError(null);
+    try {
+      const src = await ensureDataUrl(baseDisplayUrl);
+      const cropped = await cropToDataUrl(src, cropRect);
+      // await の後にもう一度確認する。待っている間に「やめる」やタブ移動があったら検索しない
+      // （ポップアップ版で同じ穴を塞いだのと同じ理由・260728 敵対レビュー C6）。
+      // run も事前に掴んだものではなく最新を読む。パネルが外れていれば null になっている。
+      const run = visionSearchRef.current;
+      if (cropAbortRef.current || !run) return;
+      setCropActive(false);
+      run(cropped);
+    } catch {
+      if (!cropAbortRef.current) setCropError('画像を切り出せませんでした。もう一度お試しください。');
+    } finally {
+      cropRunningRef.current = false;
+      setCropWorking(false);
+    }
+  }, [baseDisplayUrl, cropBusy, cropRect]);
 
   // AI生成の良し悪し評価（good/bad）。表示状態は「版」に保存してプロジェクト永続化＝開き直しても残す（260707
   // クライアント要望）。学習用の記録は従来どおり ai_feedback_events へベストエフォート（管理表 row 209/215）。
@@ -452,6 +526,21 @@ export function AiEditWorkspace({
   useEffect(() => {
     setZoom(1);
     setPan({ x: 0, y: 0 });
+  }, [baseDisplayUrl, activeTool]);
+
+  /**
+   * クロップ枠も画像やタブが変わったら畳む（260729 敵対レビュー）。
+   *
+   * 畳まないと重大な副作用がある: 枠は既定で画像全体を覆い、画像より手前に居るので、
+   * エージェントタブでクロップを開いたままエリア編集タブへ移ると、
+   * クリックが全て枠に吸われてマスクの作図ができなくなる（エラーも出ないので原因が分からない）。
+   * さらにタブを離れるとエージェントパネルが外れて検索関数も失われるため、
+   * 残っている「この範囲で検索」を押しても永久に「準備ができていません」と言い続ける。
+   */
+  useEffect(() => {
+    setCropActive(false);
+    setCropError(null);
+    cropAbortRef.current = true; // 進行中の切り出しがあれば、その結果で検索を始めさせない
   }, [baseDisplayUrl, activeTool]);
 
   // マウスホイールでズーム（カーソル位置中心）。ページスクロールを止めるため非パッシブで直付け（260708）。
@@ -1584,6 +1673,10 @@ export function AiEditWorkspace({
   };
 
   const onMouseDownPlacement = (e: React.MouseEvent) => {
+    // 作図はエリア編集タブのときだけ（260729）。従来はタブで絞っておらず、
+    // コーディネート/エージェントのタブを開いたままプレビューをドラッグすると
+    // 見えないところでエリア編集の範囲が置かれていた。
+    if (activeTool !== 'area') return;
     if (zoomRef.current > 1) return; // 拡大中は作図しない（表示専用ズーム・260708）
     if (!activeObjectId || !imgRef.current || !baseDisplayUrl) return;
     const img = imgRef.current;
@@ -1608,6 +1701,7 @@ export function AiEditWorkspace({
   };
 
   const onMouseMovePlacement = (e: React.MouseEvent) => {
+    if (activeTool !== 'area') return; // 作図はエリア編集タブのときだけ（260729）
     if (zoomRef.current > 1) return; // 拡大中は作図しない（表示専用ズーム・260708）
     if (!imgRef.current) return;
     const img = imgRef.current;
@@ -1622,6 +1716,7 @@ export function AiEditWorkspace({
   };
 
   const onMouseUpPlacement = () => {
+    if (activeTool !== 'area') return; // 作図はエリア編集タブのときだけ（260729）
     if (zoomRef.current > 1) return; // 拡大中は作図しない（表示専用ズーム・260708）
     if (maskMode === 'polygon') return; // 多角形はクリックで頂点追加するためドラッグ確定しない。
     if (!dragStart || !dragCurrent || !activeObjectId) {
@@ -2069,7 +2164,57 @@ export function AiEditWorkspace({
                         );
                       })()}
                   </svg>
+                  {/* Google レンズ風のクロップ枠（260729 クライアント要望）。
+                      画像と同じ変形（拡大・パン）がかかる箱の中に置くことで、拡大しても枠が画像からずれない。 */}
+                  {cropActive && (
+                    <LensCropFrame
+                      rect={cropRect}
+                      onRectChange={setCropRect}
+                      imgLayout={imgLayout}
+                      toNormalized={cropToNormalized}
+                      disabled={zoom > 1}
+                    />
+                  )}
                   </div>
+                  {/*
+                    クロップ中の操作バー（260729 クライアント要望・添付イメージの配置に合わせる）。
+                    変形コンテナの「外」に置くこと。中に入れると拡大時に文字ごと巨大化して画面外へ流れる。
+                  */}
+                  {cropActive && (
+                    <div className="absolute inset-x-2 bottom-2 z-20 flex items-end justify-between gap-3 rounded-lg border border-white/15 bg-black/80 px-3 py-2 backdrop-blur-sm">
+                      <div className="min-w-0 text-[11px] leading-relaxed text-neutral-200">
+                        <p>探したい対象をドラッグで囲んでください。対象物を絞り込んでいただくことで、より正確な特定が可能となります。</p>
+                        <p className="text-neutral-400">
+                          部屋全体のままでは「風景」として照合され、個別の商品を特定できないことがあります。
+                        </p>
+                        {cropError && <p className="mt-0.5 font-bold text-amber-300">{cropError}</p>}
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={() => {
+                            cropAbortRef.current = true;
+                            setCropActive(false);
+                            setCropError(null);
+                          }}
+                          className="rounded-md border border-white/15 px-2.5 py-1.5 text-[11px] font-bold text-neutral-300 transition hover:bg-white/10"
+                        >
+                          やめる
+                        </button>
+                        <button
+                          type="button"
+                          disabled={cropBusy || cropWorking}
+                          onMouseDown={(e) => e.stopPropagation()}
+                          onClick={() => void runCropSearch()}
+                          className="flex items-center gap-1.5 rounded-md bg-emerald-600 px-3 py-1.5 text-[11px] font-bold text-white transition hover:bg-emerald-500 disabled:opacity-50"
+                        >
+                          <Search className="h-3.5 w-3.5" />
+                          {cropBusy || cropWorking ? '検索中…' : 'この範囲で検索'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {/* ズーム操作（260708）: ホイールで拡大縮小、拡大中はドラッグで移動、リセットで等倍に戻す。表示専用（拡大中は作図不可）。 */}
                   {zoom > 1 ? (
                     <div className="absolute bottom-2 right-2 z-10 flex items-center gap-1.5 rounded-md border border-white/15 bg-black/70 px-2 py-1 text-[10px] font-bold text-neutral-200 backdrop-blur-sm">
@@ -2510,6 +2655,9 @@ export function AiEditWorkspace({
                   catalog={agentCatalog}
                   projectSummary={agentProjectSummary}
                   onAddEstimateItem={onAddEstimateItem}
+                  // 「画像から商品を特定」はポップアップではなく、左のプレビュー上で範囲を指定する（260729）。
+                  onRequestPreviewCrop={baseDisplayUrl ? requestPreviewCrop : undefined}
+                  onVisionSearchReady={onVisionSearchReady}
                 />
               </div>
             )}

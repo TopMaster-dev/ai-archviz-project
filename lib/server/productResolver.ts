@@ -32,6 +32,8 @@ export interface ResolvedProduct extends ProductFacts {
   canonicalUrl?: string;
   /** 参照元ページのタイトル（構造化データに名前が無い場合の予備）。 */
   pageTitle?: string;
+  /** 呼び出し側が渡した元URL。Vision の一致画像と対応付けるために返す（260729）。 */
+  requestedUrl?: string;
 }
 
 export interface ResolveOptions {
@@ -41,6 +43,12 @@ export interface ResolveOptions {
   timeoutMs?: number;
   /** 同時取得数（既定4）。 */
   concurrency?: number;
+  /**
+   * 商品情報を取り出せなかったページも「詳細未取得」として残す（260729 クライアント要望）。
+   * 見た目一致で見つけた候補を、詳細が取れないという理由だけで落とさないため。
+   * 到達確認（HTTP 2xx）だけは通す＝リンク切れは出さない。
+   */
+  keepUnresolved?: boolean;
 }
 
 /**
@@ -88,7 +96,7 @@ export async function resolveProductsFromUrls(
   });
 
   const out: ResolvedProduct[] = [];
-  for (const { result } of fetched) {
+  for (const { url: requestedUrl, result } of fetched) {
     if (!result.ok) continue; // 到達できないURLは提示しない（リンク切れ防止の実体）
     let facts: ProductFacts | null = null;
     try {
@@ -96,16 +104,37 @@ export async function resolveProductsFromUrls(
     } catch {
       facts = null; // 抽出は絶対に全体を止めない
     }
-    if (!facts) continue;
     // 「商品ページである」ことの判定（260728 敵対レビュー B2）。
     // extractProductFromHtml の OGP フォールバックは og:title か og:image があれば成立してしまう＝
     // ほぼ全ての Web ページが「商品」になる。まとめ記事（「おすすめソファ20選」）がヒットすると、
     // 記事タイトルが商品名、記事URLが「個別商品URL」として提示され、しかも確認済み扱いになる。
     // 構造化データ（JSON-LD / microdata）由来なら商品ページと見なし、
     // OGP しか無い場合は価格が取れているときだけ商品と認める。
-    if (!isLikelyProductPage(facts)) continue;
+    const looksLikeProduct = !!facts && isLikelyProductPage(facts);
+
+    // 【260729 クライアント要望「見た目一致を最優先・詳細は後回し」】
+    // 以前はここで商品情報の取れないページを捨てていた。だが捨てられるのは
+    // 「Vision が画像一致で見つけたページ」であり、本機能で最も価値のある候補そのもの。
+    // 結果として、見た目が一致した候補ほど落ち、モデルが名前から推測した候補だけが残っていた。
+    // keepUnresolved のときは捨てずに「詳細未取得」として残す（到達確認だけは通す）。
+    if (!looksLikeProduct) {
+      if (!opts.keepUnresolved) continue;
+      out.push({
+        // 名前はページタイトル（＝利用者が判断できる最低限の手掛かり）。値の推測はしない。
+        name: facts?.name || readTitle(result.html) || '',
+        // OGP 画像は取れていれば使うが、無くても呼び出し側が Vision の一致画像を充てる。
+        imageUrl: facts?.imageUrl,
+        source: 'unresolved',
+        finalUrl: result.finalUrl,
+        canonicalUrl: facts?.url,
+        pageTitle: readTitle(result.html),
+        requestedUrl,
+      });
+      continue;
+    }
     out.push({
-      ...facts,
+      ...(facts as ProductFacts),
+      requestedUrl,
       // 提示するURLは「実際に到達できたURL」を使う。
       // extractProductFromHtml は canonical / og:url を優先して facts.url に入れるが、それはサイトの
       // 自己申告であって到達を検証していない（誤った canonical を書くサイトは珍しくない）。
@@ -113,7 +142,7 @@ export async function resolveProductsFromUrls(
       // このページは schema.org/Product を持つ＝個別商品ページなので、要望の「個別URL」も満たす。
       finalUrl: result.finalUrl,
       // サイトが主張する正規URL（参考。表示には使わない）。
-      canonicalUrl: facts.url,
+      canonicalUrl: (facts as ProductFacts).url,
       pageTitle: readTitle(result.html),
     });
   }
