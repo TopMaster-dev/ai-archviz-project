@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /** `processedCatalog` の1件（App の handleAddFurniture に渡る形） */
@@ -108,6 +108,76 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
       onSelectedAssetCategoryChange(selectedAssetCategory === cat ? null : cat);
     },
     [selectedAssetCategory, onSelectedAssetCategoryChange, measureAnchor],
+  );
+
+  /**
+   * 一度に見せるカテゴリ数（260728 クライアント要望「5個以上なら5個だけ表示して横スクロール」）。
+   * 「アップロード」は右端固定なのでこの数に含めない。
+   */
+  const VISIBLE_CATEGORY_COUNT = 5;
+  const UPLOAD_CATEGORY = 'アップロード';
+  const uploadCategory = assetCategories.includes(UPLOAD_CATEGORY) ? UPLOAD_CATEGORY : null;
+  const scrollableCategories = assetCategories.filter((c) => c !== UPLOAD_CATEGORY);
+
+  // 5個ぶんの実幅を測ってスクロール領域の上限にする（260728）。
+  // ボタンは内容に合わせた可変幅（長い名称を折り返さないため・260727）なので、固定幅では
+  // 「カウンターチェア」のような長い名称が切れてしまう。実測なら文字を削らずちょうど5個で切れる。
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const [scrollerMaxWidth, setScrollerMaxWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const measure = () => {
+      const kids = Array.from(el.children) as HTMLElement[];
+      // 5個以下なら制限しない（スクロールバーも区切り線も出さない）。
+      if (kids.length <= VISIBLE_CATEGORY_COUNT) {
+        setScrollerMaxWidth(null);
+        return;
+      }
+      const first = kids[0];
+      const last = kids[VISIBLE_CATEGORY_COUNT - 1];
+      if (!first || !last) return;
+      // 先頭の左端〜5個目の右端。スクロール位置に依らず一定（両者は一緒に動く）。
+      const width = last.getBoundingClientRect().right - first.getBoundingClientRect().left;
+      if (width > 0) setScrollerMaxWidth(Math.ceil(width));
+    };
+    measure();
+    // フォント読み込みやカテゴリ増減で幅が変わるので追従する。
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    for (const k of Array.from(el.children)) ro.observe(k as HTMLElement);
+    return () => ro.disconnect();
+  }, [scrollableCategories.join('|')]);
+
+  /** 縦ホイールを横スクロールへ（トラックパッド以外でも送れるように）。 */
+  const handleScrollerWheel = useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    if (el.scrollWidth <= el.clientWidth) return; // はみ出していなければ何もしない
+    if (Math.abs(e.deltaY) <= Math.abs(e.deltaX)) return; // 既に横スクロール操作
+    el.scrollLeft += e.deltaY;
+  }, []);
+
+  /** カテゴリボタン1個（スクロール領域と右端固定の両方で使う）。 */
+  const renderCategoryButton = (cat: string) => (
+    <button
+      key={cat}
+      type="button"
+      // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。260703(5): 初回は少し遅延して開く。
+      onClick={(e) => clickToggle(cat, e.currentTarget)}
+      onMouseEnter={(e) => hoverOpen(cat, e.currentTarget)}
+      // ボタンから隙間へ抜けたら保留中のオープンを取消（閉じている時のみ）。開いている時の自動クローズはコンテナ側 onMouseLeave が担当。
+      onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
+      className={`h-full w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
+        selectedAssetCategory === cat
+          ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
+          : cat === UPLOAD_CATEGORY
+            ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
+            : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
+      }`}
+    >
+      {/* 長いカテゴリ名（例: カウンターチェア）が折り返して溢れないよう、幅は内容に合わせラベルは折り返さない（260727）。 */}
+      <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
+    </button>
   );
 
   if (fetchStatus === 'loading') {
@@ -225,29 +295,24 @@ export const FurnitureAssetStrip: React.FC<FurnitureAssetStripProps> = ({
         </div>
       )}
 
-      {/* カテゴリは横1行で並べる（260727 クライアント要望で2行→1行へ戻す）。長い名称は下の span で折り返さない。 */}
+      {/* カテゴリは横1行。6個目以降は横スクロール、「アップロード」は右端に固定（260728 クライアント要望）。 */}
       <div className={barClass}>
-        {assetCategories.map((cat) => (
-          <button
-            key={cat}
-            type="button"
-            // 260623: マウスオーバーで自動的にパネルを立ち上げる（クリック不要で一覧を出す）。260703(5): 初回は少し遅延して開く。
-            onClick={(e) => clickToggle(cat, e.currentTarget)}
-            onMouseEnter={(e) => hoverOpen(cat, e.currentTarget)}
-            // ボタンから隙間へ抜けたら保留中のオープンを取消（閉じている時のみ）。開いている時の自動クローズはコンテナ側 onMouseLeave が担当。
-            onMouseLeave={() => { if (!selectedAssetCategory) clearOpenTimer(); }}
-            className={`h-full w-auto min-w-[60px] shrink-0 px-2.5 rounded-xl border transition-all flex flex-col items-center justify-center gap-1 group ${
-              selectedAssetCategory === cat
-                ? 'bg-emerald-500/20 border-emerald-500 text-emerald-400 shadow-inner'
-                : cat === 'アップロード'
-                  ? 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
-                  : 'bg-neutral-800/80 border-white/10 text-white hover:border-white/30'
-            }`}
-          >
-            {/* 長いカテゴリ名（例: フロアランプ）が折り返して溢れないよう、幅は内容に合わせラベルは折り返さない（260727）。 */}
-            <span className="whitespace-nowrap text-[10px] font-black uppercase tracking-wide">{cat}</span>
-          </button>
-        ))}
+        <div
+          ref={scrollerRef}
+          onWheel={handleScrollerWheel}
+          style={scrollerMaxWidth != null ? { maxWidth: scrollerMaxWidth } : undefined}
+          className="flex h-full items-center gap-1.5 overflow-x-auto overflow-y-hidden scrollbar-none overscroll-x-contain"
+        >
+          {scrollableCategories.map(renderCategoryButton)}
+        </div>
+        {uploadCategory && (
+          // スクロール領域の外に置くことで、いくつカテゴリが増えても常に右端に見える。
+          <div className="flex h-full shrink-0 items-center gap-1.5">
+            {/* スクロールできることが分かるよう、はみ出している時だけ区切り線を出す。 */}
+            {scrollerMaxWidth != null && <div className="h-8 w-px shrink-0 bg-white/15" aria-hidden />}
+            {renderCategoryButton(uploadCategory)}
+          </div>
+        )}
       </div>
     </div>
   );
