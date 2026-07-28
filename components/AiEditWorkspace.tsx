@@ -546,14 +546,43 @@ export function AiEditWorkspace({
     await addStyleFiles(files);
   };
 
-  /** 複数画像のドロップ（コーディネートのスタイル参照用・260728 クライアント要望）。 */
-  const handleImagesDrop = async (e: React.DragEvent, cb: (files: File[]) => void | Promise<void>) => {
+  /**
+   * コーディネート（スタイル参照）のドロップ判定（260728 クライアント要望①）。
+   * 判定範囲を入力欄まで含めたパネル全体へ広げたため、以下2点の考慮が要る:
+   *  - 入力欄のテキストをドラッグしただけで反応しないよう、ファイルのドラッグのみを対象にする。
+   *  - 子要素をまたぐ度に dragleave が発火してハイライトがちらつくため、深さカウンタで管理する
+   *    （エージェントパネルと同じ方式）。
+   */
+  const styleDragDepthRef = useRef(0);
+  const isFileDrag = (e: React.DragEvent) => Array.from(e.dataTransfer.types ?? []).includes('Files');
+
+  const handleStyleDragEnter = (e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault();
+    styleDragDepthRef.current += 1;
+    setDropActive('style');
+  };
+  const handleStyleDragOver = (e: React.DragEvent) => {
+    if (!isFileDrag(e)) return;
+    e.preventDefault(); // これが無いとブラウザが画像を開いてしまう（textarea 上ではパスが入力される）
+    e.stopPropagation();
+  };
+  const handleStyleDragLeave = () => {
+    styleDragDepthRef.current = Math.max(0, styleDragDepthRef.current - 1);
+    if (styleDragDepthRef.current === 0) setDropActive(null);
+  };
+  const handleStyleDrop = async (e: React.DragEvent) => {
+    const dropped = Array.from(e.dataTransfer.files ?? []);
+    styleDragDepthRef.current = 0;
+    setDropActive(null);
+    if (dropped.length === 0) return; // ファイル以外（テキスト等）は既定動作に任せる
+    // ファイルが落ちた時点で必ず既定動作を止める。画像以外（PDF等）で止め忘れると、
+    // ブラウザがそのファイルを開いて編集中の画面から離脱してしまう。
     e.preventDefault();
     e.stopPropagation();
-    setDropActive(null);
-    const files = Array.from(e.dataTransfer.files ?? []).filter((x) => x.type.startsWith('image/'));
-    if (files.length === 0) return;
-    await cb(files);
+    const files = dropped.filter((x) => x.type.startsWith('image/'));
+    if (files.length === 0) return; // 画像以外は無視（コーディネートの参照は画像のみ）
+    await addStyleFiles(files);
   };
 
   const onPickObjectFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -2099,13 +2128,16 @@ export function AiEditWorkspace({
 
           <div className="flex-1 flex flex-col min-h-0 relative z-10 bg-[#050505]">
             <div
+              // コーディネートもエージェントと同じ「残り高さいっぱい」レイアウトにする（260728 クライアント要望②）。
+              // 従来の overflow-y-auto + pb-6 では、内容が短いぶん下に大きな余白が残っていた。
               className={`flex-1 min-h-0 px-3 pt-0 space-y-2 md:px-4 md:space-y-3 scroll-dark ${
-                activeTool === 'agent'
+                activeTool === 'agent' || activeTool === 'coordinate'
                   ? 'flex flex-col overflow-hidden pb-3 md:pb-4'
                   : 'overflow-y-auto pb-6 md:pb-8'
               }`}
             >
-            <div>
+            {/* コーディネート時は、この塊（見出し＋タブ＋本文）をレールの残り高さいっぱいに広げる（260728②）。 */}
+            <div className={activeTool === 'coordinate' ? 'flex min-h-0 flex-1 flex-col' : undefined}>
               <div className="text-[10px] font-black uppercase text-neutral-500 tracking-widest mb-2">
                 AI マジックツール
               </div>
@@ -2167,33 +2199,40 @@ export function AiEditWorkspace({
                 />
               </div>
               {activeTool === 'coordinate' && (
-                <div className="mt-2 space-y-2">
-                  <p className="text-[10px] font-bold text-neutral-500">＊任意</p>
+                /* 260728 クライアント要望①②:
+                   ① ドロップ判定を「エージェント」と同じ広さにする＝入力欄も含めたパネル全体で受ける
+                      （従来は添付ボタン周りの細い帯だけで、エリア編集より狭く感じられた）。
+                   ② 下の余白を無くして高さいっぱいに使う。 */
+                <div
+                  onDragEnter={handleStyleDragEnter}
+                  onDragOver={handleStyleDragOver}
+                  onDragLeave={handleStyleDragLeave}
+                  onDrop={(e) => void handleStyleDrop(e)}
+                  className={`relative mt-2 flex min-h-0 flex-1 flex-col gap-2 rounded-xl border border-dashed p-2 transition ${
+                    dropActive === 'style'
+                      ? 'border-emerald-400 bg-emerald-500/10'
+                      : 'border-white/10 bg-transparent'
+                  }`}
+                >
+                  {/* ドロップ中は落とし先が一目で分かるようにオーバーレイを出す（エージェントと同じ体験）。 */}
+                  {dropActive === 'style' && (
+                    <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl bg-emerald-500/5">
+                      <span className="rounded-lg bg-black/70 px-3 py-1.5 text-xs font-bold text-emerald-200">
+                        ここにドロップして添付
+                      </span>
+                    </div>
+                  )}
+                  <p className="shrink-0 text-[10px] font-bold text-neutral-500">＊任意</p>
                   <textarea
                     value={draftStyleMemo}
                     onChange={(e) => onStyleMemoChange(e.target.value)}
                     placeholder={
                       '生成したい空間のイメージや条件を入力してください。\n【※入力内容に基づき、パース画像の生成が実行されます】\n\n例1）木の温もりを感じる、ナチュラルモダンなリビング\n例2）添付したブランドロゴの雰囲気に合う、高級感のあるカフェの内装\n例3）コンクリートとアイアン素材を組み合わせた、インダストリアルなオフィス'
                     }
-                    rows={6}
-                    className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-2 text-[11px] text-white leading-relaxed resize-none outline-none focus:border-emerald-500"
+                    // 高さ固定(rows=6)をやめ、残りの高さいっぱいまで伸ばす（②の余白解消）。
+                    className="min-h-[120px] w-full flex-1 resize-none rounded-lg border border-white/10 bg-black/40 px-3 py-2 text-[11px] leading-relaxed text-white outline-none focus:border-emerald-500"
                   />
-                  {/* エリア編集と同じくドラッグ&ドロップで読み込めるようにする（260728 クライアント要望：
-                      エリア編集だけD&Dが効き、コーディネートとエージェントで効かないのは操作が混乱するため）。 */}
-                  <div
-                    onDragOver={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                      setDropActive('style');
-                    }}
-                    onDragLeave={() => setDropActive(null)}
-                    onDrop={(e) => void handleImagesDrop(e, addStyleFiles)}
-                    className={`flex items-center gap-2 rounded-lg border border-dashed p-2 transition ${
-                      dropActive === 'style'
-                        ? 'border-emerald-400 bg-emerald-500/10'
-                        : 'border-white/10 bg-transparent'
-                    }`}
-                  >
+                  <div className="flex shrink-0 items-center gap-2">
                     <button
                       type="button"
                       onClick={() => styleInputRef.current?.click()}
@@ -2205,13 +2244,14 @@ export function AiEditWorkspace({
                     {draftStyleRefs.length > 0 ? (
                       <span className="text-[10px] text-neutral-400">添付 {draftStyleRefs.length} / {MAX_STYLE_REFS} 枚</span>
                     ) : (
-                      <span className="text-[10px] text-neutral-500">またはここに画像をドロップ</span>
+                      <span className="text-[10px] text-neutral-500">またはドラッグ&amp;ドロップ</span>
                     )}
                   </div>
                   {/* 添付画像のサムネイル一覧（複数対応・各画像を個別に削除できる・260707）。
-                      削除 index を合わせるため、フィルタ後(styleImageDataUrls)ではなく draftStyleRefs をそのまま描画する。 */}
+                      削除 index を合わせるため、フィルタ後(styleImageDataUrls)ではなく draftStyleRefs をそのまま描画する。
+                      枚数が増えても入力欄を潰さないよう、ここだけスクロールさせる。 */}
                   {draftStyleRefs.length > 0 && (
-                    <div className="flex flex-wrap gap-1.5">
+                    <div className="flex max-h-[104px] shrink-0 flex-wrap gap-1.5 overflow-y-auto scroll-dark">
                       {draftStyleRefs.map((url, i) => (
                         <div key={`${i}-${url.slice(0, 24)}`} className="relative shrink-0">
                           <img src={url} alt={`添付${i + 1}`} className="h-12 w-12 rounded border border-white/10 object-cover" />
