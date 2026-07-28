@@ -12,6 +12,7 @@ import { analyzeAgentRequest } from './lib/agentRouting.js';
 import { resolveAttachmentMime, parseDataUrl, isBase64DataUrl } from './lib/agentAttachments.js';
 import { runVisionProductSearch, mergeResolvedIntoRecommendations } from './lib/server/visionProductSearchCore.js';
 import { resolveProductsFromUrls } from './lib/server/productResolver.js';
+import { findProductPageCandidates, buildProductQuery } from './lib/server/customSearch.js';
 import type { AgentCatalogEntry } from './types.js';
 import { STORAGE_SOFT_LIMIT_BYTES, STORAGE_WARN_THRESHOLD_BYTES } from './lib/storageLimits.js';
 import { extractGeminiApiKey } from './lib/geminiKey.js';
@@ -344,7 +345,15 @@ export default defineConfig(({ mode }) => {
                         });
                         // 本番（api/agent.ts）と同じ後処理: 検索が返した実URLを開いて商品情報を実測し、
                         // モデルが書いたURLは採用しない（260728 要望③）。ここを揃えないと dev だけ旧挙動になる。
-                        const resolvedProducts = sources?.length ? await resolveProductsFromUrls(sources.map((s) => s.uri)) : [];
+                        let resolvedProducts = sources?.length ? await resolveProductsFromUrls(sources.map((s) => s.uri)) : [];
+                        // グラウンディングで商品ページに届かなかったときだけ Custom Search で補う（本番と同一）。
+                        if (resolvedProducts.length === 0 && recommendations.length > 0) {
+                            const queries = recommendations.slice(0, 2)
+                                .map((r) => buildProductQuery([r.brand, r.name, r.modelNumber]))
+                                .filter(Boolean);
+                            const hits = await findProductPageCandidates(queries);
+                            if (hits.length > 0) resolvedProducts = await resolveProductsFromUrls(hits.map((h) => h.url));
+                        }
                         const mergedRecommendations = mergeResolvedIntoRecommendations(recommendations, resolvedProducts);
                         res.statusCode = 200;
                         res.setHeader('Content-Type', 'application/json');

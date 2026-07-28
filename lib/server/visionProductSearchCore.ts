@@ -2,6 +2,7 @@ import { generateVisionProductReply, resolveAgentModel } from '../gemini.js';
 import { parseDataUrl } from '../agentAttachments.js';
 import { parseVisionWebDetection, buildVisionFindingsText } from '../visionProductSearch.js';
 import { resolveProductsFromUrls, buildResolvedProductsText, type ResolvedProduct } from './productResolver.js';
+import { findProductPageCandidates, buildProductQuery } from './customSearch.js';
 import type { AgentRecommendation } from '../../types.js';
 
 /**
@@ -144,7 +145,23 @@ export async function runVisionProductSearch(params: {
     // 従来はそれをそのまま Gemini に渡していたため、価格・品番・メーカーはタイトルからの推測になっていた。
     // ここで実際にページを開き、構造化データ（schema.org/Product）から確定値を取り出して渡す。
     // 開けなかったURLは提示対象から外れる＝リンク切れを出さない（到達確認を兼ねる・要望④）。
-    const resolved = await resolveProductsFromUrls(findings.pages.map((p) => p.url));
+    // 候補URLを2系統から集める（260728 クライアント承認）。
+    //  (a) Vision の逆画像検索が見つけたページ（画像が一致する＝同じ商品である確度が高い）
+    //  (b) Vision の推定名・キーワードで Custom Search した「実際に売っているページ」
+    // (a) だけだと Pinterest やまとめサイト（構造化データ無し＝価格も品番も取れない）に偏るため、
+    // (b) で商品ページの候補を補う。未設定なら (b) は空になり、従来どおり (a) だけで動く。
+    const searchQueries = [
+      buildProductQuery([findings.bestGuess[0], findings.entities[0]]),
+      buildProductQuery([findings.entities[0], findings.entities[1], '通販']),
+    ].filter(Boolean);
+    const searchHits = await findProductPageCandidates(searchQueries);
+
+    // 値の確定は従来どおり productResolver が行う（実際にページを開いて構造化データを読む＋到達確認）。
+    // 検索はあくまで候補URLを増やすだけなので、未検証の情報が利用者へ出ることはない。
+    const resolved = await resolveProductsFromUrls([
+      ...findings.pages.map((p) => p.url),
+      ...searchHits.map((h) => h.url),
+    ]);
 
     const { reply, recommendations, usage } = await generateVisionProductReply(params.geminiKey, {
       imageDataUrl: params.imageDataUrl,

@@ -3,6 +3,7 @@ import { isBase64DataUrl, resolveAttachmentMime, parseDataUrl } from '../lib/age
 import { analyzeAgentRequest } from '../lib/agentRouting.js';
 import { runVisionProductSearch, mergeResolvedIntoRecommendations } from '../lib/server/visionProductSearchCore.js';
 import { resolveProductsFromUrls } from '../lib/server/productResolver.js';
+import { findProductPageCandidates, buildProductQuery } from '../lib/server/customSearch.js';
 import { extractGeminiApiKey } from '../lib/geminiKey.js';
 import type { AgentCatalogEntry } from '../types.js';
 
@@ -130,7 +131,20 @@ export default async function handler(req: any, res: any) {
     // 【260728 要望③】提示するURLはモデルの作文ではなく、検索が実際に返した実在URLだけにする。
     // その実URLを開いて構造化データから 商品名/メーカー/価格/品番/サムネイル を実測し、推薦へ反映する。
     // 開けなかったURLは落ちる＝リンク切れを提示しない（到達確認を兼ねる・要望④）。
-    const resolvedProducts = sources?.length ? await resolveProductsFromUrls(sources.map((s) => s.uri)) : [];
+    let resolvedProducts = sources?.length ? await resolveProductsFromUrls(sources.map((s) => s.uri)) : [];
+
+    // グラウンディングだけでは商品ページに届かないことがある（記事・一覧が返る）。
+    // その場合のみ Custom Search で「実際に売っているページ」を探し直して候補を補う
+    // （260728 クライアント承認）。既に確定できているときは追加検索しない＝無駄な課金を避ける。
+    if (resolvedProducts.length === 0 && recommendations.length > 0) {
+      const queries = recommendations
+        .slice(0, 2)
+        .map((r) => buildProductQuery([r.brand, r.name, r.modelNumber]))
+        .filter(Boolean);
+      const hits = await findProductPageCandidates(queries);
+      if (hits.length > 0) resolvedProducts = await resolveProductsFromUrls(hits.map((h) => h.url));
+    }
+
     const mergedRecommendations = mergeResolvedIntoRecommendations(recommendations, resolvedProducts);
 
     return res.status(200).json({
