@@ -184,6 +184,11 @@ export async function runVisionProductSearch(params: {
         model: resolveAgentModel(),
         visionPages: findings.pages.slice(0, 5),
         resolvedProducts: resolved.slice(0, 6),
+        // 参考画像（260728 クライアント要望「商品画像が見たい」）。
+        // 商品ページとして確定できなかった場合でも、逆画像検索が見つけた「似ている画像」と
+        // 「一致したページ」は視覚的な手掛かりになる。Vision の応答に既に含まれており追加課金は無い。
+        // ただし確定情報ではないので、UI 側では商品カードと明確に区別して出すこと。
+        similarImages: findings.similarImageUrls.slice(0, 8),
       },
     };
   } catch (e: any) {

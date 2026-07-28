@@ -37,7 +37,12 @@ const AGENT_PLACEHOLDER =
   '例3）この間取りで、より広く見せるための照明の配置アイデアは？';
 
 /** チャット表示用メッセージ。アシスタント発話には家具推薦（Tier2）、ユーザー発話には送信した添付ファイル名が付く。 */
-type ChatMessage = AgentChatMessage & { recommendations?: AgentRecommendation[]; attachmentNames?: string[] };
+type ChatMessage = AgentChatMessage & {
+  recommendations?: AgentRecommendation[];
+  attachmentNames?: string[];
+  /** 商品として確定できなかった場合の視覚的手掛かり（逆画像検索の類似画像・一致ページ）。 */
+  visionRefs?: { images: string[]; pages: { title: string; url: string }[] };
+};
 
 /** エージェント相談に添付するファイル（画像・PDF・資料・音声・動画・コード等・複数対応 260702）。 */
 type AttachedFile = { id: string; name: string; mimeType: string; dataUrl: string; size: number };
@@ -77,6 +82,7 @@ function loadStoredChat(projectId: string | null | undefined): ChatMessage[] {
         attachmentNames: Array.isArray(m.attachmentNames)
           ? (m.attachmentNames as unknown[]).filter((n): n is string => typeof n === 'string')
           : undefined,
+        visionRefs: m.visionRefs && typeof m.visionRefs === 'object' ? m.visionRefs : undefined,
       }));
   } catch {
     return [];
@@ -415,12 +421,23 @@ export function AgentChatPanel({
       if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');
       if (!data.success) throw new Error(data.error || '商品の特定に失敗しました');
       void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
+      // 商品として確定できなかったときでも視覚的な手掛かりを残す（260728 クライアント要望）。
+      // 逆画像検索の「似ている画像」と「一致したページ」は Vision の応答に含まれており追加課金は無い。
+      const refImages = Array.isArray(data.similarImages)
+        ? (data.similarImages as unknown[]).filter((u): u is string => typeof u === 'string')
+        : [];
+      const refPages = Array.isArray(data.visionPages)
+        ? (data.visionPages as unknown[])
+            .filter((p): p is { title: string; url: string } => !!p && typeof (p as any).url === 'string')
+            .map((p) => ({ title: String(p.title ?? p.url), url: p.url }))
+        : [];
       setMessages((prev) => [
         ...prev,
         {
           role: 'assistant',
           content: typeof data.reply === 'string' ? data.reply : '',
           recommendations: Array.isArray(data.recommendations) ? data.recommendations : undefined,
+          visionRefs: refImages.length || refPages.length ? { images: refImages, pages: refPages } : undefined,
         },
       ]);
     } catch (e) {
@@ -771,6 +788,51 @@ export function AgentChatPanel({
                       </div>
                     );
                   })}
+                </div>
+              )}
+
+              {/* 参考画像・参考ページ（260728 クライアント要望「商品画像が見たい」）。
+                  商品ページとして確定できなかった場合でも、逆画像検索が見つけた視覚的な手掛かりを出す。
+                  確定情報ではないので、上の商品カードとは枠と文言で明確に区別する。 */}
+              {m.role === 'assistant' && m.visionRefs && (
+                <div className="mt-1.5 w-full max-w-[85%] rounded-lg border border-white/10 bg-white/[0.03] p-2">
+                  <div className="mb-1.5 text-[10px] font-bold text-neutral-400">
+                    画像から見つかった参考情報（商品ページとしては未確認）
+                  </div>
+                  {m.visionRefs.images.length > 0 && (
+                    <div className="mb-1.5 flex flex-wrap gap-1.5">
+                      {m.visionRefs.images.map((src, ii) => (
+                        <img
+                          key={`${ii}-${src.slice(0, 24)}`}
+                          src={src}
+                          alt=""
+                          loading="lazy"
+                          referrerPolicy="no-referrer"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none'; // 参照不可の画像は静かに消す
+                          }}
+                          className="h-14 w-14 rounded border border-white/10 bg-black/30 object-cover"
+                        />
+                      ))}
+                    </div>
+                  )}
+                  {m.visionRefs.pages.length > 0 && (
+                    <ul className="space-y-0.5">
+                      {m.visionRefs.pages.slice(0, 5).map((p, pi) => (
+                        <li key={`${pi}-${p.url.slice(0, 24)}`}>
+                          <a
+                            href={p.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="block truncate text-[10px] text-neutral-300 hover:text-emerald-300 hover:underline"
+                            title={p.url}
+                          >
+                            {p.title} ↗
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </div>
               )}
             </div>
