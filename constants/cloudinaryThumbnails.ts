@@ -17,4 +17,4 @@ export const CLOUDINARY_THUMBNAIL_FOLDER = '3d_assets_thumbnails';
  * サムネイル生成ロジックを変えて再生成させたいときは、フォルダを増やさずこの値だけを上げる（例: '260726' → '260727'）。
  * 空文字にすると付与しない（後方互換）。旧 _v2/_v3 フォルダの残存物と public_id が衝突しないよう、移行時は非空の値にする。
  */
-export const CLOUDINARY_THUMBNAIL_CACHE_BUST = '260726';
+export const CLOUDINARY_THUMBNAIL_CACHE_BUST = '260729';

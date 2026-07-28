@@ -14,7 +14,7 @@ import { MovablePanel } from './components/MovablePanel.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
-import { FurnitureAssetStrip, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
+import { FurnitureAssetStrip, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/FurnitureAssetStrip.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -192,6 +192,14 @@ const thumbnailFailedUrls = new Set<string>();
 const thumbnailEnqueueTimers = new Map<string, number>();
 const cacheListeners = new Set<() => void>();
 const notifyCacheUpdate = () => cacheListeners.forEach(l => l());
+/**
+ * 3Dモデルサムネイルの生成解像度（px・正方形）。260729 クライアント要望②で
+ * サムネイルを拡大表示できるようにしたため 256 → 512 へ引き上げた。
+ * 上げるときは constants/cloudinaryThumbnails.ts の CLOUDINARY_THUMBNAIL_CACHE_BUST も
+ * 必ず上げること（上げないと既存の低解像度PNGが配信され続け、変更が反映されない）。
+ */
+const THUMBNAIL_RENDER_PX = 512;
+
 const PERF_TRACE = false;
 const META_SOURCE_TRACE = false;
 const LAMP_DEV_TRACE =
@@ -450,8 +458,11 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
     if (!enabled || !currentUrl) return null;
 
     return (
-        <div style={{ position: 'absolute', top: -9999, left: -9999, width: 256, height: 256, zIndex: -100 }}>
-            <Canvas gl={{ preserveDrawingBuffer: true }} frameloop="demand">
+        // 生成解像度は THUMBNAIL_RENDER_PX。サムネイルを大きく表示できるようにしたので（260729 要望②）、
+        // 従来の 256px のままだと拡大時に明らかにボケる。dpr は 1 に固定して、端末の解像度で
+        // 出力サイズが変わらないようにする（高DPR機で 1024px 相当が生成されるのを防ぐ）。
+        <div style={{ position: 'absolute', top: -9999, left: -9999, width: THUMBNAIL_RENDER_PX, height: THUMBNAIL_RENDER_PX, zIndex: -100 }}>
+            <Canvas gl={{ preserveDrawingBuffer: true }} dpr={1} frameloop="demand">
                 <ambientLight intensity={1.5} />
                 <directionalLight position={[5, 10, 5]} intensity={1.5} />
                 <Suspense fallback={null}>
@@ -466,7 +477,7 @@ const ThumbnailGeneratorQueue = ({ enabled }: { enabled: boolean }) => {
 
 const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0, thumbnailUrl }: { url?: string, name?: string, uprightXDeg?: number, forwardYawDeg?: number, thumbnailUrl?: string }) => {
     // URLが未定義の場合はクラッシュを防ぎ、代わりのアイコンを表示する
-    if (!url) return <div className="w-full h-full flex items-center justify-center bg-neutral-800"><span className="text-[10px] font-black text-neutral-500">{name?.charAt(0) || '?'}</span></div>;
+    if (!url) return <div className="w-full h-full flex items-center justify-center bg-[var(--thumb-bg)]"><span className="text-[10px] font-black text-[var(--thumb-fg-muted)]">{name?.charAt(0) || '?'}</span></div>;
 
     // 公式(Cloudinary)は静的URLで解決＝一度生成すれば以後再生成しない。
     // ユーザー(Supabase)は永続URL(thumbnailUrl/persistedThumbnailByUrl)を優先し、無ければメモリ生成（260727・#2）。
@@ -503,11 +514,11 @@ const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0, thumbna
 
     if (!imgSrc) {
         // 生成待ち/未解決＝頭文字プレースホルダ（生成完了で notifyCacheUpdate → 上の listener が差し替え）。
-        return <div className="w-full h-full flex items-center justify-center bg-neutral-800"><span className="text-[10px] font-black text-neutral-500">{name?.charAt(0) || '?'}</span></div>;
+        return <div className="w-full h-full flex items-center justify-center bg-[var(--thumb-bg)]"><span className="text-[10px] font-black text-[var(--thumb-fg-muted)]">{name?.charAt(0) || '?'}</span></div>;
     }
 
     return (
-        <div className="w-full h-full flex items-center justify-center bg-neutral-800 relative overflow-hidden">
+        <div className="w-full h-full flex items-center justify-center bg-[var(--thumb-bg)] relative overflow-hidden">
             <img
                 src={imgSrc}
                 className="w-full h-full object-cover transition-opacity duration-300"
@@ -528,7 +539,7 @@ const ModelThumbnail = ({ url, name, uprightXDeg = 0, forwardYawDeg = 0, thumbna
                     if (e.currentTarget.nextElementSibling) e.currentTarget.nextElementSibling.classList.add('hidden');
                 }}
             />
-            <span className="hidden text-[10px] font-black text-neutral-500 uppercase tracking-widest absolute">
+            <span className="hidden text-[10px] font-black text-[var(--thumb-fg-muted)] uppercase tracking-widest absolute">
                 {name?.charAt(0)}
             </span>
         </div>
@@ -732,7 +743,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                   }`}
                 >
                   <div className="flex items-start gap-2 mb-2">
-                    <div className="w-8 h-8 rounded-lg bg-neutral-800 flex items-center justify-center text-neutral-500 shrink-0 border border-white/10 overflow-hidden">
+                    <div className="w-8 h-8 rounded-lg bg-[var(--thumb-bg)] flex items-center justify-center text-[var(--thumb-fg-muted)] shrink-0 border border-white/10 overflow-hidden">
                       <ModelThumbnail url={f.modelUrl} name={f.customName || f.name || f.type} uprightXDeg={f.modelUprightXDeg} forwardYawDeg={f.modelForwardYawDeg} />
                     </div>
                     <div className="min-w-0 flex-1">
@@ -1391,8 +1402,9 @@ const App: React.FC = () => {
 
   const assetCategories = useMemo(() => {
     // 「アップロード」は常に最後に表示する（0件でも「＋3Dモデル追加」を出せるように・260623）。
+    // 先頭には全件横断の「ALL」を置く（260729 クライアント要望④）。
     const types = Array.from(new Set(processedCatalog.map(item => item.type))).filter((t) => t !== UPLOAD_FURNITURE_TYPE);
-    return [...types, UPLOAD_FURNITURE_TYPE];
+    return [ALL_CATEGORY, ...types, UPLOAD_FURNITURE_TYPE];
   }, [processedCatalog]);
 
   // 永続化済みサムネイル(Supabase)をカタログからモジュールマップへ seed（260727・#2）。
@@ -4259,8 +4271,20 @@ const App: React.FC = () => {
                      />
                      
                      {!renderState.isRendering && (
-                        <div className="absolute bottom-6 right-6 z-40 pointer-events-auto flex flex-col items-end gap-3">
+                        // 2Dビューのカタログも移動・リサイズできるようにする（260729 クライアント要望①）。
+                        // 3D側と保存キーを分けるのは、2Dと3Dで使いやすい置き場所・大きさが違うため。
+                        <MovablePanel
+                            storageKey="arise.asset-strip-2d.v1"
+                            label="3Dオブジェクト"
+                            anchor="bottom-right"
+                            getBounds={getPreviewBounds}
+                            zIndex={40}
+                            minWidth={320}
+                            minHeight={88}
+                            defaultHeight={72}
+                        >
                             <FurnitureAssetStrip
+                                className="h-full w-full"
                                 processedCatalog={processedCatalog}
                                 assetCategories={assetCategories}
                                 selectedAssetCategory={selectedAssetCategory}
@@ -4271,7 +4295,7 @@ const App: React.FC = () => {
                                 fetchErrorMessage={furnitureCatalogErrorText}
                                 onUploadModel={handleUploadModelClick}
                             />
-                        </div>
+                        </MovablePanel>
                      )}
                 </div>
              )}
@@ -4386,7 +4410,6 @@ const App: React.FC = () => {
 
                         // 選択中の建具（ドア/窓）
                         const activeOpening = selectedOpeningId ? openings.find(o => o.id === selectedOpeningId) : null;
-                        const propertyPanelWidthClass = 'w-[min(30vw,380px)] min-w-[min(260px,88vw)]';
                         const propertyCardBaseClass = 'glass rounded-2xl border border-white/10 bg-black/40 backdrop-blur-md shadow-xl shrink-0 min-w-[min(248px,86vw)]';
 
                         const handleDivisionChange = (divs: number, baseIdx: number) => {
@@ -4431,8 +4454,13 @@ const App: React.FC = () => {
                                 getBounds={getPreviewBounds}
                                 zIndex={panelZ('info')}
                                 onFocus={() => bringPanelToFront('info')}
+                                // 未リサイズ時は従来の見た目（幅は画面幅比・高さは中身なり）。
+                                // 枠をドラッグすると明示サイズに切り替わり、以降は中身が w-full/h-full で追従する（260729 要望①）。
+                                defaultWidth="clamp(min(260px, 88vw), 30vw, 380px)"
+                                minWidth={260}
+                                minHeight={140}
                             >
-                            <div className={`${propertyPanelWidthClass} flex flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark`}>
+                            <div className="panel-fill flex h-full w-full flex-col gap-3 pointer-events-auto max-h-[75vh] overflow-y-auto pr-1 pb-2 scroll-dark">
                                 {!hasAnySelection && (
                                     <div className={`${propertyCardBaseClass} px-4 py-4`}>
                                         <p className="text-[11px] font-black uppercase tracking-widest text-emerald-300">プロパティ</p>
@@ -5270,7 +5298,7 @@ const App: React.FC = () => {
                                             )}
 
                                             <div className="flex items-start gap-3 w-full pt-2 border-t border-white/10">
-                                                <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/10 shrink-0 bg-neutral-800">
+                                                <div className="w-12 h-12 rounded-lg overflow-hidden border border-white/10 shrink-0 bg-[var(--thumb-bg)]">
                                                     <ModelThumbnail
                                                         url={activeItem.modelUrl}
                                                         name={(activeItem as any).customName || activeItem.name || activeItem.type}
@@ -5396,8 +5424,10 @@ const App: React.FC = () => {
                                     zIndex={panelZ('camera')}
                                     onFocus={() => bringPanelToFront('camera')}
                                     onRect={setCameraPanelRect}
+                                    minWidth={240}
+                                    minHeight={110}
                                 >
-                                    <div className="flex flex-wrap items-stretch justify-center gap-1.5 md:gap-2">
+                                    <div className="panel-fill flex h-full w-full flex-wrap items-stretch justify-center gap-1.5 overflow-auto scroll-dark md:gap-2">
                                         <CameraPresetBar
                                             presets={cameraPresets}
                                             lastAppliedId={lastAppliedPresetId}
@@ -5444,8 +5474,13 @@ const App: React.FC = () => {
                                     getBounds={getPreviewBounds}
                                     zIndex={panelZ('assets')}
                                     onFocus={() => bringPanelToFront('assets')}
+                                    minWidth={320}
+                                    minHeight={88}
+                                    // 高さを定めないと中の h-full が auto に解決され、カテゴリボタンが潰れる。
+                                    defaultHeight={72}
                                 >
                                     <FurnitureAssetStrip
+                                        className="h-full w-full"
                                         processedCatalog={processedCatalog}
                                         assetCategories={assetCategories}
                                         selectedAssetCategory={selectedAssetCategory}
