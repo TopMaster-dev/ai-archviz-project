@@ -5731,7 +5731,9 @@ const App: React.FC = () => {
                       アップロード
                     </button>
                     <div className="h-6 w-px shrink-0 bg-white/15" aria-hidden />
-                    <div className="scroll-dark flex min-w-0 flex-1 gap-2 overflow-x-auto pb-2 items-center">
+                    {/* 下余白は外側の行（pb-2）が持つ。ここにも付けると二重になり、
+                        チップの下だけ間延びして見える（260730 クライアント指摘）。 */}
+                    <div className="scroll-dark flex min-w-0 flex-1 gap-2 overflow-x-auto items-center">
                       <button onClick={() => setSelectedBrand(null)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${!selectedBrand ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>ALL</button>
                       {availableBrands.map(brand => (
                         <button key={brand} onClick={() => setSelectedBrand(brand)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${selectedBrand === brand ? 'bg-white text-black border-white' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>{brand}</button>
