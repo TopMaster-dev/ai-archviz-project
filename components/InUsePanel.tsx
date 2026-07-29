@@ -25,30 +25,29 @@ function loadHeight(storageKey: string): number {
   }
 }
 
-export interface InUseEntry {
-  /** 一覧内で一意なキー。 */
-  key: string;
-  /** ホバー時に出す名前。 */
-  label: string;
-  /** サムネイルの中身。建材は <img>、3Dモデルは ModelThumbnail を渡す。 */
-  thumbnail: React.ReactNode;
-  /** 補助表示（メーカー名など・省略可）。 */
-  sub?: string;
-}
-
 export function InUsePanel({
   title,
-  entries,
+  count,
   columns,
   storageKey,
   emptyMessage,
+  children,
 }: {
   title: string;
-  entries: InUseEntry[];
-  /** カタログ側と同じ列数（サムネイルの大きさを揃える・クライアント要望）。 */
+  /** 見出し横に出す件数。 */
+  count: number;
+  /**
+   * カタログ側と同じ列数（クライアント要望①）。
+   * 1 のときはカタログもリスト表示なので、こちらもリストの並びになる。
+   */
   columns: number;
   storageKey: string;
   emptyMessage: string;
+  /**
+   * 中身はカタログと同じ描画物をそのまま渡す（MaterialCard / 3Dモデルのタイル）。
+   * ここで独自の見た目を作らないこと。作った瞬間にカタログとずれる。
+   */
+  children: React.ReactNode;
 }) {
   const [height, setHeight] = useState<number>(() => loadHeight(storageKey));
   // ドラッグ開始時の値。ポインタ移動量は「上へ動かすほど高くなる」ので符号を反転して足す。
@@ -107,31 +106,24 @@ export function InUsePanel({
       <div className="flex h-[calc(100%-0.75rem)] flex-col px-6 pb-3 md:px-8">
         <div className="mb-1.5 flex shrink-0 items-center justify-between">
           <span className="text-[10px] font-black uppercase tracking-widest text-neutral-400">{title}</span>
-          <span className="font-mono text-[10px] text-neutral-500">{entries.length}</span>
+          <span className="font-mono text-[10px] text-neutral-500">{count}</span>
         </div>
-        {entries.length === 0 ? (
+        {count === 0 ? (
           <div className="flex flex-1 items-center justify-center rounded-xl border border-dashed border-white/10 text-center text-[10px] font-bold text-neutral-600">
             {emptyMessage}
           </div>
         ) : (
           // 収まらない分はこの中でスクロールする（パネル自体は伸びない）。
+          // 列の作り方・間隔はカタログのグリッドと同じにする（切り替えても並びが変わらないように）。
           <div
             data-testid="in-use-grid"
-            className="scroll-dark grid min-h-0 flex-1 gap-2 overflow-y-auto pr-1"
+            className="scroll-dark grid min-h-0 flex-1 gap-3 overflow-y-auto pr-1"
             style={{
               gridTemplateColumns: columns === 1 ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`,
               gridAutoRows: 'min-content',
             }}
           >
-            {entries.map((e) => (
-              <div
-                key={e.key}
-                title={e.sub ? `${e.label}（${e.sub}）` : e.label}
-                className="relative aspect-square overflow-hidden rounded-xl border border-white/10 bg-[var(--thumb-bg)]"
-              >
-                {e.thumbnail}
-              </div>
-            ))}
+            {children}
           </div>
         )}
       </div>

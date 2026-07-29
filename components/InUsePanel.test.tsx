@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
-import { InUsePanel, type InUseEntry } from './InUsePanel.js';
+import { InUsePanel } from './InUsePanel.js';
 
 /**
  * 260730 クライアント要望②: 右サイドパネル下部に「使用中の建材 / 3Dモデル」を出す。
@@ -11,25 +11,27 @@ import { InUsePanel, type InUseEntry } from './InUsePanel.js';
 
 const KEY = 'test.in-use.v1';
 
-function entries(n: number): InUseEntry[] {
-  return Array.from({ length: n }, (_, i) => ({
-    key: `k${i}`,
-    label: `品目${i}`,
-    sub: `メーカー${i}`,
-    thumbnail: <span data-testid="thumb">{`品目${i}`}</span>,
-  }));
+/** カタログと同じカードを渡す想定なので、テストでも「子要素をそのまま並べる」形にする。 */
+function cards(n: number) {
+  return Array.from({ length: n }, (_, i) => (
+    <button key={i} data-testid="card" title={`品目${i}（メーカー${i}）`}>
+      {`品目${i}`}
+    </button>
+  ));
 }
 
 function setup(overrides: Partial<React.ComponentProps<typeof InUsePanel>> = {}) {
   return render(
     <InUsePanel
       title="使用中の建材"
-      entries={entries(3)}
+      count={3}
       columns={3}
       storageKey={KEY}
       emptyMessage="適用された建材はありません"
       {...overrides}
-    />,
+    >
+      {cards((overrides.count as number) ?? 3)}
+    </InUsePanel>,
   );
 }
 
@@ -42,13 +44,13 @@ afterEach(() => cleanup());
 
 describe('表示', () => {
   it('見出しと件数を出す', () => {
-    setup({ entries: entries(5) });
+    setup({ count: 5 });
     expect(screen.getByText('使用中の建材')).toBeTruthy();
     expect(screen.getByText('5')).toBeTruthy();
   });
 
   it('何も使っていないときは案内を出す（空のグリッドを残さない）', () => {
-    setup({ entries: [] });
+    setup({ count: 0 });
     expect(screen.getByText('適用された建材はありません')).toBeTruthy();
     expect(screen.queryByTestId('in-use-grid')).toBeNull();
   });
@@ -62,14 +64,14 @@ describe('表示', () => {
   });
 
   it('収まらない分はパネル内でスクロールする（パネル自体は伸びない）', () => {
-    setup({ entries: entries(40) });
+    setup({ count: 40 });
     expect(grid().className).toContain('overflow-y-auto');
     // 件数が増えてもパネルの高さは変わらない
     expect(panel().style.height).toBe('168px');
   });
 
   it('名前とメーカーがホバーで分かる', () => {
-    setup({ entries: entries(1) });
+    setup({ count: 1 });
     expect(within(grid()).getByTitle('品目0（メーカー0）')).toBeTruthy();
   });
 });

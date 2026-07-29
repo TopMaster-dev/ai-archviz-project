@@ -14,8 +14,9 @@ import { MovablePanel } from './components/MovablePanel.js';
 import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
-import { ModelCatalogRail, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
-import { InUsePanel, type InUseEntry } from './components/InUsePanel.js';
+import { ModelCatalogRail, ModelCatalogTile, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
+import { InUsePanel } from './components/InUsePanel.js';
+import { MaterialCard } from './components/MaterialCard.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -3542,46 +3543,44 @@ const App: React.FC = () => {
   }, [handleExportEstimateCsv, handleExportEstimatePdf]);
 
   /**
-   * 右レール下部「使用中」一覧の中身（260730 クライアント要望②）。
-   * 建材は面に適用済みのもの（同じ製品は1件にまとめる）、3Dモデルは配置済みの家具。
-   * カタログ側と同じ列数を使い、サムネイルの大きさをスライダーに追従させる。
+   * 右レール下部「使用中」一覧（260730 要望②→260731 要望①③で改訂）。
+   *
+   * 列数はカタログと同じ式を「開いているタブごとに」使う。以前は3Dモデル側の式を
+   * 両方に使っていたため、建材タブでスライダーを動かすとカタログだけがリスト表示になり、
+   * 使用中パネルは4列のままという食い違いが起きていた（クライアント指摘）。
    */
-  const inUseColumns = Math.max(1, 5 - (CATALOG_GRID_TO_SLIDER[catalogGridSize] ?? 2));
-  const inUseMaterialEntries = useMemo<InUseEntry[]>(() => {
-    const seen = new Map<string, { name: string; brand?: string; textureUrl?: string }>();
-    for (const item of costBreakdown as any[]) {
-      const key = item.productId || `${item.brand}|${item.prodName}|${item.textureUrl ?? ''}`;
-      if (!seen.has(key)) seen.set(key, { name: item.prodName, brand: item.brand, textureUrl: item.textureUrl });
-    }
-    return Array.from(seen.entries()).map(([key, v]) => ({
-      key,
-      label: v.name,
-      sub: v.brand,
-      thumbnail: v.textureUrl ? (
-        <img src={getThumbnailUrl(v.textureUrl)} alt="" loading="lazy" className="h-full w-full object-cover" />
-      ) : (
-        <div className="flex h-full w-full items-center justify-center text-[9px] text-[var(--thumb-fg-muted)]">—</div>
-      ),
-    }));
-  }, [costBreakdown]);
+  const inUseColumns =
+    effectiveCatalogTab === 'model'
+      ? Math.max(1, 5 - (CATALOG_GRID_TO_SLIDER[catalogGridSize] ?? 2))
+      : Math.max(1, 5 - catalogGridSize);
 
-  const inUseModelEntries = useMemo<InUseEntry[]>(
-    () =>
-      furnitureItems.map((f) => ({
-        key: f.id,
-        label: (f as any).customName || f.name || f.type,
-        sub: (f as any).customBrand,
-        thumbnail: (
-          <ModelThumbnail
-            url={f.modelUrl}
-            name={(f as any).customName || f.name || f.type}
-            uprightXDeg={f.modelUprightXDeg}
-            forwardYawDeg={f.modelForwardYawDeg}
-          />
-        ),
-      })),
-    [furnitureItems],
-  );
+  /** 使用中の建材（同じ製品は1件にまとめる）。実体の Product を持つのでカタログと同じカードを描ける。 */
+  const inUseMaterials = useMemo<Product[]>(() => {
+    const seen = new Map<string, Product>();
+    for (const item of costBreakdown as any[]) {
+      const prod = products.find((p) => p.id === item.productId);
+      if (prod && !seen.has(prod.id)) seen.set(prod.id, prod);
+    }
+    return Array.from(seen.values());
+  }, [costBreakdown, products]);
+
+  /**
+   * 使用中の3Dモデル（同じモデルは1件にまとめる）。
+   * 配置済み家具（modelUrl）からカタログ項目を引き当て、カタログと同じタイル＋同じ配置動作にする。
+   */
+  const inUseModels = useMemo(() => {
+    const seen = new Map<string, FurnitureCatalogItem>();
+    for (const f of furnitureItems) {
+      if (seen.has(f.modelUrl)) continue;
+      const fromCatalog = processedCatalog.find((c) => c.url === f.modelUrl);
+      // カタログから消えたモデル（アップロードを削除した等）でも、配置済みなら一覧には出す。
+      seen.set(
+        f.modelUrl,
+        fromCatalog ?? ({ id: `placed-${f.id}`, name: f.name, type: f.type, url: f.modelUrl } as FurnitureCatalogItem),
+      );
+    }
+    return Array.from(seen.values());
+  }, [furnitureItems, processedCatalog]);
 
   const filteredProducts = useMemo(() => {
     let items = products;
@@ -5773,37 +5772,17 @@ const App: React.FC = () => {
                                 <input type="file" multiple accept="image/*" className="hidden" onChange={onMaterialFilesPicked} />
                               </label>
                             )}
-                            {filteredProducts.map(product => {
-                                const isSelected = activeMeshes.some(m => selections[m]?.id === product.id);
-                                const gridCols = Math.max(1, 5 - catalogGridSize);
-                                // List View (When Grid Size Slider is max 4 -> gridCols = 1)
-                                if (gridCols === 1) {
-                                    return (
-                                        <button key={product.id} disabled={activeMeshes.length === 0} onClick={() => handleProductSelect(product)} className={`flex items-center gap-3 p-2 rounded-xl border transition-all text-left ${isSelected ? 'border-emerald-500 bg-emerald-500/5' : 'border-white/5 hover:border-white/20 bg-[#111]'} ${activeMeshes.length === 0 ? 'opacity-50 grayscale' : ''}`}>
-                                            <img src={getThumbnailUrl(product.textureUrl)} className="w-12 h-12 rounded-lg object-cover bg-neutral-900 shrink-0" alt="" />
-                                            <div className="flex-1 min-w-0">
-                                                <div className="text-[8px] font-black text-emerald-400 uppercase tracking-wider">{product.brand}</div>
-                                                <div className="text-[11px] font-bold text-white truncate">{product.name}</div>
-                                            </div>
-                                            <div className="text-right shrink-0 px-2 font-mono text-xs text-neutral-300">¥{product.pricePerUnit.toLocaleString()}</div>
-                                        </button>
-                                    );
-                                }
-                                // Grid View (Grid Size > 1)
-                                return (
-                                    <button key={product.id} disabled={activeMeshes.length === 0} onClick={() => handleProductSelect(product)} className={`group relative aspect-square md:aspect-[4/5] rounded-2xl overflow-hidden border transition-all duration-300 ${isSelected ? 'border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 'border-white/5 hover:border-white/30'} ${activeMeshes.length === 0 ? 'opacity-50 grayscale' : ''}`}>
-                                        <div className="absolute inset-0 bg-neutral-900">
-                                            <img src={getThumbnailUrl(product.textureUrl)} className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110" alt={product.name} />
-                                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/20 to-transparent opacity-80" />
-                                        </div>
-                                        <div className="absolute inset-0 p-3 flex flex-col justify-end text-left">
-                                            <div className="text-[8px] font-black text-emerald-400 uppercase tracking-wider mb-1">{product.brand}</div>
-                                            <h3 className="text-[10px] font-bold text-white leading-tight line-clamp-2 mb-1.5">{product.name}</h3>
-                                            <span className="font-mono text-xs text-neutral-300">¥{product.pricePerUnit.toLocaleString()}</span>
-                                        </div>
-                                    </button>
-                                );
-                            })}
+                            {filteredProducts.map(product => (
+                                <MaterialCard
+                                    key={product.id}
+                                    product={product}
+                                    columns={Math.max(1, 5 - catalogGridSize)}
+                                    selected={activeMeshes.some(m => selections[m]?.id === product.id)}
+                                    disabled={activeMeshes.length === 0}
+                                    onSelect={() => handleProductSelect(product)}
+                                    thumbnailUrl={getThumbnailUrl(product.textureUrl)}
+                                />
+                            ))}
                         </div>
                       ) : ( <div className="text-center py-12 text-neutral-600 text-xs font-black uppercase">素材が見つかりません</div> )
                     ) : (
@@ -5820,19 +5799,50 @@ const App: React.FC = () => {
             {effectiveCatalogTab === 'model' ? (
               <InUsePanel
                 title="使用中の3Dモデル"
-                entries={inUseModelEntries}
+                count={inUseModels.length}
                 columns={inUseColumns}
                 storageKey="arise.in-use-panel.model.v1"
                 emptyMessage="配置された3Dモデルはありません"
-              />
+              >
+                {/* カタログのタイルと同じ描画・同じ動作（押すと配置される・260731 要望③）。 */}
+                {inUseModels.map((item) => (
+                  <ModelCatalogTile
+                    key={item.id}
+                    item={item}
+                    onPick={() => handleAddFurniture(item as any)}
+                    renderThumbnail={() => (
+                      <ModelThumbnail
+                        url={item.url}
+                        name={item.name}
+                        uprightXDeg={item.modelUprightXDeg}
+                        forwardYawDeg={item.forwardYawDeg}
+                        thumbnailUrl={item.thumbnailUrl}
+                      />
+                    )}
+                  />
+                ))}
+              </InUsePanel>
             ) : (
               <InUsePanel
                 title="使用中の建材"
-                entries={inUseMaterialEntries}
+                count={inUseMaterials.length}
                 columns={inUseColumns}
                 storageKey="arise.in-use-panel.material.v1"
                 emptyMessage="適用された建材はありません"
-              />
+              >
+                {/* カタログのカードと同じ描画・同じ動作（押すと選択中の面へ適用・260731 要望③）。 */}
+                {inUseMaterials.map((product) => (
+                  <MaterialCard
+                    key={product.id}
+                    product={product}
+                    columns={inUseColumns}
+                    selected={activeMeshes.some((m) => selections[m]?.id === product.id)}
+                    disabled={activeMeshes.length === 0}
+                    onSelect={() => handleProductSelect(product)}
+                    thumbnailUrl={getThumbnailUrl(product.textureUrl)}
+                  />
+                ))}
+              </InUsePanel>
             )}
           </div>
 

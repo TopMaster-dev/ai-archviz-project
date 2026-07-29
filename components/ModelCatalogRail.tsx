@@ -20,6 +20,39 @@ export const ALL_CATEGORY = 'ALL';
 export type FurnitureCatalogRailItem = FurnitureCatalogItem & { [key: string]: unknown };
 export type FurnitureCatalogFetchStatus = 'loading' | 'ready' | 'error';
 
+/**
+ * 3Dモデル1件のタイル（260731 クライアント要望①②）。
+ *
+ * カタログと「使用中の3Dモデル」で必ず同じ見た目・同じ動作にするため、描画はここ1か所だけ。
+ * 押すとどちらからでも同じように配置される。
+ */
+export function ModelCatalogTile({
+  item,
+  onPick,
+  renderThumbnail,
+}: {
+  item: Pick<FurnitureCatalogItem, 'name'>;
+  onPick: () => void;
+  renderThumbnail: () => React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onPick}
+      title={item.name}
+      // サムネイル背景はアイボリー（260729 要望⑤・色は index.css の --thumb-bg）。
+      className="group relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-[var(--thumb-bg)] text-white transition-all hover:border-emerald-500 hover:bg-[var(--thumb-bg-hover)]"
+    >
+      <div className="absolute inset-0 opacity-90 transition-all duration-500 group-hover:scale-105 group-hover:opacity-100">
+        {renderThumbnail()}
+      </div>
+      <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 opacity-0 transition-opacity group-hover:opacity-100">
+        <span className="text-2xl font-black text-emerald-400 drop-shadow-md">+</span>
+      </div>
+    </button>
+  );
+}
+
 export function ModelCatalogRail({
   items,
   categories,
@@ -188,27 +221,20 @@ export function ModelCatalogRail({
             </button>
           )}
           {visibleItems.map((item) => (
-            <button
+            <ModelCatalogTile
               key={item.id}
-              type="button"
-              onClick={() => onPickItem(item)}
-              title={item.name}
-              // サムネイル背景はアイボリー（260729 要望⑤・色は index.css の --thumb-bg）。
-              className="group relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-[var(--thumb-bg)] text-white transition-all hover:border-emerald-500 hover:bg-[var(--thumb-bg-hover)]"
-            >
-              <div className="absolute inset-0 opacity-90 transition-all duration-500 group-hover:scale-105 group-hover:opacity-100">
-                {renderThumbnail({
+              item={item}
+              onPick={() => onPickItem(item)}
+              renderThumbnail={() =>
+                renderThumbnail({
                   url: item.url,
                   name: item.name,
                   modelUprightXDeg: item.modelUprightXDeg,
                   forwardYawDeg: item.forwardYawDeg,
                   thumbnailUrl: item.thumbnailUrl,
-                })}
-              </div>
-              <div className="absolute inset-0 flex items-center justify-center bg-emerald-500/10 opacity-0 transition-opacity group-hover:opacity-100">
-                <span className="text-2xl font-black text-emerald-400 drop-shadow-md">+</span>
-              </div>
-            </button>
+                })
+              }
+            />
           ))}
         </div>
         {visibleItems.length === 0 && selectedCategory !== UPLOAD_CATEGORY && (
