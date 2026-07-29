@@ -99,33 +99,34 @@ describe('「＋」タイル', () => {
 describe('サムネイルサイズ（建材カタログと同じ操作）', () => {
   const slider = () => screen.getByLabelText('サムネイルの大きさ') as HTMLInputElement;
 
-  it('列数は建材カタログと同じ式（5 - gridSize）で決まる', () => {
-    // 建材側は Math.max(1, 5 - catalogGridSize)。state を共有している以上、
-    // 式が違うと同じスライダー位置で2つのタブの見た目が食い違う。
-    setup({ gridSize: 1 });
-    expect(grid().style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))');
-    cleanup();
-    setup({ gridSize: 3 });
-    expect(grid().style.gridTemplateColumns).toBe('repeat(2, minmax(0, 1fr))');
-    cleanup();
-    setup({ gridSize: 4 }); // 最大＝1列（リスト相当）
-    expect(grid().style.gridTemplateColumns).toBe('1fr');
-  });
-
-  it('スライダーを右へ動かすほど列が減る（＝1枚が大きくなる）', () => {
-    // 「4→1→2→3」のように飛ぶ並びになっていないこと。
-    const cols: string[] = [];
-    for (const gridSize of [1, 2, 3, 4]) {
-      setup({ gridSize });
-      cols.push(grid().style.gridTemplateColumns);
+  it('目盛りは左から 小 → 中 → 大 → 最大（260730 クライアント要望）', () => {
+    // 建材カタログと同じ式（5 - gridSize）を使うと、左端だけが最大になり
+    // 「最大 → 小 → 中 → 大」という並びになる（あちらは1列＝リスト行＝最小のため成立している）。
+    // ここは1列＝大きなタイル1枚＝最大なので、スライダー位置から列数を決める。
+    const colsBySliderPos: string[] = [];
+    for (const sliderPos of [1, 2, 3, 4]) {
+      setup({ gridSize: SLIDER_TO_GRID[sliderPos] });
+      colsBySliderPos.push(grid().style.gridTemplateColumns);
       cleanup();
     }
-    expect(cols).toEqual([
-      'repeat(4, minmax(0, 1fr))',
-      'repeat(3, minmax(0, 1fr))',
-      'repeat(2, minmax(0, 1fr))',
-      '1fr',
+    expect(colsBySliderPos).toEqual([
+      'repeat(4, minmax(0, 1fr))', // 小
+      'repeat(3, minmax(0, 1fr))', // 中
+      'repeat(2, minmax(0, 1fr))', // 大
+      '1fr', // 最大
     ]);
+  });
+
+  it('右へ動かすほど列は必ず減る（並びが飛ばない）', () => {
+    const counts = [1, 2, 3, 4].map((sliderPos) => {
+      setup({ gridSize: SLIDER_TO_GRID[sliderPos] });
+      const css = grid().style.gridTemplateColumns;
+      cleanup();
+      return css === '1fr' ? 1 : Number(css.match(/repeat\((\d+)/)?.[1]);
+    });
+    for (let i = 1; i < counts.length; i += 1) {
+      expect(counts[i]).toBeLessThan(counts[i - 1] as number);
+    }
   });
 
   it('スライダーを動かすと親へ通知する（状態は建材カタログと共有）', () => {

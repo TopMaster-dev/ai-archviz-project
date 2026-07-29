@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { LayoutGrid, LayoutList } from 'lucide-react';
+import { LayoutGrid, Square } from 'lucide-react';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /**
@@ -53,11 +53,20 @@ export function ModelCatalogRail({
   /** 「アップロード」カテゴリの先頭に出す「＋」タイル。未指定なら出さない。 */
   onUploadModel?: () => void;
 }) {
-  // 列数は建材カタログと同じ式で出す（App 側 `Math.max(1, 5 - catalogGridSize)`）。
-  // sliderToGrid[gridToSlider[gridSize]] は往復して元に戻るだけ（恒等）なので列数にはならない。
-  // それをそのまま列数にすると 4→1→2→3 と並びが飛び、スライダーの案内（左:小さく多く→右:大きく少なく）と
-  // 逆にも見える。state を建材側と共有している以上、式も同じでなければ2つのタブで見た目が食い違う。
-  const cols = Math.max(1, 5 - gridSize);
+  /*
+   * 列数は「スライダーの位置」から決める（260730 クライアント要望: 左から 小→中→大→最大）。
+   *
+   * 建材カタログと同じ式（5 - gridSize）にしてはいけない。あちらは1列のとき
+   * 「1列のタイル」ではなく「リスト行（小さいサムネイル＋文字）」を描くため、
+   * 1列＝最小として成立している。こちらは1列＝画面いっぱいの大きなタイル＝最大なので、
+   * 同じ式を使うと目盛りの左端だけが最大になり「最大→小→中→大」という並びになる。
+   *
+   * スライダー位置 1→4列(小) / 2→3列(中) / 3→2列(大) / 4→1列(最大)。
+   * state（gridSize）は建材側と共有したままなので、どちらのタブでも
+   * 「左ほど小さく、右ほど大きい」で一致する。
+   */
+  const sliderPos = gridToSlider[gridSize] ?? 2;
+  const cols = Math.max(1, 5 - sliderPos);
 
   const visibleItems = useMemo(() => {
     if (selectedCategory === ALL_CATEGORY) return items;
@@ -86,8 +95,9 @@ export function ModelCatalogRail({
     <>
       {/* サムネ表示密度（建材カタログと同じ操作・同じ見た目にそろえる）。 */}
       <div className="mb-2 flex flex-wrap items-center justify-end gap-3">
-        <div className="flex min-w-0 items-center gap-2" title="左: 小さく多く → 右: 大きく少なく">
-          <LayoutList className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
+        {/* 左端＝細かいマス（小さく多く）、右端＝1マス（最大）。目盛りの向きと絵を一致させる。 */}
+        <div className="flex min-w-0 items-center gap-2" title="左: 小さい → 右: 最大">
+          <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
           <input
             type="range"
             min={1}
@@ -103,7 +113,7 @@ export function ModelCatalogRail({
             className="catalog-thumb-size-slider h-1 w-[88px] shrink-0 cursor-pointer accent-emerald-500"
             aria-label="サムネイルの大きさ"
           />
-          <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
+          <Square className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
         </div>
       </div>
 
