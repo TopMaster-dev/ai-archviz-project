@@ -161,3 +161,63 @@ describe('モデルを選ぶ', () => {
     expect(onPickItem).toHaveBeenCalledWith(expect.objectContaining({ id: 'c1' }));
   });
 });
+
+/**
+ * 260730 クライアント要望: 「アップロード」カテゴリを最も左に固定表示する。
+ * カテゴリが増えて右へスクロールしても、自分がアップロードしたモデルへ常に1クリックで戻れること。
+ * ＝「スクロールする側に入っていない」ことがこの機能の本体なので、そこを固定する。
+ */
+describe('「アップロード」カテゴリの左端固定', () => {
+  const scroller = () => screen.getByTestId('category-scroller');
+
+  it('スクロールする側には入らない（右へスクロールしても消えない）', () => {
+    setup();
+    const upload = screen.getByRole('button', { name: UPLOAD_CATEGORY });
+    expect(scroller().contains(upload)).toBe(false);
+  });
+
+  it('他のカテゴリはスクロールする側に入る', () => {
+    setup();
+    for (const cat of [ALL_CATEGORY, 'チェア', 'ソファ']) {
+      expect(scroller().contains(screen.getByRole('button', { name: cat }))).toBe(true);
+    }
+  });
+
+  it('カテゴリ全体の中で最も左に置かれる', () => {
+    setup();
+    const row = scroller().parentElement as HTMLElement;
+    const upload = screen.getByRole('button', { name: UPLOAD_CATEGORY });
+    expect(row.firstElementChild).toBe(upload);
+  });
+
+  it('形と大きさは他のカテゴリと同じ（色だけ緑）', () => {
+    setup();
+    const upload = screen.getByRole('button', { name: UPLOAD_CATEGORY });
+    const other = screen.getByRole('button', { name: 'チェア' });
+    // 形（角丸・余白・文字）は共通、色だけが違う。
+    for (const cls of ['rounded-xl', 'px-4', 'py-2.5', 'text-[10px]', 'font-black']) {
+      expect(upload.className).toContain(cls);
+      expect(other.className).toContain(cls);
+    }
+    expect(upload.className).toMatch(/emerald/);
+    expect(other.className).not.toMatch(/emerald/);
+  });
+
+  it('選択中でも緑のまま（白黒に反転して他と紛れない）', () => {
+    setup({ selectedCategory: UPLOAD_CATEGORY });
+    const upload = screen.getByRole('button', { name: UPLOAD_CATEGORY });
+    expect(upload.getAttribute('aria-pressed')).toBe('true');
+    expect(upload.className).toMatch(/emerald/);
+  });
+
+  it('アップロードカテゴリが無いカタログでは固定枠を出さない', () => {
+    setup({ categories: [ALL_CATEGORY, 'チェア'] });
+    expect(screen.queryByRole('button', { name: UPLOAD_CATEGORY })).toBeNull();
+  });
+
+  it('押せばそのカテゴリへ切り替わる', () => {
+    const { onSelectCategory } = setup();
+    fireEvent.click(screen.getByRole('button', { name: UPLOAD_CATEGORY }));
+    expect(onSelectCategory).toHaveBeenCalledWith(UPLOAD_CATEGORY);
+  });
+});
