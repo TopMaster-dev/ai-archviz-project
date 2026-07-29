@@ -17,6 +17,7 @@ import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { ModelCatalogRail, ModelCatalogTile, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
 import { InUsePanel } from './components/InUsePanel.js';
 import { MaterialCard } from './components/MaterialCard.js';
+import { catalogChipClass, CatalogChipRow } from './components/CatalogChips.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -5701,44 +5702,41 @@ const App: React.FC = () => {
                 </div>
                   
                 {/* Category & Brand Chips */}
+                {/*
+                  チップの行は3Dモデルカタログと共通の部品を使う（260731 クライアント要望）。
+                  形・大きさ・区切り線・スクロールバーの扱いが1か所で決まるので、
+                  タブを切り替えても見た目が変わらない（2Dビューの右レールも同じ部品を通る）。
+                */}
                 <div className="flex flex-col gap-3">
-                  <div className="flex gap-2 overflow-x-auto pb-2 no-scrollbar -mx-2 px-2">
-                    {availableCategories.length > 0 ? (
-                        availableCategories.map(cat => (
-                          <button key={cat} onClick={() => setActiveCategory(cat as any)} className={`shrink-0 px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all whitespace-nowrap border ${activeCategory === cat ? 'bg-white text-black border-white shadow-lg' : 'bg-[#111] text-neutral-500 border-white/5 hover:border-white/20 hover:text-white'}`}>
+                  <CatalogChipRow>
+                    {availableCategories.length > 0
+                      ? availableCategories.map(cat => (
+                          <button key={cat} onClick={() => setActiveCategory(cat as any)} className={catalogChipClass({ active: activeCategory === cat })}>
                             {categoryLabels[cat]?.split('(')[0] || cat}
                           </button>
                         ))
-                    ) : ( ['Floor', 'Wall', 'Ceiling'].map(cat => ( <div key={cat} className="w-20 h-9 rounded-xl bg-white/5 animate-pulse shrink-0"></div> )) )}
-                  </div>
+                      : ['Floor', 'Wall', 'Ceiling'].map(cat => ( <div key={cat} className="w-20 h-9 rounded-xl bg-white/5 animate-pulse shrink-0"></div> ))}
+                  </CatalogChipRow>
                   {/*
-                    ブランド行も3Dモデルカタログと同じ形にそろえる（260730 クライアント要望①）。
-                    「アップロード」を左端に固定し、残りだけを横スクロールさせる。カテゴリが増えても
-                    自分がアップロードした建材へ常に1クリックで戻れる。「すべてのブランド」は「ALL」へ改称。
-                    ＋建材を追加は、3Dモデル側の「＋3D追加」と同じくグリッド先頭のタイルへ移した。
+                    ブランド行。「アップロード」を左端に固定し、残りだけを横スクロールさせる。
+                    ブランドが増えても、自分がアップロードした建材へ常に1クリックで戻れる。
                   */}
-                  <div className="-mx-2 flex items-center gap-2 px-2 pb-2">
-                    <button
-                      onClick={() => setSelectedBrand(UPLOAD_BRAND_FILTER)}
-                      aria-pressed={selectedBrand === UPLOAD_BRAND_FILTER}
-                      className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${
-                        selectedBrand === UPLOAD_BRAND_FILTER
-                          ? 'bg-emerald-500 border-emerald-300 text-white shadow-[0_0_0_2px_rgba(16,185,129,0.35)]'
-                          : 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
-                      }`}
-                    >
-                      アップロード
-                    </button>
-                    <div className="h-6 w-px shrink-0 bg-white/15" aria-hidden />
-                    {/* 下余白は外側の行（pb-2）が持つ。ここにも付けると二重になり、
-                        チップの下だけ間延びして見える（260730 クライアント指摘）。 */}
-                    <div className="scroll-dark flex min-w-0 flex-1 gap-2 overflow-x-auto items-center">
-                      <button onClick={() => setSelectedBrand(null)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${!selectedBrand ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>ALL</button>
-                      {availableBrands.map(brand => (
-                        <button key={brand} onClick={() => setSelectedBrand(brand)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${selectedBrand === brand ? 'bg-white text-black border-white' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>{brand}</button>
-                      ))}
-                    </div>
-                  </div>
+                  <CatalogChipRow
+                    pinned={
+                      <button
+                        onClick={() => setSelectedBrand(UPLOAD_BRAND_FILTER)}
+                        aria-pressed={selectedBrand === UPLOAD_BRAND_FILTER}
+                        className={catalogChipClass({ active: selectedBrand === UPLOAD_BRAND_FILTER, accent: true })}
+                      >
+                        アップロード
+                      </button>
+                    }
+                  >
+                    <button onClick={() => setSelectedBrand(null)} className={catalogChipClass({ active: !selectedBrand })}>ALL</button>
+                    {availableBrands.map(brand => (
+                      <button key={brand} onClick={() => setSelectedBrand(brand)} className={catalogChipClass({ active: selectedBrand === brand })}>{brand}</button>
+                    ))}
+                  </CatalogChipRow>
                 </div>
                   
                 {/* Product Grid (Dynamic Size based on catalogGridSize) */}

@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LayoutGrid, Square } from 'lucide-react';
+import { catalogChipClass, CatalogChipRow } from './CatalogChips.js';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /**
@@ -120,16 +121,7 @@ export function ModelCatalogRail({
         type="button"
         aria-pressed={active}
         onClick={() => onSelectCategory(cat)}
-        className={`shrink-0 whitespace-nowrap rounded-xl border px-4 py-2.5 text-[10px] font-black uppercase transition-all ${
-          isUpload
-            ? // 形と大きさは他のカテゴリと同じまま、色だけ緑にする（自分の資産だと分かるように）。
-              active
-              ? 'border-emerald-300 bg-emerald-500 text-white shadow-[0_0_0_2px_rgba(16,185,129,0.35)]'
-              : 'border-emerald-500 bg-emerald-600/90 text-white hover:bg-emerald-500'
-            : active
-              ? 'border-white bg-white text-black shadow-lg'
-              : 'border-white/5 bg-[#111] text-neutral-500 hover:border-white/20 hover:text-white'
-        }`}
+        className={catalogChipClass({ active, accent: isUpload })}
       >
         {cat}
       </button>
@@ -186,21 +178,13 @@ export function ModelCatalogRail({
         カテゴリが増えて右へスクロールしても、自分がアップロードしたモデルへは常に1クリックで戻れる。
         色は他と揃えた形のまま緑にして、「自分の資産」であることが一目で分かるようにする。
       */}
-      <div className="-mx-2 mb-3 flex items-start gap-2 px-2">
-        {uploadCategory && (
-          <>
-            {renderCategoryButton(uploadCategory)}
-            <div className="h-9 w-px shrink-0 self-center bg-white/15" aria-hidden />
-          </>
-        )}
-        {/* 残りのカテゴリだけが横スクロールする。スクロールバーは隠さない
-            （隠すと「まだ右にカテゴリがある」ことに気付けない・260728 クライアント指摘）。 */}
-        <div
-          data-testid="category-scroller"
-          className="scroll-dark flex min-w-0 flex-1 gap-2 overflow-x-auto pb-2"
+      <div className="mb-3">
+        <CatalogChipRow
+          testId="category-scroller"
+          pinned={uploadCategory ? renderCategoryButton(uploadCategory) : undefined}
         >
           {scrollableCategories.map((cat) => renderCategoryButton(cat))}
-        </div>
+        </CatalogChipRow>
       </div>
 
       <div className="min-h-[200px] pb-12">
