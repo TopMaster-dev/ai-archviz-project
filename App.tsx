@@ -15,6 +15,7 @@ import { WalkMovePad } from './components/WalkMovePad.js';
 import { SketchCanvas } from './components/SketchCanvas.js';
 import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { ModelCatalogRail, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
+import { InUsePanel, type InUseEntry } from './components/InUsePanel.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -82,6 +83,14 @@ type OutsideBackgroundPreset = 'day' | 'evening' | 'night';
 /** 表示スライダー位置 1–4 → catalogGridSize（1=リスト、その右へタイル小→大） */
 const CATALOG_SLIDER_TO_GRID: Record<number, number> = { 1: 4, 2: 1, 3: 2, 4: 3 };
 const CATALOG_GRID_TO_SLIDER: Record<number, number> = { 4: 1, 1: 2, 2: 3, 3: 4 };
+
+/**
+ * ブランド絞り込みの特別値＝「自分がアップロードした建材だけ」（260730 要望①）。
+ * ブランド名では判定できない（アップロード時にメーカー名を入力できるため）。
+ * uploadToProduct が付ける id の接頭辞で判定する。
+ */
+export const UPLOAD_BRAND_FILTER = '__uploads__';
+const isUploadedProduct = (p: { id: string }): boolean => p.id.startsWith('upload-tex-');
 
 const CATALOG_SORT_OPTIONS: { value: SortOrder; label: string }[] = [
   { value: 'default', label: '標準' },
@@ -1191,6 +1200,7 @@ const App: React.FC = () => {
   // state を書き換えると、起動時（初期は2Dビュー）に建材タブの既定が潰され、
   // 3Dへ移っても二度と建材が既定に戻らなくなる。
   const effectiveCatalogTab = materialCatalogAvailable ? catalogTab : 'model';
+
   const [catalogSortMenuOpen, setCatalogSortMenuOpen] = useState(false);
   const catalogSortMenuRef = useRef<HTMLDivElement>(null);
   const [estimateDownloadMenuOpen, setEstimateDownloadMenuOpen] = useState(false);
@@ -3531,6 +3541,48 @@ const App: React.FC = () => {
     handleExportEstimateCsv();
   }, [handleExportEstimateCsv, handleExportEstimatePdf]);
 
+  /**
+   * 右レール下部「使用中」一覧の中身（260730 クライアント要望②）。
+   * 建材は面に適用済みのもの（同じ製品は1件にまとめる）、3Dモデルは配置済みの家具。
+   * カタログ側と同じ列数を使い、サムネイルの大きさをスライダーに追従させる。
+   */
+  const inUseColumns = Math.max(1, 5 - (CATALOG_GRID_TO_SLIDER[catalogGridSize] ?? 2));
+  const inUseMaterialEntries = useMemo<InUseEntry[]>(() => {
+    const seen = new Map<string, { name: string; brand?: string; textureUrl?: string }>();
+    for (const item of costBreakdown as any[]) {
+      const key = item.productId || `${item.brand}|${item.prodName}|${item.textureUrl ?? ''}`;
+      if (!seen.has(key)) seen.set(key, { name: item.prodName, brand: item.brand, textureUrl: item.textureUrl });
+    }
+    return Array.from(seen.entries()).map(([key, v]) => ({
+      key,
+      label: v.name,
+      sub: v.brand,
+      thumbnail: v.textureUrl ? (
+        <img src={getThumbnailUrl(v.textureUrl)} alt="" loading="lazy" className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-[9px] text-[var(--thumb-fg-muted)]">—</div>
+      ),
+    }));
+  }, [costBreakdown]);
+
+  const inUseModelEntries = useMemo<InUseEntry[]>(
+    () =>
+      furnitureItems.map((f) => ({
+        key: f.id,
+        label: (f as any).customName || f.name || f.type,
+        sub: (f as any).customBrand,
+        thumbnail: (
+          <ModelThumbnail
+            url={f.modelUrl}
+            name={(f as any).customName || f.name || f.type}
+            uprightXDeg={f.modelUprightXDeg}
+            forwardYawDeg={f.modelForwardYawDeg}
+          />
+        ),
+      })),
+    [furnitureItems],
+  );
+
   const filteredProducts = useMemo(() => {
     let items = products;
     // カテゴリ絞り込み。crossCategory=true（ユーザーアップロードの「共通」テクスチャ）は面のテクスチャ
@@ -3539,7 +3591,8 @@ const App: React.FC = () => {
       const allowCross = TEXTURE_CATEGORIES.includes(activeCategory);
       items = items.filter(p => p.category === activeCategory || (p.crossCategory && allowCross));
     }
-    if (selectedBrand) items = items.filter(p => p.brand === selectedBrand);
+    if (selectedBrand === UPLOAD_BRAND_FILTER) items = items.filter(isUploadedProduct);
+    else if (selectedBrand) items = items.filter(p => p.brand === selectedBrand);
 
     if (sortOrder === 'price-asc') items = [...items].sort((a, b) => a.pricePerUnit - b.pricePerUnit);
     else if (sortOrder === 'price-desc') items = [...items].sort((a, b) => b.pricePerUnit - a.pricePerUnit);
@@ -5659,15 +5712,32 @@ const App: React.FC = () => {
                         ))
                     ) : ( ['Floor', 'Wall', 'Ceiling'].map(cat => ( <div key={cat} className="w-20 h-9 rounded-xl bg-white/5 animate-pulse shrink-0"></div> )) )}
                   </div>
-                  {availableBrands.length > 0 && (
-                    <div className="flex gap-2 overflow-x-auto pb-4 no-scrollbar -mx-2 px-2 items-center">
-                      <button onClick={() => setSelectedBrand(null)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${!selectedBrand ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>すべてのブランド</button>
-                      <label className="shrink-0 h-7 px-4 rounded-full text-[9px] font-black border bg-emerald-600 border-emerald-500 text-white hover:bg-emerald-500 transition-all flex items-center cursor-pointer shadow-sm shadow-emerald-900/40">＋ 建材を追加（画像）<input type="file" multiple accept="image/*" className="hidden" onChange={onMaterialFilesPicked} /></label>
+                  {/*
+                    ブランド行も3Dモデルカタログと同じ形にそろえる（260730 クライアント要望①）。
+                    「アップロード」を左端に固定し、残りだけを横スクロールさせる。カテゴリが増えても
+                    自分がアップロードした建材へ常に1クリックで戻れる。「すべてのブランド」は「ALL」へ改称。
+                    ＋建材を追加は、3Dモデル側の「＋3D追加」と同じくグリッド先頭のタイルへ移した。
+                  */}
+                  <div className="-mx-2 flex items-center gap-2 px-2 pb-2">
+                    <button
+                      onClick={() => setSelectedBrand(UPLOAD_BRAND_FILTER)}
+                      aria-pressed={selectedBrand === UPLOAD_BRAND_FILTER}
+                      className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${
+                        selectedBrand === UPLOAD_BRAND_FILTER
+                          ? 'bg-emerald-500 border-emerald-300 text-white shadow-[0_0_0_2px_rgba(16,185,129,0.35)]'
+                          : 'bg-emerald-600/90 border-emerald-500 text-white hover:bg-emerald-500'
+                      }`}
+                    >
+                      アップロード
+                    </button>
+                    <div className="h-6 w-px shrink-0 bg-white/15" aria-hidden />
+                    <div className="scroll-dark flex min-w-0 flex-1 gap-2 overflow-x-auto pb-2 items-center">
+                      <button onClick={() => setSelectedBrand(null)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${!selectedBrand ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>ALL</button>
                       {availableBrands.map(brand => (
                         <button key={brand} onClick={() => setSelectedBrand(brand)} className={`shrink-0 h-7 px-3 rounded-full text-[9px] font-bold uppercase border transition-all flex items-center ${selectedBrand === brand ? 'bg-white text-black border-white' : 'bg-transparent border-white/10 text-neutral-500 hover:text-white'}`}>{brand}</button>
                       ))}
                     </div>
-                  )}
+                  </div>
                 </div>
                   
                 {/* Product Grid (Dynamic Size based on catalogGridSize) */}
@@ -5676,8 +5746,10 @@ const App: React.FC = () => {
                         <div className="grid grid-cols-2 gap-3">{[1,2,3,4].map(i => <div key={i} className="aspect-square rounded-2xl bg-white/5 animate-pulse"></div>)}</div>
                     ) : fetchError ? (
                         <div className="text-center py-12 bg-red-500/10 rounded-2xl border border-red-500/20"><div className="text-red-400 text-xs font-bold mb-2">⚠ 通信エラー</div></div>
-                    ) : activeCategory ? (
-                      filteredProducts.length > 0 ? (
+                    ) : (activeCategory || selectedBrand === UPLOAD_BRAND_FILTER) ? (
+                      // 「アップロード」タブは、面を選んでいなくても・まだ1件も無くても開けるようにする。
+                      // ここを閉じると、初回の建材アップロード自体ができなくなる（＋タイルがこの中にあるため）。
+                      (filteredProducts.length > 0 || selectedBrand === UPLOAD_BRAND_FILTER) ? (
                         <div
                             className="grid gap-3"
                             style={{
@@ -5687,6 +5759,18 @@ const App: React.FC = () => {
                                         : `repeat(${Math.max(1, 5 - catalogGridSize)}, minmax(0, 1fr))`,
                             }}
                         >
+                            {/* 「アップロード」を開いているときだけ、先頭に追加タイルを出す
+                                （3Dモデルカタログの「＋3D追加」と同じ扱い・260730 要望①）。 */}
+                            {selectedBrand === UPLOAD_BRAND_FILTER && (
+                              <label
+                                title="建材を追加（画像）"
+                                className="flex aspect-square cursor-pointer flex-col items-center justify-center gap-0.5 rounded-2xl border border-emerald-500 bg-emerald-600/90 text-white transition-all hover:bg-emerald-500"
+                              >
+                                <span className="text-2xl font-black leading-none">＋</span>
+                                <span className="text-[8px] font-bold leading-none">建材追加</span>
+                                <input type="file" multiple accept="image/*" className="hidden" onChange={onMaterialFilesPicked} />
+                              </label>
+                            )}
                             {filteredProducts.map(product => {
                                 const isSelected = activeMeshes.some(m => selections[m]?.id === product.id);
                                 const gridCols = Math.max(1, 5 - catalogGridSize);
@@ -5730,6 +5814,24 @@ const App: React.FC = () => {
                   </>
                 )}
             </div>
+            {/* 使用中の一覧（カタログの下・タブに追従・260730 クライアント要望②）。 */}
+            {effectiveCatalogTab === 'model' ? (
+              <InUsePanel
+                title="使用中の3Dモデル"
+                entries={inUseModelEntries}
+                columns={inUseColumns}
+                storageKey="arise.in-use-panel.model.v1"
+                emptyMessage="配置された3Dモデルはありません"
+              />
+            ) : (
+              <InUsePanel
+                title="使用中の建材"
+                entries={inUseMaterialEntries}
+                columns={inUseColumns}
+                storageKey="arise.in-use-panel.material.v1"
+                emptyMessage="適用された建材はありません"
+              />
+            )}
           </div>
 
         </aside>
