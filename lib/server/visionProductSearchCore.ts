@@ -100,6 +100,14 @@ export function mergeResolvedIntoRecommendations(
 const MAX_CANDIDATES = 3;
 
 /**
+ * 取得を試す候補の数（260731）。提示するのは MAX_CANDIDATES 件だが、
+ * 開けなかったページは出さない方針にしたため、余分に集めておかないと
+ * 「候補が1件だけ」「0件」になりやすい。落ちたぶんはここから埋める。
+ * 増やすほど外部への取得が増える（1件あたり最大4秒・同時4本）ので、2倍強に留める。
+ */
+const CANDIDATE_POOL = 7;
+
+/**
  * 「似ている画像」を何枚まで再検索するか（260729）。
  * 1枚につき Vision 1回ぶんの費用がかかるので、増やすほど線形に高くなる。
  * 2枚あれば候補3件はたいてい埋まるので、既定は 2。
@@ -179,16 +187,80 @@ function isNonProductHost(url: string): boolean {
  * 並びは matchRank（完全一致→部分一致）優先。同一ホストは1件までにして、
  * 同じ通販サイトの色違い・サイズ違いで候補が埋まるのを防ぐ。
  */
+/**
+ * 「同じ商品」を見分けるための鍵（260731 クライアント指摘「複数出るが同じ商品」）。
+ *
+ * ホストだけで重複を消していたため、同じソファが楽天・Amazon・Yahoo に載っていると
+ * 別ホスト＝別候補として3枠すべてを埋めてしまい、選択肢として機能していなかった。
+ *
+ * 転売・再販ページはメーカーの同じ商品写真をそのまま使っていることが多い。
+ * Vision はその一致画像のURLを返すので、画像の同一性が「同じ商品」の最も強い手掛かりになる。
+ * 併せてタイトル完全一致も見る（記号や空白だけの違いは吸収する）。
+ *
+ * 判定は必ず保守的に。取りこぼし（同じ商品が2つ出る）より、
+ * 別商品を誤って1つにまとめて隠す方が害が大きい。だから曖昧一致はしない。
+ */
+function candidateKeys(p: VisionMatchingPage): string[] {
+  const keys: string[] = [`host:${hostOf(p.url)}`];
+  if (p.imageUrl) {
+    try {
+      const u = new URL(p.imageUrl);
+      const file = u.pathname.split('/').filter(Boolean).pop() ?? '';
+      // クエリ（サイズ・書式）は無視する。同じ写真が ?w=800 付きで配られることが多い。
+      if (file) keys.push(`img:${u.hostname.replace(/^www\./i, '').toLowerCase()}/${file.toLowerCase()}`);
+    } catch {
+      /* 壊れたURLは画像鍵を作らない */
+    }
+  }
+  const title = (p.title ?? '')
+    .replace(/[\s　]+/g, ' ')
+    .replace(/[【】\[\]（）()｜|/,、。・]/g, '')
+    .trim()
+    .toLowerCase();
+  if (title.length >= 8) keys.push(`title:${title}`);
+  return keys;
+}
+
+/** 比較用にタイトルを均す（記号・空白の差を吸収する）。 */
+function normalizeTitle(raw: string | undefined): string {
+  return (raw ?? '')
+    .replace(/[\s　]+/g, ' ')
+    .replace(/[【】\[\]（）()｜|/,、。・]/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * 片方がもう片方を含んでいれば「同じ商品」とみなす長さの下限。
+ *
+ * 国内ECは「【送料無料】カリモク Kチェア」のように、同じ商品名へ販促文字列を前置しがち。
+ * 完全一致だけでは、この定番パターンを1件にまとめられない。
+ * 一方で短い語（「椅子」等）で包含判定をすると別商品まで消えるので、十分長いときだけ許す。
+ */
+const TITLE_CONTAINMENT_MIN = 12;
+
 export function pickVisualCandidates(pages: VisionMatchingPage[], max = MAX_CANDIDATES): VisionMatchingPage[] {
-  const seenHost = new Set<string>();
+  const seen = new Set<string>();
+  const acceptedTitles: string[] = [];
   const out: VisionMatchingPage[] = [];
   // matchRank 降順（同順位は Vision の順序を維持＝安定ソート）。
   const ordered = [...(pages ?? [])].sort((a, b) => (b.matchRank ?? 0) - (a.matchRank ?? 0));
   for (const p of ordered) {
     if (!p?.url || isNonProductHost(p.url)) continue;
-    const h = hostOf(p.url);
-    if (seenHost.has(h)) continue;
-    seenHost.add(h);
+    const keys = candidateKeys(p);
+    if (keys.some((k) => seen.has(k))) continue;
+
+    // 販促文字列の前置き違い（【送料無料】…）を吸収するため、包含関係も見る。
+    const title = normalizeTitle(p.title);
+    const duplicateTitle =
+      title.length >= TITLE_CONTAINMENT_MIN &&
+      acceptedTitles.some(
+        (t) => t.length >= TITLE_CONTAINMENT_MIN && (t.includes(title) || title.includes(t)),
+      );
+    if (duplicateTitle) continue;
+
+    for (const k of keys) seen.add(k);
+    if (title) acceptedTitles.push(title);
     out.push(p);
     if (out.length >= max) break;
   }
@@ -213,20 +285,32 @@ export function buildCandidateRecommendations(
     // requestedUrl（渡した元URL）で引く。リダイレクトで finalUrl が変わるため finalUrl では引けない。
     if (r.requestedUrl) byUrl.set(r.requestedUrl, r);
   }
-  return pages.map((p) => {
+  return pages.flatMap((p) => {
     const r = byUrl.get(p.url);
-    const detailed = !!r && r.source !== 'unresolved';
-    return {
+    /*
+     * 【260731 クライアント指摘「リンク切れ」の修正】
+     * 実際に開けたページだけをカードにする。開けなかったURLは出さない。
+     *
+     * 以前は `productUrl: r?.finalUrl ?? p.url` と書いており、取得に失敗しても
+     * Vision が返した未検証のURLをそのままリンクにしていた。これが404の正体。
+     * 「詳細が取れなくても候補を落とすな」は "価格や品番が取れない" 場合の話であって、
+     * "ページに到達できない" 場合まで含めてはいけなかった。リンクの無い候補は
+     * 利用者にとって手掛かりにならず、切れたリンクはもっと悪い。
+     * 落ちたぶんは呼び出し側が広めに集めた候補で埋める。
+     */
+    if (!r) return [];
+    const detailed = r.source !== 'unresolved';
+    return [{
       // 名称はページから取れた商品名 → ページタイトル → Vision のタイトルの順。
-      name: (detailed ? r?.name : '') || r?.pageTitle || p.title || '',
-      brand: detailed ? r?.brand : undefined,
-      modelNumber: detailed ? r?.sku : undefined,
-      price: detailed ? r?.price : undefined,
-      // 到達確認できていればその最終URL、できていなければ Vision のURL（表示はするが未確認）。
-      productUrl: r?.finalUrl ?? p.url,
+      name: (detailed ? r.name : '') || r.pageTitle || p.title || '',
+      brand: detailed ? r.brand : undefined,
+      modelNumber: detailed ? r.sku : undefined,
+      price: detailed ? r.price : undefined,
+      // 必ず「実際に到達できた最終URL」。ここへ未検証のURLを入れてはいけない。
+      productUrl: r.finalUrl,
       // 見た目の根拠そのもの。ページ側の画像しか無い場合のみそちらへ退く。
-      imageUrl: p.imageUrl ?? r?.imageUrl,
-      availability: detailed ? r?.availability : undefined,
+      imageUrl: p.imageUrl ?? r.imageUrl,
+      availability: detailed ? r.availability : undefined,
       reason:
         p.matchRank === 2
           ? '画像が完全に一致したページ'
@@ -236,7 +320,7 @@ export function buildCandidateRecommendations(
       // 「確認済み」は商品ページとして中身まで取れたものだけ。
       // 見た目一致だけの候補は未確認として出す（バッジで区別する）。
       verified: detailed,
-    };
+    }];
   });
 }
 
@@ -299,7 +383,8 @@ export async function runVisionProductSearch(params: {
      *   Gemini の役割は本文（reply）を書くことだけに限定し、候補の取捨選択はさせない。
      *   キーワード検索による水増しは行わない（要望）。
      */
-    let candidatePages = pickVisualCandidates(findings.pages, MAX_CANDIDATES);
+    // 提示は3件だが、開けなかったページは出さないので多めに集めておく（260731）。
+    let candidatePages = pickVisualCandidates(findings.pages, CANDIDATE_POOL);
 
     /*
      * 【260729・重要】1段目だけでは AI 生成画像に対して候補が出ない。
@@ -316,7 +401,7 @@ export async function runVisionProductSearch(params: {
      * 「見た目の一致を最優先」という方針は保たれる（クライアント要望の趣旨どおり）。
      */
     let expandedFrom = 0;
-    if (candidatePages.length < MAX_CANDIDATES && findings.similarImageUrls.length > 0) {
+    if (candidatePages.length < CANDIDATE_POOL && findings.similarImageUrls.length > 0) {
       const seeds = findings.similarImageUrls.slice(0, MAX_SIMILAR_EXPANSIONS);
       const expansions = await Promise.all(
         seeds.map(async (imageUri) => {
@@ -328,26 +413,27 @@ export async function runVisionProductSearch(params: {
         }),
       );
       expandedFrom = seeds.length;
-      candidatePages = pickVisualCandidates([...findings.pages, ...expansions.flat()], MAX_CANDIDATES);
+      candidatePages = pickVisualCandidates([...findings.pages, ...expansions.flat()], CANDIDATE_POOL);
     }
 
     console.info(
-      '[visionProductSearch] pages=%d similar=%d expandedFrom=%d candidates=%d',
+      '[visionProductSearch] pages=%d similar=%d expandedFrom=%d pool=%d',
       findings.pages.length,
       findings.similarImageUrls.length,
       expandedFrom,
       candidatePages.length,
     );
 
-    // 詳細（価格・品番・メーカー）は取れれば付ける、取れなくても候補は落とさない。
-    // 到達確認だけは通すのでリンク切れは出ない（要望「リンクさえあれば詳細は自分で入れる」）。
+    // 価格・品番が取れなくても候補は落とさない。ただし「ページに到達できたこと」は必須。
+    // 到達できなかったURLはカードにしない（＝リンク切れを出さない・260731 クライアント指摘）。
     const resolved = await resolveProductsFromUrls(
       candidatePages.map((p) => p.url),
-      { keepUnresolved: true, limit: Math.max(6, MAX_CANDIDATES) },
+      // 同時本数を候補数に合わせ、待ち時間が増えないようにする（既定4だと7件で2巡＝最悪8秒）。
+      { keepUnresolved: true, limit: CANDIDATE_POOL, concurrency: CANDIDATE_POOL },
     );
 
-    // Vision の一致順を保ったまま、取れた詳細を重ねて商品カードにする。
-    const recommendations = buildCandidateRecommendations(candidatePages, resolved);
+    // Vision の一致順を保ったまま、開けたページだけをカードにし、先頭から3件を出す。
+    const recommendations = buildCandidateRecommendations(candidatePages, resolved).slice(0, MAX_CANDIDATES);
 
     const { reply, usage } = await generateVisionProductReply(params.geminiKey, {
       imageDataUrl,

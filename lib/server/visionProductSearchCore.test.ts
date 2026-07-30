@@ -132,18 +132,29 @@ describe('buildCandidateRecommendations（詳細が取れなくても候補を�
     expect(out[0].imageUrl).toBe('https://img.jp/matched.jpg');
   });
 
-  it('ページを1件も開けなくても、Vision の候補はそのまま出す', () => {
+  it('開けなかったページはカードにしない（リンク切れを出さない・260731 クライアント指摘）', () => {
+    // 以前は到達できなくても Vision の未検証URLをそのままリンクにしていた。これが404の正体。
+    // 「詳細が取れなくても落とすな」は価格・品番の話で、到達できないページは対象外。
     const out = buildCandidateRecommendations([page('https://shop.jp/1', 1, 'https://img.jp/c.jpg')], []);
-    expect(out).toHaveLength(1);
-    expect(out[0].productUrl).toBe('https://shop.jp/1');
-    expect(out[0].imageUrl).toBe('https://img.jp/c.jpg');
-    expect(out[0].verified).toBe(false);
+    expect(out).toEqual([]);
+  });
+
+  it('提示するURLは必ず到達できた最終URL（Vision の元URLではない）', () => {
+    const out = buildCandidateRecommendations(
+      [page('https://shop.jp/1', 2)],
+      [{ requestedUrl: 'https://shop.jp/1', finalUrl: 'https://shop.jp/1/final', name: 'A', source: 'unresolved' } as any],
+    );
+    expect(out[0].productUrl).toBe('https://shop.jp/1/final');
   });
 
   it('並び順は Vision の一致順のまま（詳細が取れた方を先に繰り上げない）', () => {
     const out = buildCandidateRecommendations(
       [page('https://a.jp/1', 2), page('https://b.jp/1', 1)],
-      [{ requestedUrl: 'https://b.jp/1', finalUrl: 'https://b.jp/1', name: '詳細あり', source: 'json-ld' } as any],
+      [
+        // どちらも到達はできている。b だけ商品情報まで取れた、という状況。
+        { requestedUrl: 'https://a.jp/1', finalUrl: 'https://a.jp/1', name: '', source: 'unresolved' } as any,
+        { requestedUrl: 'https://b.jp/1', finalUrl: 'https://b.jp/1', name: '詳細あり', source: 'json-ld' } as any,
+      ],
     );
     expect(out.map((r) => r.productUrl)).toEqual(['https://a.jp/1', 'https://b.jp/1']);
   });
@@ -197,5 +208,73 @@ describe('AI生成画像で1段目が空になるケース', () => {
 
   it('候補が0件でも例外にはならない（カードは出ないがコメントは返す）', () => {
     expect(buildCandidateRecommendations([], [])).toEqual([]);
+  });
+});
+
+/**
+ * 260731 クライアント指摘「複数種類表示されるものが同じ商品ということがある（選択肢として機能していない）」。
+ *
+ * ホストだけで重複を消していたため、同じ商品が楽天・Amazon・Yahoo に載っていると
+ * 別ホスト＝別候補として3枠を埋めてしまっていた。
+ * 転売ページはメーカーの同じ写真を使うことが多いので、一致画像の同一性で見分ける。
+ */
+describe('同じ商品の重複排除', () => {
+  const p = (url: string, imageUrl?: string, title?: string) => ({
+    title: title ?? url,
+    url,
+    imageUrl,
+    matchRank: 1 as const,
+  });
+
+  it('別サイトでも同じ商品写真なら1件にまとめる', () => {
+    const out = pickVisualCandidates(
+      [
+        p('https://rakuten.co.jp/item/1', 'https://img.maker.jp/sofa-a.jpg'),
+        p('https://amazon.co.jp/dp/2', 'https://img.maker.jp/sofa-a.jpg'),
+        p('https://shopping.yahoo.co.jp/3', 'https://img.maker.jp/sofa-a.jpg'),
+        p('https://other.jp/4', 'https://img.maker.jp/sofa-b.jpg'),
+      ],
+      3,
+    );
+    expect(out.map((x) => x.url)).toEqual(['https://rakuten.co.jp/item/1', 'https://other.jp/4']);
+  });
+
+  it('画像URLのサイズ指定（クエリ）が違っても同じ写真とみなす', () => {
+    const out = pickVisualCandidates(
+      [
+        p('https://a.jp/1', 'https://img.maker.jp/sofa.jpg?w=800'),
+        p('https://b.jp/2', 'https://img.maker.jp/sofa.jpg?w=200&fm=webp'),
+      ],
+      3,
+    );
+    expect(out).toHaveLength(1);
+  });
+
+  it('タイトルが実質同じなら1件にまとめる（記号・空白の違いは無視）', () => {
+    const out = pickVisualCandidates(
+      [
+        p('https://a.jp/1', undefined, '【送料無料】カリモク Kチェア 2人掛け'),
+        p('https://b.jp/2', undefined, 'カリモク Kチェア 2人掛け'),
+      ],
+      3,
+    );
+    expect(out).toHaveLength(1);
+  });
+
+  it('別商品は絶対にまとめない（隠す方が害が大きい）', () => {
+    const out = pickVisualCandidates(
+      [
+        p('https://a.jp/1', 'https://img.jp/chair.jpg', 'チェアA'),
+        p('https://b.jp/2', 'https://img.jp/sofa.jpg', 'ソファB'),
+        p('https://c.jp/3', 'https://img.jp/table.jpg', 'テーブルC'),
+      ],
+      3,
+    );
+    expect(out).toHaveLength(3);
+  });
+
+  it('短すぎるタイトルは鍵にしない（偶然の一致で別商品を消さない）', () => {
+    const out = pickVisualCandidates([p('https://a.jp/1', undefined, '椅子'), p('https://b.jp/2', undefined, '椅子')], 3);
+    expect(out).toHaveLength(2);
   });
 });
