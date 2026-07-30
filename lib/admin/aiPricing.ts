@@ -48,7 +48,24 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   // 専用エンジン（Replicate/Bria 系）: 従量制。per-call の暫定単価（要実測更新）。
   bria: { perCallUsd: 0.01, provisional: true },
   replicate: { perCallUsd: 0.01, provisional: true },
+  /*
+   * Cloud Vision API（「画像から商品を特定」・260731 クライアント要望②）。
+   *
+   * Gemini と違いトークンではなく「ユニット（＝画像1枚×機能1つ）」課金。
+   * WEB_DETECTION は他機能（$1.50/1,000）より高く $3.50/1,000 ユニット。
+   * ※月1,000ユニットまでは無料枠のため、ここで出る金額は無料枠を引く前の総額。
+   *   実請求は「(当月ユニット数 − 1,000) × 単価」になる（表示側で注記する）。
+   * ※1回の操作で複数ユニットを消費し得る（1段目＋類似画像の再検索・最大 1+2 ユニット）。
+   *   その実回数を image_count に記録するので、ここは1ユニットあたりの単価にする。
+   */
+  'cloud-vision-web-detection': { perCallUsd: 0.0035 },
 };
+
+/** Cloud Vision の記録に使うモデルID（記録側と単価表・表示のズレを防ぐため定数化）。 */
+export const CLOUD_VISION_MODEL = 'cloud-vision-web-detection';
+
+/** Cloud Vision の月次無料枠（ユニット）。表示の注記に使う。 */
+export const CLOUD_VISION_FREE_UNITS_PER_MONTH = 1000;
 
 /** モデルIDの前方一致で単価を引く（最長一致を優先＝'gemini-3-pro-image' が 'gemini-3-pro' に負けない）。 */
 export function priceForModel(model: string | null | undefined): ModelPrice | null {

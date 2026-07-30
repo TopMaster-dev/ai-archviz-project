@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, ThumbsDown, ThumbsUp, X } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
+import { recordAiFeedback } from '../lib/db/feedback.js';
 import { downscaleDataUrlIfNeeded } from '../utils/downscaleDataUrl.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import {
@@ -40,9 +41,18 @@ type Props = {
 /** 書き出し完了後に保持するダウンロード対象（再ダウンロード用・260625 #4）。 */
 type ExportResult = { url: string; fileName: string; kind: 'preview' | 'hiRes' };
 
-// 書き出しの選択肢を「高解像度画像（最高解像度＋AI高精細化）」「プレビュー画像（そのまま）」の2択に整理（260725・クライアント要望）。
-// 複数DPI・用紙(A3/A4)の選択は廃止（DPIはトークン消費が変わらないため常に最高解像度に固定・用紙の白帯はパースの見栄えを損なうため削除）。
-type ExportMode = 'hires' | 'preview';
+/*
+ * 書き出しの選択肢（260731 クライアント指摘「白かったカウンターが木目に変わった」の対応で3択へ）。
+ *
+ * 従来は 'hires'（AI精細化）と 'preview'（等倍そのまま）の2択で、しかも既定が 'hires' だった。
+ * つまり「印刷用の大きさが欲しい」だけでも必ずAIが画像全体を描き直す経路しか無く、
+ * 描き直しである以上、白い天板に木目が入るような改変は原理的に避けられなかった。
+ *
+ * そこで「大きさは欲しいが内容は1ピクセルも変えたくない」場合の逃げ道として
+ * 'hires-exact'（決定論の拡大のみ・AIを通さない）を追加し、これを既定にする。
+ * AI精細化は、ぼけた画像を積極的に描き起こしたいときだけ選ぶオプトインへ降格する。
+ */
+type ExportMode = 'hires-exact' | 'hires' | 'preview';
 
 export function HighResExportDialog({
   open,
@@ -59,12 +69,31 @@ export function HighResExportDialog({
   const showHiResLimit = ENABLE_FREE_PLAN_HIRES_DL_LIMIT && isFreePlan;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 既定は「高解像度画像」（AI高精細化オン）。テストマーケでは高精細を既定にする（クライアント要望・260725）。
-  const [mode, setMode] = useState<ExportMode>('hires');
+  // 既定は「高解像度（AIなし）」。画面に見えているものを1ピクセルも変えずに大きくする、が既定として安全
+  // （260731・AI精細化を既定にしていたため、白い天板が木目に変わる改変が既定経路で起きていた）。
+  const [mode, setMode] = useState<ExportMode>('hires-exact');
   const [sourceNatural, setSourceNatural] = useState<{ w: number; h: number } | null>(null);
   const [sourceNaturalLoading, setSourceNaturalLoading] = useState(false);
   // #4: 書き出し完了後のダウンロード対象を保持し、保存をキャンセルしても再ダウンロードできるようにする。
   const [result, setResult] = useState<ExportResult | null>(null);
+  /*
+   * 書き出し結果の評価（260731 クライアント要望）。
+   * AIが描き直したものだけを評価対象にするため、その書き出しでAIを使ったかを覚えておく
+   * （result.kind は 'hiRes' でも、AIなし拡大の場合があるため kind だけでは判別できない）。
+   */
+  const [exportUsedAi, setExportUsedAi] = useState(false);
+  const [verdict, setVerdict] = useState<'good' | 'bad' | null>(null);
+  const sendExportFeedback = (v: 'good' | 'bad') => {
+    setVerdict(v);
+    // 記録は best-effort（失敗しても書き出しの成功体験を壊さない）。
+    void recordAiFeedback({
+      verdict: v,
+      feature: 'export',
+      promptContext: { source: 'hires-export', mode: 'ai-enhance' },
+    }).catch(() => {
+      /* 未ログイン・未構成では記録しない（UI は成功のまま） */
+    });
+  };
 
   // 書き出し比率は「元画像の実寸から最も近い対応比率」で決める（読込前は 16:9）。
   const exportRatioKey = sourceNatural
@@ -80,9 +109,11 @@ export function HighResExportDialog({
 
   useEffect(() => {
     if (open) {
-      setMode('hires');
+      setMode('hires-exact');
       setResult(null);
       setError(null);
+      setVerdict(null);
+      setExportUsedAi(false);
     }
   }, [open]);
 
@@ -148,6 +179,30 @@ export function HighResExportDialog({
       return;
     }
 
+    if (mode === 'hires-exact') {
+      /*
+       * 【高解像度（AIなし）】AIを一切通さず、canvas の高品質補間だけで印刷サイズへ拡大する。
+       * 画素は増えるが「絵」は増えない＝画面に見えているものがそのまま大きくなる。
+       * AIを呼ばないので課金もフリープランの回数消費も発生しない。
+       */
+      setBusy(true);
+      try {
+        const p = hiResPreset;
+        const fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
+        const url = await fitDataUrlToSize(src, p.width, p.height, 'cover');
+        const exactResult: ExportResult = { url, fileName, kind: 'hiRes' };
+        setExportUsedAi(false);
+        setResult(exactResult);
+        triggerDownload(exactResult);
+        onExported?.();
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'エラー');
+      } finally {
+        setBusy(false);
+      }
+      return;
+    }
+
     setBusy(true);
     try {
       const p = hiResPreset; // 最高解像度（一択）
@@ -178,6 +233,8 @@ export function HighResExportDialog({
       }
       incrementHiResDownloadCount(userId, isFreePlan); // AI生成1回につき1回だけ消費（再DLは非消費）。
       const exportResult: ExportResult = { url, fileName, kind: 'hiRes' };
+      setExportUsedAi(true);
+      setVerdict(null);
       setResult(exportResult);
       triggerDownload(exportResult);
       onExported?.();
@@ -222,18 +279,56 @@ export function HighResExportDialog({
               <p className="mt-2 text-[11px] leading-relaxed text-neutral-400">
                 ダウンロードが始まらない、または保存ダイアログをキャンセルした場合は、下の「再ダウンロード」から保存し直せます（再生成は行いません）。
               </p>
+              {/*
+                書き出し結果の評価（260731 クライアント要望）。
+                AIが描き直した結果にだけ意味があるので、AIを通していない書き出しには出さない
+                （「AIなし」に良い/悪いを付けても学習材料にならない）。
+              */}
+              {result.kind === 'hiRes' && exportUsedAi && (
+                <div className="mt-3 border-t border-white/10 pt-2">
+                  <p className="text-[11px] text-neutral-400">この書き出し結果はいかがでしたか？</p>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={verdict !== null}
+                      onClick={() => sendExportFeedback('good')}
+                      className={`flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-bold transition ${
+                        verdict === 'good'
+                          ? 'border-emerald-500 bg-emerald-500/15 text-emerald-300'
+                          : 'border-white/15 text-neutral-300 hover:bg-white/10 disabled:opacity-40'
+                      }`}
+                    >
+                      <ThumbsUp className="h-3.5 w-3.5" aria-hidden /> いいね
+                    </button>
+                    <button
+                      type="button"
+                      disabled={verdict !== null}
+                      onClick={() => sendExportFeedback('bad')}
+                      className={`flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-bold transition ${
+                        verdict === 'bad'
+                          ? 'border-rose-500 bg-rose-500/15 text-rose-300'
+                          : 'border-white/15 text-neutral-300 hover:bg-white/10 disabled:opacity-40'
+                      }`}
+                    >
+                      <ThumbsDown className="h-3.5 w-3.5" aria-hidden /> わるいね
+                    </button>
+                    {verdict && <span className="text-[11px] text-neutral-500">ありがとうございます。</span>}
+                  </div>
+                </div>
+              )}
             </div>
           )}
           {!result && (
             <>
               <p className="text-[10px] text-neutral-500 leading-relaxed">
-                書き出し方法を選んでください。「高解像度画像」は最高解像度で、AIが構図・色を維持したまま鮮明に仕上げます。「プレビュー画像」はいま画面の画像をそのまま保存します（再生成なし）。
+                書き出し方法を選んでください。内容を変えたくない場合は「高解像度（AIなし）」を選んでください。
+                「AI精細化」はAIが画像を描き直すため、ぼけは改善しやすい一方で、細部（素材の柄など）が変わることがあります。
               </p>
               <div className="space-y-2">
-                {/* 高解像度画像（最高解像度＋AI高精細化・既定） */}
+                {/* 高解像度（AIなし・忠実拡大）＝既定。260731: 内容を1ピクセルも変えない逃げ道。 */}
                 <label
                   className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                    !isPreview
+                    mode === 'hires-exact'
                       ? 'border-emerald-500/50 bg-emerald-950/30'
                       : 'border-white/10 bg-black/30 hover:border-white/20'
                   }`}
@@ -242,13 +337,41 @@ export function HighResExportDialog({
                     type="radio"
                     name="exportMode"
                     className="mt-0.5"
-                    checked={!isPreview}
+                    checked={mode === 'hires-exact'}
+                    onChange={() => setMode('hires-exact')}
+                    disabled={busy || sourceNaturalLoading}
+                  />
+                  <span>
+                    <span className="text-white font-bold">高解像度（AIなし）</span>
+                    <span className="block text-neutral-400 mt-0.5">
+                      画面の内容をそのまま印刷サイズへ拡大（描き直さないので絵柄・色は変わりません・即時）
+                    </span>
+                    <span className="font-mono text-neutral-500">
+                      {hiResPreset.width} × {hiResPreset.height} px
+                    </span>
+                  </span>
+                </label>
+                {/* 高解像度＋AI精細化（オプトイン）。 */}
+                <label
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                    mode === 'hires'
+                      ? 'border-emerald-500/50 bg-emerald-950/30'
+                      : 'border-white/10 bg-black/30 hover:border-white/20'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    className="mt-0.5"
+                    checked={mode === 'hires'}
                     onChange={() => setMode('hires')}
                     disabled={busy || sourceNaturalLoading}
                   />
                   <span>
-                    <span className="text-white font-bold">高解像度画像</span>
-                    <span className="block text-neutral-400 mt-0.5">最高解像度でAIが精細化（構図・色は維持）</span>
+                    <span className="text-white font-bold">高解像度＋AI精細化</span>
+                    <span className="block text-neutral-400 mt-0.5">
+                      AIが描き直してぼけを改善します。構図・色の維持を優先しますが、細部が変わる場合があります
+                    </span>
                     <span className="font-mono text-neutral-500">
                       {hiResPreset.width} × {hiResPreset.height} px
                     </span>
@@ -293,8 +416,11 @@ export function HighResExportDialog({
               </div>
               <ul className="list-disc list-inside space-y-1 text-neutral-400 leading-relaxed">
                 <li>アプリ内の表示は低解像のままです。印刷にはダウンロード画像を使用してください。</li>
-                {!isPreview && (
-                  <li>高解像度画像はAIで精細化するため、生成に少し時間がかかります（構図・色はプレビューを維持します）。</li>
+                {mode === 'hires' && (
+                  <li>
+                    AI精細化は画像を描き直す処理です。ぼけの改善が見込める一方、素材の柄など細部が変わることがあります。
+                    画面のとおりに出力したい場合は「高解像度（AIなし）」をお選びください。
+                  </li>
                 )}
                 <li>最終出力は印刷所・DTP の指定に合わせてください。</li>
               </ul>

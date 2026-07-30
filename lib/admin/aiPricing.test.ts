@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { priceForModel, estimateEventCostUsd, hasKnownPrice } from './aiPricing.js';
+import { priceForModel, estimateEventCostUsd, hasKnownPrice, CLOUD_VISION_MODEL, CLOUD_VISION_FREE_UNITS_PER_MONTH } from './aiPricing.js';
 
 describe('priceForModel（前方一致）', () => {
   it('完全一致・バージョン付き前方一致を解決', () => {
@@ -91,5 +91,43 @@ describe('専用エンジン（暫定単価）', () => {
   it('replicate/bria は per-call で概算（* 対象外＝単価既知）', () => {
     expect(hasKnownPrice('bria:eraser')).toBe(true);
     expect(estimateEventCostUsd({ model: 'replicate:remove-object', imageCount: 1 })).toBeCloseTo(0.01, 6);
+  });
+});
+
+/**
+ * 260731 クライアント要望②「Cloud Vision API の使用料金も管理画面で把握したい」。
+ *
+ * Gemini はトークン課金、Vision は「ユニット（画像1枚×機能1つ）」課金で単位が違う。
+ * 単価表からこのモデルが消えると、Vision は費用0として黙って集計され、
+ * 「無料枠に収まっている」のか「数えていない」のかが再び区別できなくなる。
+ */
+describe('Cloud Vision API の費用', () => {
+  it('単価が登録されている（費用0として黙殺されない）', () => {
+    expect(hasKnownPrice(CLOUD_VISION_MODEL)).toBe(true);
+  });
+
+  it('WEB_DETECTION の単価は $3.50 / 1,000 ユニット', () => {
+    expect(estimateEventCostUsd({ model: CLOUD_VISION_MODEL, imageCount: 1000 })).toBeCloseTo(3.5, 6);
+  });
+
+  it('1回の操作で複数ユニット消費しても比例して計上される', () => {
+    const one = estimateEventCostUsd({ model: CLOUD_VISION_MODEL, imageCount: 1 });
+    const three = estimateEventCostUsd({ model: CLOUD_VISION_MODEL, imageCount: 3 });
+    expect(three).toBeCloseTo(one * 3, 10);
+  });
+
+  it('トークンを持たない記録でも0円にならない（Vision はトークンを返さない）', () => {
+    expect(
+      estimateEventCostUsd({ model: CLOUD_VISION_MODEL, imageCount: 2, inputTokens: 0, outputTokens: 0 }),
+    ).toBeGreaterThan(0);
+  });
+
+  it('無料枠は月1,000ユニット（表示の注記と実装をずらさない）', () => {
+    expect(CLOUD_VISION_FREE_UNITS_PER_MONTH).toBe(1000);
+  });
+
+  it('Gemini の単価解決を壊さない（前方一致で誤ヒットしない）', () => {
+    expect(priceForModel('gemini-3-pro-image-preview')?.outputPerMTok).toBe(120);
+    expect(priceForModel(CLOUD_VISION_MODEL)?.perCallUsd).toBe(0.0035);
   });
 });

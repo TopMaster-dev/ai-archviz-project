@@ -30,7 +30,15 @@ function loadImage(url: string): Promise<HTMLImageElement | null> {
 export interface CompressBudgetOptions {
   /** 送信サイズの上限（≈ 文字数）。これ以下なら無変換で返す。 */
   maxBytes?: number;
-  /** 圧縮に入るときの最大長辺（既定 2048）。 */
+  /**
+   * 圧縮に入るときの最大長辺（既定 2048）。
+   *
+   * 【260731 クライアント指摘「編集を重ねるとぼやける」の主因】
+   * 呼び出し側が maxSide を渡していなかったため、予算を超えた瞬間に必ず長辺 2048 まで縮んでいた。
+   * 生成は 2K（16:9 で長辺≒2688px）なので、編集のたびに
+   * 「2688へ生成 → 2048へ縮小して送信 → また2688へ生成」を往復し、眠さが蓄積していた。
+   * 送信のたびに画を小さくしないよう、呼び出し側は生成解像度に合わせた値を明示すること。
+   */
   maxSide?: number;
   /** これ以上は縮めない下限長辺（既定 768）。 */
   minSide?: number;
@@ -49,7 +57,9 @@ export async function compressDataUrlToBudget(
   try {
     const img = await loadImage(dataUrl);
     if (!img || !img.naturalWidth || !img.naturalHeight) return dataUrl;
-    const qualities = [0.85, 0.75, 0.65, 0.55, 0.45];
+    // 品質は高い側から試す。寸法を落とすより先に品質で予算へ収める方が、見た目の劣化が小さい
+    // （縮小は高周波を完全に捨てるが、JPEG 0.92 の劣化は編集用の入力としてはほぼ無視できる）。
+    const qualities = [0.92, 0.85, 0.75, 0.65, 0.55, 0.45];
     const longest = Math.max(img.naturalWidth, img.naturalHeight);
     // 透過を持ちうる形式（PNG/WebP/GIF）は、まず縮小した「PNG（透過維持）」で予算に収まるか試し、収まればそのまま返す
     // （＝透過の参照画像を白箱に潰さない）。PNGで収まらない場合のみ JPEG（白で平坦化）へフォールバックする（260718 監査V3）。
@@ -66,6 +76,9 @@ export async function compressDataUrlToBudget(
       c.height = ch;
       const ctx = c.getContext('2d');
       if (!ctx) return best;
+      // 既定の 'low' は縮小時にエイリアシングが乗る。画素を捨てる側こそ高品質補間を使う（260731）。
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
       // 透過維持の PNG を先に試す（透過のまま縮小して予算に収まるなら透過を保つ）。
       if (mayHaveAlpha) {
         ctx.clearRect(0, 0, cw, ch);

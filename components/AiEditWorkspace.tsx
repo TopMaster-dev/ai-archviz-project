@@ -48,6 +48,7 @@ import {
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE, AREA_EDIT_BASE_MAX_SIDE } from '../utils/printExportSpec.js';
+import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
 import {
   ENABLE_HARMONIZE_FLATTEN,
   ENABLE_KEEP_QUALITY_ENHANCE,
@@ -231,7 +232,18 @@ type Props = {
 // 送信ペイロード予算（≈ data URL 文字数＝JSON body に載るバイト）。Vercel サーバレス関数の body 上限(~4.5MB)を
 // 超えると原因不明の失敗になるため、差し替え経路で base/参照を予算内へ圧縮し、なお超える場合だけ明確に止める（260718）。
 const SEND_REF_MAX_BYTES = 1_300_000; // 参照画像1枚の送信サイズ上限
-const SEND_BASE_MAX_BYTES = 2_200_000; // 送信用 base（合成には元画像を使うので画質に影響しない）
+/*
+ * 送信用 base の予算（≈ data URL の文字数）。
+ *
+ * 【260731 クライアント指摘「編集を重ねるとぼやける」の主因】
+ * 旧コメントは「合成には元画像を使うので画質に影響しない」と書いていたが、これは
+ * ENABLE_AREA_EDIT_FULLFRAME_ALL で全画面採用へ切り替えた 260722 以降は成立していない。
+ * いまは Gemini の出力をそのまま採用するため、ここで送る画像が最終画の唯一の情報源になる。
+ * さらに compressDataUrlToBudget の maxSide 既定が 2048 だったため、
+ * 2K 生成（長辺≒2688px）→2048へ縮小して送信→また2688へ生成、を編集のたびに往復していた。
+ * 呼び出し側で maxSide を明示し、寸法ではなく JPEG 品質で予算に収めるようにした。
+ */
+const SEND_BASE_MAX_BYTES = 2_200_000;
 const SEND_BODY_MAX_BYTES = 4_200_000; // base+参照1枚の合計がこれを超えたら明確なメッセージで停止（~4.5MB の手前）
 
 export function AiEditWorkspace({
@@ -761,7 +773,13 @@ export function AiEditWorkspace({
   const handleCropConfirm = async (cropped: string) => {
     setCropSrc(null);
     try {
-      const sized = await downscaleDataUrlIfNeeded(cropped, 1536);
+      /*
+       * 写真取込の上限を 1536 → 編集経路と同じ上限へ（260731）。
+       * 1536 に落とすと、この版がその後のすべての編集の基準寸法になるため、
+       * 4000px の写真を入れても以後ずっと 1536px 上で編集が回り続けていた
+       * （生成は 2K なので、毎回 2688→1536 の縮小が入る＝ぼやけの蓄積）。
+       */
+      const sized = await downscaleDataUrlIfNeeded(cropped, AREA_EDIT_BASE_MAX_SIDE);
       onUploadBaseImage?.(sized);
     } catch {
       /* ignore */
@@ -887,7 +905,7 @@ export function AiEditWorkspace({
       if (flags.runFinishing && !skipFinishFor1B && !furnitureRaw) {
         const finalPassBody = editedHasReplacement ? { naturalize: true } : { harmonize: true };
         try {
-          const finishBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
+          const finishBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
@@ -943,7 +961,7 @@ export function AiEditWorkspace({
       // 画質を高める（精細化・keepQuality）。高コストなので本番確定でのみ。
       if (flags.runEnhance && ENABLE_KEEP_QUALITY_ENHANCE && ctx.keepQuality) {
         try {
-          const enhanceBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES });
+          const enhanceBase = await compressDataUrlToBudget(outUrl, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
           const eres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
@@ -952,7 +970,10 @@ export function AiEditWorkspace({
           const edata = await eres.json();
           if (edata.success && edata.url) {
             void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-            outUrl = await fitDataUrlToSize(edata.url as string, baseW, baseH, 'cover');
+            // 「画質を戻す」と同じく、生成解像度を縮めずに採用する（縮めると精細化の意味が消える）。
+            const eSize = await loadImageNaturalSize(edata.url as string);
+            const eTarget = keepGeneratedSize({ w: baseW, h: baseH }, eSize);
+            outUrl = await fitDataUrlToSize(edata.url as string, eTarget.w, eTarget.h, 'cover');
           }
         } catch {
           /* 精細化失敗は元の結果をそのまま使う */
@@ -1006,7 +1027,7 @@ export function AiEditWorkspace({
       // 各範囲は base+参照1枚を1つの JSON body で送るため、最悪ケース（送信用に圧縮した base＋最大の参照1枚）で概算し、
       // 圧縮後もなお上限を超える場合は、原因不明の失敗ではなく明確なメッセージで止める（コーディネート欄と同じ考え方）。
       // ※通常は上の圧縮で収まるため、これは圧縮しきれない特殊ケースの保険。
-      const sentBaseForCheck = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES });
+      const sentBaseForCheck = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
       const maxRefBytes = objectsScaled.reduce(
         (m, o) => Math.max(m, o.imageDataUrl ? dataUrlTransmitBytes(o.imageDataUrl) : 0),
         0
@@ -1145,7 +1166,7 @@ export function AiEditWorkspace({
           const postBase = cropPx ? await cropDataUrl(base, cropPx) : base;
           // 送信用 base を予算内へ圧縮（Vercel body 上限対策・260718）。合成には呼び出し元の base（元画像）を使うので、
           // 送信を JPEG 化しても未編集域の画質・連鎖編集の劣化には影響しない（マスク内はどのみち生成し直される）。
-          const sentBase = await compressDataUrlToBudget(postBase, { maxBytes: SEND_BASE_MAX_BYTES });
+          const sentBase = await compressDataUrlToBudget(postBase, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
           const postObjects = cropPx
             ? [{ ...o, placements: remapPlacementsToCrop(o.placements, cropPx, baseW, baseH) }]
             : [o];
@@ -1268,7 +1289,7 @@ export function AiEditWorkspace({
       let oneShotDone = false;
       if (ENABLE_AREA_EDIT_ONESHOT && useFullFrame && objectsScaled.length >= 2) {
         try {
-          const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES });
+          const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
           // 複数参照を1 body に載せるため、参照画像は「(body上限−base)を参照枚数で割った予算」まで圧縮（Vercel body 上限対策）。
           const refCount = objectsScaled.filter((o) => !!o.imageDataUrl).length;
           const refBudget =
@@ -1470,7 +1491,7 @@ export function AiEditWorkspace({
     try {
       const src = await ensureDataUrl(activeVersion.outputImageDataUrl);
       const { w: baseW, h: baseH } = await loadImageNaturalSize(src);
-      const enhanceBase = await compressDataUrlToBudget(src, { maxBytes: SEND_BASE_MAX_BYTES });
+      const enhanceBase = await compressDataUrlToBudget(src, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
       const eres = await fetch('/api/ai-edit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
@@ -1486,7 +1507,11 @@ export function AiEditWorkspace({
         throw new Error(edata.error || '精細化に失敗しました。しばらくして再度お試しください。');
       }
       void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-      const fitted = await fitDataUrlToSize(edata.url as string, baseW, baseH, 'cover');
+      // 精細化は合成を伴わない（全画面1枚）ので、生成結果の解像度を縮めずに採用する。
+      // ベース寸法へ落とすと、せっかく描き起こした細部をその場で捨てることになり「押しても変わらない」の一因だった。
+      const outSize = await loadImageNaturalSize(edata.url as string);
+      const target = keepGeneratedSize({ w: baseW, h: baseH }, outSize);
+      const fitted = await fitDataUrlToSize(edata.url as string, target.w, target.h, 'cover');
       commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, fitted);
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : '精細化に失敗しました。');
@@ -1576,7 +1601,7 @@ export function AiEditWorkspace({
         ),
       );
       // 送信用 base も予算内へ圧縮（コーディネートは全体生成でマスク合成しないため、送信のJPEG化は生成し直される出力に影響しない）。
-      const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES });
+      const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
       // 添付が多い/大きいと Vercel の body 上限(~4.5MB)を超えて不明瞭なエラーになるため、送信前に合計サイズを概算して止める。
       // サイズは「送信される base64 文字数」で測る（旧実装は decode 後バイト=len*3/4 で見ており 4/3 だけ過小評価していた・監査V2）。
       const totalBytes =

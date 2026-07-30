@@ -361,10 +361,21 @@ export async function runVisionProductSearch(params: {
   if (base64.length > MAX_IMAGE_B64) {
     return { status: 400, body: { success: false, error: '画像が大きすぎます。縮小して再度お試しください。' } };
   }
+  /*
+   * Cloud Vision の消費ユニット数（260731 クライアント要望②）。
+   * Vision はトークンではなく「画像1枚×機能1つ＝1ユニット」課金で、
+   * 1回の操作でも 1段目＋類似画像の再検索で複数ユニットを消費する。
+   * 失敗した呼び出しも課金対象になり得るため、成功可否によらず投げた数を数える。
+   */
+  let visionUnits = 0;
   try {
+    visionUnits += 1;
     const first = await callVisionWebDetection(visionKey, { content: base64 });
     if (!first.ok) {
-      return { status: 502, body: { success: false, error: `画像解析に失敗しました (${first.status})` } };
+      return {
+        status: 502,
+        body: { success: false, error: `画像解析に失敗しました (${first.status})`, visionUnits },
+      };
     }
     const findings = first.findings;
 
@@ -403,6 +414,7 @@ export async function runVisionProductSearch(params: {
     let expandedFrom = 0;
     if (candidatePages.length < CANDIDATE_POOL && findings.similarImageUrls.length > 0) {
       const seeds = findings.similarImageUrls.slice(0, MAX_SIMILAR_EXPANSIONS);
+      visionUnits += seeds.length;
       const expansions = await Promise.all(
         seeds.map(async (imageUri) => {
           const r = await callVisionWebDetection(visionKey, { imageUri });
@@ -458,11 +470,16 @@ export async function runVisionProductSearch(params: {
         usage,
         model: resolveAgentModel(),
         resolvedProducts: resolved.slice(0, MAX_CANDIDATES),
+        // 管理画面で Cloud Vision の費用を出すための実消費数（260731 要望②）。
+        visionUnits,
       },
     };
   } catch (e: any) {
     // 上流エラー本文はクライアントへ返さない（内部情報の漏えい防止）。
     console.error('[visionProductSearch] failed', e?.message || e);
-    return { status: 500, body: { success: false, error: '商品特定に失敗しました。しばらくして再度お試しください。' } };
+    return {
+      status: 500,
+      body: { success: false, error: '商品特定に失敗しました。しばらくして再度お試しください。', visionUnits },
+    };
   }
 }

@@ -5,6 +5,8 @@ import { exitAdminDashboard } from '../../lib/admin/adminClient.js';
 import { ModelFilePreview } from '../ModelFilePreview.js';
 import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from '../../utils/modelUnit.js';
 import { normalizeUprightXDeg, normalizeYawDeg } from '../../utils/modelOrientation.js';
+import { DateField, PERIOD_PRESETS } from './DateRangeField.js';
+import { CLOUD_VISION_FREE_UNITS_PER_MONTH } from '../../lib/admin/aiPricing.js';
 
 /**
  * 運営（管理者）向けダッシュボード（260711・フェーズ1）。URL に ?admin を付けて開く。
@@ -40,6 +42,10 @@ interface Summary {
   reason?: string;
   totalEvents: number;
   totalCostUsd: number;
+  /** 上限に達して打ち切ったか（260731）。true のときは「一部のみ」と明示する。 */
+  truncated?: boolean;
+  /** Cloud Vision の消費ユニット数（260731 要望②）。 */
+  visionUnits?: number;
   byModel: GroupAgg[];
   byUser: GroupAgg[];
   byProject: GroupAgg[];
@@ -1163,7 +1169,8 @@ export function AdminDashboard() {
         {/* AI利用状況/費用 */}
         <section className="space-y-3">
           <div className="flex items-baseline justify-between">
-            <h2 className="text-sm font-bold text-neutral-200">AI利用状況{fromDate || toDate ? '（指定期間）' : '（直近）'}</h2>
+            {/* 「直近」ではなく全期間を数えるようになった（260731・1,000件打ち切りの修正）。 */}
+            <h2 className="text-sm font-bold text-neutral-200">AI利用状況{fromDate || toDate ? '（指定期間）' : '（全期間）'}</h2>
             {summary?.ok && (
               <span className="text-xs text-neutral-400">
                 合計 {summary.totalEvents.toLocaleString('ja-JP')} 回 ・ 概算 {yen(summary.totalCostUsd)}（{usd(summary.totalCostUsd)}）
@@ -1171,29 +1178,18 @@ export function AdminDashboard() {
             )}
           </div>
 
+          {/* 件数が上限を超えた場合は黙って少なく見せない（この不具合の再発を必ず気付けるようにする）。 */}
+          {summary?.ok && summary.truncated && (
+            <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] font-bold text-amber-300">
+              件数が上限に達したため、この集計は期間内の一部のみです。期間を短く指定してください。
+            </div>
+          )}
+
           {/* 期間フィルタ（G3）。空欄は全期間。 */}
           <Card>
             <div className="flex flex-wrap items-end gap-2">
-              <label className="text-[11px] text-neutral-400">
-                開始日
-                <input
-                  type="date"
-                  value={fromDate}
-                  max={toDate || undefined}
-                  onChange={(e) => setFromDate(e.target.value)}
-                  className="mt-0.5 block rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white outline-none focus:border-emerald-500/60"
-                />
-              </label>
-              <label className="text-[11px] text-neutral-400">
-                終了日
-                <input
-                  type="date"
-                  value={toDate}
-                  min={fromDate || undefined}
-                  onChange={(e) => setToDate(e.target.value)}
-                  className="mt-0.5 block rounded-md border border-white/15 bg-black/40 px-2 py-1 text-xs text-white outline-none focus:border-emerald-500/60"
-                />
-              </label>
+              <DateField label="開始日" value={fromDate} max={toDate || undefined} onChange={setFromDate} testId="usage-from" />
+              <DateField label="終了日" value={toDate} min={fromDate || undefined} onChange={setToDate} testId="usage-to" />
               <button
                 type="button"
                 onClick={() => void loadUsage()}
@@ -1214,6 +1210,26 @@ export function AdminDashboard() {
               )}
               <span className="text-[11px] text-neutral-500">空欄は全期間。ユーザー名をクリックすると個別の利用履歴を表示します。</span>
             </div>
+            {/* よく使う期間は1クリックで（請求確認は「今月」「先月」が大半・260731）。押した時点で集計まで走らせる。 */}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <span className="text-[11px] text-neutral-500">よく使う期間:</span>
+              {PERIOD_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  disabled={usageBusy}
+                  onClick={() => {
+                    const [f, t] = p.range(new Date());
+                    setFromDate(f);
+                    setToDate(t);
+                    void loadUsage(f, t);
+                  }}
+                  className="rounded-md border border-white/10 bg-[#111] px-2.5 py-1 text-[11px] text-neutral-300 transition hover:border-emerald-500/60 hover:text-white disabled:opacity-40"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
           </Card>
 
           {!summary?.ok ? (
@@ -1226,6 +1242,28 @@ export function AdminDashboard() {
           ) : (
             // ⑥⑧: 横スクロールを無くすため、テーブルは全幅で縦に積む（左右2分割をやめる）。
             <div className="space-y-3">
+              {/*
+                Cloud Vision は「無料枠に収まっていて表示されない」のか「そもそも数えていない」のかを
+                区別できるようにする（260731 クライアント要望②）。0回でも行として出す。
+              */}
+              <Card>
+                <h3 className="mb-2 text-sm font-bold text-emerald-300">Cloud Vision API（画像から商品を特定）</h3>
+                <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 text-xs text-neutral-200">
+                  <span>
+                    消費ユニット <b className="tabular-nums">{(summary.visionUnits ?? 0).toLocaleString('ja-JP')}</b>
+                  </span>
+                  <span className="text-neutral-400">
+                    無料枠 月 {CLOUD_VISION_FREE_UNITS_PER_MONTH.toLocaleString('ja-JP')} ユニットまで
+                  </span>
+                  <span className="text-neutral-400">
+                    超過分の単価 $3.50 / 1,000 ユニット（WEB_DETECTION）
+                  </span>
+                </div>
+                <p className="mt-1.5 text-[11px] text-neutral-500">
+                  1回の操作で複数ユニットを消費します（画像1枚の解析＋類似画像からの再検索・最大3ユニット）。
+                  上の「モデル別」に出る金額は無料枠を引く前の総額です。
+                </p>
+              </Card>
               <GroupTable title="モデル別" rows={summary.byModel} keyHeader="モデル" note={summary.note} />
               <GroupTable title="ユーザー別（上位）" rows={summary.byUser} keyHeader="ユーザー" onRowClick={(r) => void openUserDrill(r)} />
               <GroupTable

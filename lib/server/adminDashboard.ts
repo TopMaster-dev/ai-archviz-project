@@ -1,6 +1,11 @@
 import { createClient } from '@supabase/supabase-js';
 import { parseAdminEmails, isAdminEmail } from '../admin/adminAuth.js';
-import { estimateEventCostUsd, hasKnownPrice } from '../admin/aiPricing.js';
+import {
+  estimateEventCostUsd,
+  hasKnownPrice,
+  CLOUD_VISION_MODEL,
+  CLOUD_VISION_FREE_UNITS_PER_MONTH,
+} from '../admin/aiPricing.js';
 
 /**
  * 管理ダッシュボードのサーバー中核（260711・**service_role 使用のためクライアントから import 禁止**）。
@@ -169,14 +174,65 @@ export interface UsageSummary {
   reason?: string;
   totalEvents: number;
   totalCostUsd: number;
+  /** 上限に達して打ち切ったか。true のときは表示側で「一部のみ」と明示すること（黙って少なく見せない）。 */
+  truncated?: boolean;
+  /** Cloud Vision の消費ユニット数（無料枠の残りを判断するため回数のまま出す・260731 要望②）。 */
+  visionUnits?: number;
   byModel: GroupAgg[];
   byUser: GroupAgg[];
   byProject: GroupAgg[];
   note: string;
 }
 
-/** 集計・履歴で数える最大イベント件数（直近分の窓）。両者を同じ値にして合計が食い違わないようにする。 */
-const USAGE_SUMMARY_MAX_ROWS = 10000;
+/**
+ * 集計・履歴で数える最大イベント件数。両者を同じ値にして合計が食い違わないようにする。
+ *
+ * 【260731 クライアント指摘「管理画面 約24,000円 / Google Cloud 実請求 約42,000円」の原因】
+ * ここに 10000 を指定しても、実際には 1,000 件しか返っていなかった。
+ * Supabase(PostgREST) は応答行数に上限（db-max-rows・既定 1,000）を持ち、
+ * クエリ側の .limit() がそれより大きくても、上限で黙って打ち切られる。
+ * エラーにならないため、集計は「期間の全件」ではなく「直近1,000件」の合計になっていた。
+ * 実際に管理画面の表示がちょうど 1,000 回だったのが動かぬ証拠。
+ * 対策は下の fetchAllUsageRows（.range によるページング）。
+ */
+const USAGE_SUMMARY_MAX_ROWS = 200000;
+
+/**
+ * 1回の取得で確実に受け取れる行数。PostgREST の既定上限に合わせる。
+ * これより大きくしても上限で切られるだけなので、増やす意味は無い。
+ */
+const USAGE_PAGE_SIZE = 1000;
+
+/** ai_usage_events を期間で全件取得する（ページング）。打ち切った場合は truncated=true を返す。 */
+async function fetchAllUsageRows<T>(
+  sb: NonNullable<ReturnType<typeof supabaseAdmin>>,
+  columns: string,
+  opts: { from: string | null; to: string | null; userId?: string; max: number },
+): Promise<{ rows: T[]; truncated: boolean; error?: string }> {
+  const rows: T[] = [];
+  for (let offset = 0; offset < opts.max; offset += USAGE_PAGE_SIZE) {
+    const size = Math.min(USAGE_PAGE_SIZE, opts.max - offset);
+    let q = sb
+      .from('ai_usage_events')
+      .select(columns)
+      // 並びは created_at の降順。同時刻の重複を跨いでもページの境目で取りこぼさないよう、
+      // 一意な id を第2キーに入れて順序を確定させる（これが無いとページ間で行が入れ替わり得る）。
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .range(offset, offset + size - 1);
+    if (opts.userId) q = q.eq('user_id', opts.userId);
+    if (opts.from) q = q.gte('created_at', opts.from);
+    if (opts.to) q = q.lte('created_at', opts.to);
+    const { data, error } = await q;
+    if (error) return { rows, truncated: false, error: error.message };
+    const page = (data ?? []) as T[];
+    rows.push(...page);
+    // 上限より少なく返ってきた＝最後のページ。
+    if (page.length < size) return { rows, truncated: false };
+  }
+  // 上限まで読み切った＝まだ先がある可能性。黙って少なく見せない。
+  return { rows, truncated: true };
+}
 
 /** ISO 日時として妥当なら返す（不正は null＝フィルタ無効）。UI からの from/to をそのまま使わないための健全化。 */
 function toIsoOrNull(v: string | null | undefined): string | null {
@@ -242,16 +298,13 @@ export async function getUsageSummary(opts?: {
   if (!sb) return { ...empty, reason: 'server-not-configured' };
   const from = toIsoOrNull(opts?.from);
   const to = toIsoOrNull(opts?.to);
-  let q = sb
-    .from('ai_usage_events')
-    .select('user_id, project_id, feature, model, image_count, input_tokens, output_tokens, total_tokens')
-    .order('created_at', { ascending: false })
-    .limit(limit);
-  if (from) q = q.gte('created_at', from);
-  if (to) q = q.lte('created_at', to);
-  const { data, error } = await q;
-  if (error) return { ...empty, reason: error.message };
-  const rows = (data ?? []) as UsageRow[];
+  const fetched = await fetchAllUsageRows<UsageRow>(
+    sb,
+    'user_id, project_id, feature, model, image_count, input_tokens, output_tokens, total_tokens',
+    { from, to, max: limit },
+  );
+  if (fetched.error) return { ...empty, reason: fetched.error };
+  const rows = fetched.rows;
 
   const byModel = new Map<string, GroupAgg>();
   const byUser = new Map<string, GroupAgg>();
@@ -286,15 +339,30 @@ export async function getUsageSummary(opts?: {
       g.sublabel = pl.owner ?? undefined;
     }
   }
+  /*
+   * モデル別の表示名（260731 クライアント要望②）。
+   * Cloud Vision は内部IDのままだと運営に伝わらないので「Cloud Vision API」と出す。
+   * 集計キーは内部IDのまま＝単価表との対応が崩れない。
+   */
+  const modelRows = topN(byModel, 50);
+  for (const g of modelRows) {
+    if (g.key === CLOUD_VISION_MODEL) g.label = 'Cloud Vision API（画像から商品を特定）';
+  }
+  const visionUnits = byModel.get(CLOUD_VISION_MODEL)?.images ?? 0;
+
   return {
     ok: true,
     totalEvents: rows.length,
     totalCostUsd,
-    byModel: topN(byModel, 50),
+    truncated: fetched.truncated,
+    visionUnits,
+    byModel: modelRows,
     byUser: byUserTop,
     byProject: byProjectTop,
     note:
-      'Gemini（BYOK）の費用は実測トークン×公式単価の推定です（入力$2/1M・画像出力$120/1M 等）。専用エンジンは暫定単価×回数。実請求は各プロバイダが正。',
+      'Gemini（BYOK）の費用は実測トークン×公式単価の推定です（入力$2/1M・画像出力$120/1M 等）。専用エンジンは暫定単価×回数。' +
+      `Cloud Vision はユニット課金（WEB_DETECTION $3.50/1,000）で、上記の金額は無料枠を引く前の総額です（月 ${CLOUD_VISION_FREE_UNITS_PER_MONTH.toLocaleString('ja-JP')} ユニットまで無料）。` +
+      '実請求は各プロバイダが正。',
   };
 }
 
@@ -334,17 +402,7 @@ export async function getUserUsageHistory(
   const displayLimit = Math.min(2000, Math.max(1, opts?.limit ?? 500));
   const from = toIsoOrNull(opts?.from);
   const to = toIsoOrNull(opts?.to);
-  let q = sb
-    .from('ai_usage_events')
-    .select('created_at, feature, model, image_count, input_tokens, output_tokens, total_tokens')
-    .eq('user_id', id)
-    .order('created_at', { ascending: false })
-    .limit(USAGE_SUMMARY_MAX_ROWS);
-  if (from) q = q.gte('created_at', from);
-  if (to) q = q.lte('created_at', to);
-  const { data, error } = await q;
-  if (error) return { ok: false, reason: error.message, ...base };
-  const rows = (data ?? []) as {
+  const fetched = await fetchAllUsageRows<{
     created_at: string | null;
     feature: string | null;
     model: string | null;
@@ -352,7 +410,14 @@ export async function getUserUsageHistory(
     input_tokens: number | null;
     output_tokens: number | null;
     total_tokens: number | null;
-  }[];
+  }>(sb, 'created_at, feature, model, image_count, input_tokens, output_tokens, total_tokens', {
+    from,
+    to,
+    userId: id,
+    max: USAGE_SUMMARY_MAX_ROWS,
+  });
+  if (fetched.error) return { ok: false, reason: fetched.error, ...base };
+  const rows = fetched.rows;
   // 合計はウィンドウ内の全件で算出（集計側と一致）。
   let totalCostUsd = 0;
   for (const r of rows) {

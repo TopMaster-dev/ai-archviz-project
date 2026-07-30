@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Check, Copy, FileText, Loader2, MessageCircle, Paperclip, Search, Send, X, Plus } from 'lucide-react';
 import { geminiAuthHeaders } from '../lib/byok.js';
 import { recordAiUsage } from '../lib/db/aiUsage.js';
+import { CLOUD_VISION_MODEL } from '../lib/admin/aiPricing.js';
 import { ensureDataUrl } from '../lib/db/aiRenderStorage.js';
 import { isReadableAttachment } from '../lib/agentAttachments.js';
 import { isOutOfStock } from '../lib/productExtract.js';
@@ -198,6 +199,21 @@ export function AgentChatPanel({
    * 利用者には「Unexpected token 'A' ... is not valid JSON」という無意味な文言が出ていた。
    * クライアント側でも打ち切り、非JSONは日本語のメッセージに変換する。
    */
+  /**
+   * Cloud Vision の消費ユニットを記録する（260731 クライアント要望②）。
+   *
+   * Gemini はトークン、Vision は「ユニット（画像1枚×機能1つ）」課金で単位が違うため、
+   * トークンではなく image_count に実消費ユニット数を入れ、モデルIDで単価表を引かせる。
+   * 「無料枠に収まっているから見えないだけ」なのか「そもそも数えていない」のかを
+   * 区別できるようにするのが目的なので、0件でも呼ばれた事実は残す必要がある——
+   * ただし 0 ユニットなら記録すべき費用も無いため、その場合だけ何もしない。
+   */
+  const recordVisionUnits = (units: unknown) => {
+    const n = typeof units === 'number' && Number.isFinite(units) ? Math.max(0, Math.floor(units)) : 0;
+    if (n <= 0) return;
+    void recordAiUsage({ feature: 'agent', model: CLOUD_VISION_MODEL, imageCount: n });
+  };
+
   const postAgent = async (payload: Record<string, unknown>): Promise<any> => {
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), 55_000); // 関数上限より少し手前
@@ -472,6 +488,8 @@ export function AgentChatPanel({
         prompt: userLine,
       });
       if (data.disabled) throw new Error('画像からの商品特定機能は現在無効です（運営設定）。通常のチャットでご相談ください。');
+      // Cloud Vision の消費は「失敗しても課金され得る」ので、成功判定より前に記録する（260731 要望②）。
+      recordVisionUnits(data.visionUnits);
       if (!data.success) throw new Error(data.error || '商品の特定に失敗しました');
       void recordAiUsage({ feature: 'agent', usage: data.usage, model: data.model, imageCount: 1 });
       // 候補はサーバが Vision の画像一致順で確定して返す（260729 クライアント要望）。
