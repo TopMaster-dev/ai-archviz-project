@@ -21,6 +21,31 @@ export const CATALOG_PAD_X = 'px-6 md:px-8';
 export const CATALOG_PAD_B = 'pb-6 md:pb-8';
 
 /**
+ * カタログ／使用中パネルのグリッド列（260731 クライアント指摘「横スクロールを出さない」）。
+ *
+ * 1列のときに `'1fr'` と書いてはいけない。`1fr` は `minmax(auto, 1fr)` の略で、
+ * その `auto` は「中身の最小幅」を意味する。建材名には
+ * `gigHy6rFTqaHfCMoKbZGfKg11IFiPsXK56bfCLGl` のような改行できない長い文字列が入るため、
+ * 列がその幅まで広がり、パネルからはみ出して横スクロールバーが出る。
+ * `minmax(0, 1fr)` にすれば、列は必ず親の幅に収まり、あふれる分はカード側で省略される。
+ *
+ * ※カード（グリッドの子）にも min-w-0 が要る。グリッドの子は既定が min-width:auto ＝
+ *   中身の最小幅で、列を狭めても子自身がはみ出すため。
+ */
+export function catalogGridColumns(columns: number): string {
+  return `repeat(${Math.max(1, columns)}, minmax(0, 1fr))`;
+}
+
+/**
+ * 縦だけスクロールする箱のクラス。
+ *
+ * `overflow-y-auto` だけでは足りない。CSS では片方の軸に `visible` 以外を指定すると、
+ * もう片方の `visible` は `auto` に計算される＝1px でもあふれると横スクロールバーが出る。
+ * 横は明示的に閉じること。
+ */
+export const CATALOG_SCROLL_Y = 'scroll-dark overflow-y-auto overflow-x-hidden';
+
+/**
  * チップのクラス。
  * @param active 選択中か。
  * @param accent 「アップロード」など、常に緑で目立たせる枠か。

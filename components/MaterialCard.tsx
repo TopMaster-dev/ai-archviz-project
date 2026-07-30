@@ -36,13 +36,15 @@ export function MaterialCard({
         disabled={disabled}
         onClick={onSelect}
         title={product.name}
-        className={`flex items-center gap-3 rounded-xl border p-2 text-left transition-all ${
+        // min-w-0 が無いと、グリッドの子は既定の min-width:auto ＝「中身の最小幅」で場所を取り、
+        // 品番のような改行できない長い名前で親からはみ出す（＝横スクロールが出る）。
+        className={`flex min-w-0 items-center gap-3 rounded-xl border p-2 text-left transition-all ${
           selected ? 'border-emerald-500 bg-emerald-500/5' : 'border-white/5 bg-[#111] hover:border-white/20'
         } ${disabled ? 'opacity-50 grayscale' : ''}`}
       >
         <img src={thumbnailUrl} className="h-12 w-12 shrink-0 rounded-lg bg-neutral-900 object-cover" alt="" />
         <div className="min-w-0 flex-1">
-          <div className="text-[8px] font-black uppercase tracking-wider text-emerald-400">{product.brand}</div>
+          <div className="truncate text-[8px] font-black uppercase tracking-wider text-emerald-400">{product.brand}</div>
           <div className="truncate text-[11px] font-bold text-white">{product.name}</div>
         </div>
         <div className="shrink-0 px-2 text-right font-mono text-xs text-neutral-300">{price}</div>
@@ -56,7 +58,7 @@ export function MaterialCard({
       disabled={disabled}
       onClick={onSelect}
       title={product.name}
-      className={`group relative aspect-square overflow-hidden rounded-2xl border transition-all duration-300 md:aspect-[4/5] ${
+      className={`group relative aspect-square min-w-0 overflow-hidden rounded-2xl border transition-all duration-300 md:aspect-[4/5] ${
         selected ? 'border-emerald-500 shadow-[0_0_20px_rgba(16,185,129,0.2)]' : 'border-white/5 hover:border-white/30'
       } ${disabled ? 'opacity-50 grayscale' : ''}`}
     >

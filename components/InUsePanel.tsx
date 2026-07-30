@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { catalogGridColumns, CATALOG_SCROLL_Y } from './CatalogChips.js';
 
 /**
  * 右サイドパネル下部の「使用中」一覧（260730 クライアント要望②）。
@@ -161,9 +162,9 @@ export function InUsePanel({
           // 列の作り方・間隔はカタログのグリッドと同じにする（切り替えても並びが変わらないように）。
           <div
             data-testid="in-use-grid"
-            className="scroll-dark grid min-h-0 flex-1 gap-3 overflow-y-auto pr-1"
+            className={`grid min-h-0 flex-1 gap-3 pr-1 ${CATALOG_SCROLL_Y}`}
             style={{
-              gridTemplateColumns: columns === 1 ? '1fr' : `repeat(${columns}, minmax(0, 1fr))`,
+              gridTemplateColumns: catalogGridColumns(columns),
               gridAutoRows: 'min-content',
             }}
           >

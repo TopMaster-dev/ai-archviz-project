@@ -114,7 +114,7 @@ describe('サムネイルサイズ（建材カタログと同じ操作）', () =
       'repeat(4, minmax(0, 1fr))', // 小
       'repeat(3, minmax(0, 1fr))', // 中
       'repeat(2, minmax(0, 1fr))', // 大
-      '1fr', // 最大
+      'repeat(1, minmax(0, 1fr))', // 最大
     ]);
   });
 
@@ -123,7 +123,7 @@ describe('サムネイルサイズ（建材カタログと同じ操作）', () =
       setup({ gridSize: SLIDER_TO_GRID[sliderPos] });
       const css = grid().style.gridTemplateColumns;
       cleanup();
-      return css === '1fr' ? 1 : Number(css.match(/repeat\((\d+)/)?.[1]);
+      return Number(css.match(/repeat\((\d+)/)?.[1]);
     });
     for (let i = 1; i < counts.length; i += 1) {
       expect(counts[i]).toBeLessThan(counts[i - 1] as number);

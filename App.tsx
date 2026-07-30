@@ -17,7 +17,14 @@ import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { ModelCatalogRail, ModelCatalogTile, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
 import { InUsePanel } from './components/InUsePanel.js';
 import { MaterialCard } from './components/MaterialCard.js';
-import { catalogChipClass, CatalogChipRow, CATALOG_PAD_X, CATALOG_PAD_B } from './components/CatalogChips.js';
+import {
+  catalogChipClass,
+  CatalogChipRow,
+  catalogGridColumns,
+  CATALOG_PAD_X,
+  CATALOG_PAD_B,
+  CATALOG_SCROLL_Y,
+} from './components/CatalogChips.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -5763,7 +5770,7 @@ const App: React.FC = () => {
                 {/* Product Grid (Dynamic Size based on catalogGridSize) */}
                 <div
                   data-testid="material-catalog-scroller"
-                  className={`scroll-dark min-h-0 flex-1 overflow-y-auto ${CATALOG_PAD_X} ${CATALOG_PAD_B}`}
+                  className={`min-h-0 flex-1 ${CATALOG_SCROLL_Y} ${CATALOG_PAD_X} ${CATALOG_PAD_B}`}
                 >
                     {isLoadingProducts ? (
                         <div className="grid grid-cols-2 gap-3">{[1,2,3,4].map(i => <div key={i} className="aspect-square rounded-2xl bg-white/5 animate-pulse"></div>)}</div>
@@ -5774,13 +5781,9 @@ const App: React.FC = () => {
                       // ここを閉じると、初回の建材アップロード自体ができなくなる（＋タイルがこの中にあるため）。
                       (filteredProducts.length > 0 || selectedBrand === UPLOAD_BRAND_FILTER) ? (
                         <div
+                            data-testid="material-catalog-grid"
                             className="grid gap-3"
-                            style={{
-                                gridTemplateColumns:
-                                    Math.max(1, 5 - catalogGridSize) === 1
-                                        ? '1fr'
-                                        : `repeat(${Math.max(1, 5 - catalogGridSize)}, minmax(0, 1fr))`,
-                            }}
+                            style={{ gridTemplateColumns: catalogGridColumns(Math.max(1, 5 - catalogGridSize)) }}
                         >
                             {/* 「アップロード」を開いているときだけ、先頭に追加タイルを出す
                                 （3Dモデルカタログの「＋3D追加」と同じ扱い・260730 要望①）。 */}

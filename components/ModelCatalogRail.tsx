@@ -1,6 +1,13 @@
 import React, { useMemo, useState } from 'react';
 import { LayoutGrid, Square } from 'lucide-react';
-import { catalogChipClass, CatalogChipRow, CATALOG_PAD_X, CATALOG_PAD_B } from './CatalogChips.js';
+import {
+  catalogChipClass,
+  CatalogChipRow,
+  catalogGridColumns,
+  CATALOG_PAD_X,
+  CATALOG_PAD_B,
+  CATALOG_SCROLL_Y,
+} from './CatalogChips.js';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /**
@@ -42,7 +49,8 @@ export function ModelCatalogTile({
       onClick={onPick}
       title={item.name}
       // サムネイル背景はアイボリー（260729 要望⑤・色は index.css の --thumb-bg）。
-      className="group relative aspect-square overflow-hidden rounded-2xl border border-white/10 bg-[var(--thumb-bg)] text-white transition-all hover:border-emerald-500 hover:bg-[var(--thumb-bg-hover)]"
+      // min-w-0: グリッドの子は既定 min-width:auto ＝中身の最小幅で場所を取り、横スクロールの元になる。
+      className="group relative aspect-square min-w-0 overflow-hidden rounded-2xl border border-white/10 bg-[var(--thumb-bg)] text-white transition-all hover:border-emerald-500 hover:bg-[var(--thumb-bg-hover)]"
     >
       <div className="absolute inset-0 opacity-90 transition-all duration-500 group-hover:scale-105 group-hover:opacity-100">
         {renderThumbnail()}
@@ -201,12 +209,12 @@ export function ModelCatalogRail({
 
       <div
         data-testid="model-catalog-scroller"
-        className={`scroll-dark min-h-0 flex-1 overflow-y-auto ${CATALOG_PAD_X} ${CATALOG_PAD_B}`}
+        className={`min-h-0 flex-1 ${CATALOG_SCROLL_Y} ${CATALOG_PAD_X} ${CATALOG_PAD_B}`}
       >
         <div
           data-testid="model-catalog-grid"
           className="grid gap-2"
-          style={{ gridTemplateColumns: cols === 1 ? '1fr' : `repeat(${cols}, minmax(0, 1fr))` }}
+          style={{ gridTemplateColumns: catalogGridColumns(cols) }}
         >
           {selectedCategory === UPLOAD_CATEGORY && onUploadModel && (
             <button

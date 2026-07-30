@@ -60,7 +60,8 @@ describe('表示', () => {
     expect(grid().style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))');
     cleanup();
     setup({ columns: 1 });
-    expect(grid().style.gridTemplateColumns).toBe('1fr');
+    // 1列でも minmax(0, ...) にする（'1fr' は中身の最小幅で広がり、横スクロールの元になる）。
+    expect(grid().style.gridTemplateColumns).toBe('repeat(1, minmax(0, 1fr))');
   });
 
   it('収まらない分はパネル内でスクロールする（パネル自体は伸びない）', () => {
@@ -213,5 +214,40 @@ describe('画面の高さに対する上限', () => {
     localStorage.setItem(KEY, '520'); // 大画面で目一杯広げた状態
     setup(); // jsdom の innerHeight は 768
     expect(parseInt(panel().style.height, 10)).toBeLessThanOrEqual(maxHeightFor(768));
+  });
+});
+
+/**
+ * 260731 クライアント指摘「横スクロールを出さないでほしい」（使用中パネルに横バーが出ていた）。
+ *
+ * 建材名は `gigHy6rFTqaHfCMoKbZGfKg11IFiPsXK56bfCLGl` のような改行できない品番になり得る。
+ * 短い名前ばかりで試すと再発に気付けないので、その長さで固定する。
+ */
+describe('横スクロールを出さない', () => {
+  it('縦だけスクロールする（横は閉じる）', () => {
+    setup();
+    expect(grid().className).toContain('overflow-y-auto');
+    expect(grid().className).toContain('overflow-x-hidden');
+  });
+
+  it('1列でも列の最小幅は0（長い品番で列が広がらない）', () => {
+    setup({ columns: 1 });
+    expect(grid().style.gridTemplateColumns).toBe('repeat(1, minmax(0, 1fr))');
+  });
+
+  it('複数列でも同じ（列数だけが変わる）', () => {
+    setup({ columns: 4 });
+    expect(grid().style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))');
+  });
+
+  it('改行できない長い名前を入れても列の指定は変わらない', () => {
+    render(
+      <InUsePanel title="使用中の建材" count={1} columns={1} storageKey={KEY} emptyMessage="なし">
+        <button data-testid="card">gigHy6rFTqaHfCMoKbZGfKg11IFiPsXK56bfCLGl_AC_UF1000_1000_QL80_</button>
+      </InUsePanel>,
+    );
+    const g = screen.getAllByTestId('in-use-grid').pop()!;
+    expect(g.style.gridTemplateColumns).toContain('minmax(0,');
+    expect(g.className).toContain('overflow-x-hidden');
   });
 });

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
-import { catalogChipClass, CatalogChipRow } from './CatalogChips.js';
+import { catalogChipClass, CatalogChipRow, catalogGridColumns, CATALOG_SCROLL_Y } from './CatalogChips.js';
 
 /**
  * 260731 クライアント要望: 建材カタログと3Dモデルカタログでボタンの形が違っていたため、
@@ -76,5 +76,43 @@ describe('CatalogChipRow', () => {
     const scroller = screen.getByTestId('row');
     expect(scroller.className).toContain('overflow-x-auto');
     expect(scroller.className).not.toContain('no-scrollbar');
+  });
+});
+
+/**
+ * 260731 クライアント指摘「横スクロールを出さないでほしい」。
+ *
+ * 使用中パネルに横スクロールバーが出ていた。原因は2つとも「一見正しく見える」書き方:
+ *  - 1列のときの `'1fr'`（= minmax(auto, 1fr)）。auto は中身の最小幅なので、
+ *    `gigHy6rFTqaHfCMoKbZGfKg11IFiPsXK56bfCLGl` のような改行できない品番で列が広がる。
+ *  - `overflow-y-auto` だけの指定。CSS では片方が visible 以外なら、もう片方の visible は
+ *    auto に計算される＝1px あふれると横バーが出る。
+ * どちらも「たまたま短い名前ばかり」だと再発に気付けないので、ここで固定する。
+ */
+describe('catalogGridColumns', () => {
+  it('1列でも minmax(0, ...) を使う（長い品番で列が広がらない）', () => {
+    expect(catalogGridColumns(1)).toBe('repeat(1, minmax(0, 1fr))');
+    expect(catalogGridColumns(1)).not.toBe('1fr');
+  });
+
+  it('複数列も同じ式（列数だけが変わる）', () => {
+    expect(catalogGridColumns(3)).toBe('repeat(3, minmax(0, 1fr))');
+    expect(catalogGridColumns(4)).toBe('repeat(4, minmax(0, 1fr))');
+  });
+
+  it('どの列数でも最小幅は 0（＝はみ出す余地を作らない）', () => {
+    for (let n = 1; n <= 6; n += 1) expect(catalogGridColumns(n)).toContain('minmax(0,');
+  });
+
+  it('0以下でも壊れた値を返さない', () => {
+    expect(catalogGridColumns(0)).toBe('repeat(1, minmax(0, 1fr))');
+    expect(catalogGridColumns(-3)).toBe('repeat(1, minmax(0, 1fr))');
+  });
+});
+
+describe('CATALOG_SCROLL_Y', () => {
+  it('横は明示的に閉じる（overflow-y だけだと横バーが出る）', () => {
+    expect(CATALOG_SCROLL_Y).toContain('overflow-y-auto');
+    expect(CATALOG_SCROLL_Y).toContain('overflow-x-hidden');
   });
 });
