@@ -2,6 +2,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
 import { ModelCatalogRail, ALL_CATEGORY, UPLOAD_CATEGORY, type FurnitureCatalogRailItem } from './ModelCatalogRail.js';
+import { CATALOG_PAD_X } from './CatalogChips.js';
 
 /**
  * 260730 クライアント要望②: 3Dモデルカタログを右サイドパネルへ移し、建材カタログと見た目・操作を揃える。
@@ -219,5 +220,63 @@ describe('「アップロード」カテゴリの左端固定', () => {
     const { onSelectCategory } = setup();
     fireEvent.click(screen.getByRole('button', { name: UPLOAD_CATEGORY }));
     expect(onSelectCategory).toHaveBeenCalledWith(UPLOAD_CATEGORY);
+  });
+});
+
+/**
+ * 260731 クライアント要望②「下へスクロールしてもカテゴリボタンが隠れないよう、上部は固定表示に」。
+ *
+ * 上部（サイズ調整＋カテゴリ）と一覧を別の箱に分けることで実現している。
+ * 誰かが一覧側の箱へ上部を戻すと、この不具合は静かに再発する（見た目は同じなので気付けない）。
+ */
+describe('上部の固定表示', () => {
+  const header = () => screen.getByTestId('model-catalog-header');
+  const scroller = () => screen.getByTestId('model-catalog-scroller');
+
+  it('カテゴリはスクロールする箱の外にある', () => {
+    setup();
+    expect(scroller().contains(screen.getByTestId('category-scroller'))).toBe(false);
+    expect(header().contains(screen.getByTestId('category-scroller'))).toBe(true);
+  });
+
+  it('サムネイルの大きさ調整もスクロールで消えない', () => {
+    setup();
+    const slider = screen.getByLabelText('サムネイルの大きさ');
+    expect(scroller().contains(slider)).toBe(false);
+    expect(header().contains(slider)).toBe(true);
+  });
+
+  it('一覧だけが縦スクロールする', () => {
+    setup();
+    expect(scroller().className).toContain('overflow-y-auto');
+    expect(scroller().contains(screen.getByTestId('model-catalog-grid'))).toBe(true);
+    expect(header().className).not.toContain('overflow-y-auto');
+  });
+
+  it('上部は縮まない（一覧が長くても押し潰されない）', () => {
+    setup();
+    expect(header().className).toContain('shrink-0');
+  });
+
+  it('上部と一覧の左右余白は同じ（境目で左端がずれない）', () => {
+    setup();
+    for (const cls of CATALOG_PAD_X.split(' ')) {
+      expect(header().className).toContain(cls);
+      expect(scroller().className).toContain(cls);
+    }
+  });
+});
+
+/**
+ * 260731 敵対レビュー: 上部を shrink-0 にしたので、縦が足りないと一覧側だけが 0px まで潰れ、
+ * 縮まない上部が下の「使用中」パネルへはみ出す。上部は前面なのでクリックまで奪う。
+ * 外枠で切り落として、はみ出しが下の枠へ侵入しないようにする。
+ */
+describe('縦が足りないときの押し出し防止', () => {
+  it('外枠が中身を切り落とす（下の枠へはみ出さない）', () => {
+    const { container } = setup();
+    const root = container.firstElementChild as HTMLElement;
+    expect(root.className).toContain('overflow-hidden');
+    expect(root.className).toContain('min-h-0');
   });
 });

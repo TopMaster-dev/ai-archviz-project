@@ -48,6 +48,18 @@ export async function cropToDataUrl(imageUrl: string, rect: NormRect | null): Pr
 }
 
 /** 矩形を画像内へ収める。幅・高さは最低 min（0〜1）を保つ。 */
+/**
+ * クロップ枠の初期値（260731 クライアント要望③）。
+ *
+ * 以前は画像全体（x:0 y:0 w:1 h:1）から始めていた。全体のままでも検索は走るが、
+ * それは「部屋の風景」を照合しに行くのと同じで、個別の商品はまず特定できない。
+ * 最初から中央の小さめの枠にしておけば、「ここを絞る道具だ」と説明なしで伝わる。
+ *
+ * 画像の中央 50%（面積では 1/4）。これ以上小さくすると、対象が枠の外にあるとき
+ * 掴んで広げる手数が増える。Google レンズの初期枠もおおむねこの程度。
+ */
+export const DEFAULT_CROP_RECT: NormRect = { x: 0.25, y: 0.25, w: 0.5, h: 0.5 };
+
 export function clampRect(r: NormRect, min = 0.04): NormRect {
   const w = Math.min(1, Math.max(min, r.w));
   const h = Math.min(1, Math.max(min, r.h));

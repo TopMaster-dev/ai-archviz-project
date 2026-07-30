@@ -17,7 +17,7 @@ import { DoorSwingControls } from './components/DoorSwingControls.js';
 import { ModelCatalogRail, ModelCatalogTile, ALL_CATEGORY, type FurnitureCatalogFetchStatus } from './components/ModelCatalogRail.js';
 import { InUsePanel } from './components/InUsePanel.js';
 import { MaterialCard } from './components/MaterialCard.js';
-import { catalogChipClass, CatalogChipRow } from './components/CatalogChips.js';
+import { catalogChipClass, CatalogChipRow, CATALOG_PAD_X, CATALOG_PAD_B } from './components/CatalogChips.js';
 import { UndoRedoBar } from './components/UndoRedoBar.js';
 import { FURNITURE_DIMS } from './constants.js';
 import { getRoomTransform, scaledToMm, clampAllFurnitureToRoom, getEffectiveOpeningWidthMm } from './utils/sketchTransform.js';
@@ -5579,7 +5579,8 @@ const App: React.FC = () => {
               作業領域を覆いすぎるという指摘でここへ移した。
               2Dビューでは面に建材を貼れない（面の選択自体が3D専用）ため、建材側は選べないようにする。
             */}
-            <div className="flex items-center gap-1 px-6 pb-2 md:px-8">
+            {/* このトグルはスクロール箱の外にあるので、一覧を送っても常に見える（260731 要望②）。 */}
+            <div className={`flex shrink-0 items-center gap-1 pb-2 ${CATALOG_PAD_X}`}>
               <button
                 type="button"
                 onClick={() => setCatalogTab('material')}
@@ -5607,7 +5608,21 @@ const App: React.FC = () => {
                 3Dモデル
               </button>
             </div>
-            <div className="flex-1 overflow-y-auto px-6 pt-0 pb-6 space-y-2 md:px-8 md:pb-8 md:space-y-3 scroll-dark">
+            {/*
+              上部（サイズ調整・並び替え・カテゴリ／ブランドのチップ）は固定し、
+              一覧だけをスクロールさせる（260731 クライアント要望②）。
+              以前はこの箱ごとスクロールしていたため、素材を探して下へ送るとチップが
+              画面外へ流れ、カテゴリを変えるたびに一番上まで戻る必要があった。
+              左右の余白は CATALOG_PAD_X に集約し、上部と一覧で必ず一致させる。
+            */}
+            {/*
+              overflow-hidden は必須（260731 敵対レビュー）。
+              上部を shrink-0 にしたので、レールの縦が足りなくなると一覧側だけが 0px まで潰れ、
+              縮めない上部がそのまま下の「使用中」パネルへはみ出す。上部は relative z-20＝
+              前面なので、はみ出した帯が使用中カードやリサイズグリップのクリックを奪ってしまう。
+              ここで切り落として、はみ出しが下の枠へ侵入しないようにする。
+            */}
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
                 {effectiveCatalogTab === 'model' ? (
                   <ModelCatalogRail
                     items={processedCatalog}
@@ -5634,7 +5649,8 @@ const App: React.FC = () => {
                   />
                 ) : (
                   <>
-
+                {/* ── 固定される上部（スクロールしない） ── */}
+                <div data-testid="material-catalog-header" className={`shrink-0 relative z-20 space-y-2 md:space-y-3 ${CATALOG_PAD_X}`}>
                 {/* サムネ表示密度（左） / 並び替え（右） */}
                 <div className="flex items-center justify-end gap-3 mb-2 flex-wrap">
                     <div
@@ -5738,9 +5754,17 @@ const App: React.FC = () => {
                     ))}
                   </CatalogChipRow>
                 </div>
-                  
+                {/* チップと一覧の間隔。箱を分けたので、旧 space-y の代わりにここで空ける
+                    （3Dモデル側のカテゴリ行 mb-3 と同じ量にそろえる）。 */}
+                <div className="h-3" aria-hidden />
+                </div>
+
+                {/* ── スクロールする一覧 ── */}
                 {/* Product Grid (Dynamic Size based on catalogGridSize) */}
-                <div className="min-h-[200px] pb-12">
+                <div
+                  data-testid="material-catalog-scroller"
+                  className={`scroll-dark min-h-0 flex-1 overflow-y-auto ${CATALOG_PAD_X} ${CATALOG_PAD_B}`}
+                >
                     {isLoadingProducts ? (
                         <div className="grid grid-cols-2 gap-3">{[1,2,3,4].map(i => <div key={i} className="aspect-square rounded-2xl bg-white/5 animate-pulse"></div>)}</div>
                     ) : fetchError ? (

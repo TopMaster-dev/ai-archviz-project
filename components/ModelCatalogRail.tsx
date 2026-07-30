@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { LayoutGrid, Square } from 'lucide-react';
-import { catalogChipClass, CatalogChipRow } from './CatalogChips.js';
+import { catalogChipClass, CatalogChipRow, CATALOG_PAD_X, CATALOG_PAD_B } from './CatalogChips.js';
 import type { FurnitureCatalogItem } from '../types.js';
 
 /**
@@ -130,7 +130,7 @@ export function ModelCatalogRail({
 
   if (fetchStatus === 'loading') {
     return (
-      <div className="grid grid-cols-3 gap-2">
+      <div className={`grid grid-cols-3 gap-2 pt-2 ${CATALOG_PAD_X}`}>
         {Array.from({ length: 6 }).map((_, i) => (
           <div key={i} className="aspect-square animate-pulse rounded-xl bg-white/5" />
         ))}
@@ -139,55 +139,70 @@ export function ModelCatalogRail({
   }
   if (fetchStatus === 'error') {
     return (
-      <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-4 text-[11px] font-bold text-red-300">
-        3Dモデルの読み込みに失敗しました。
-        {fetchErrorMessage ? <span className="block text-[10px] text-red-400/80">{fetchErrorMessage}</span> : null}
+      <div className={CATALOG_PAD_X}>
+        <div className="rounded-xl border border-red-500/30 bg-red-500/5 px-3 py-4 text-[11px] font-bold text-red-300">
+          3Dモデルの読み込みに失敗しました。
+          {fetchErrorMessage ? <span className="block text-[10px] text-red-400/80">{fetchErrorMessage}</span> : null}
+        </div>
       </div>
     );
   }
 
   return (
-    <>
-      {/* サムネ表示密度（建材カタログと同じ操作・同じ見た目にそろえる）。 */}
-      <div className="mb-2 flex flex-wrap items-center justify-end gap-3">
-        {/* 左端＝細かいマス（小さく多く）、右端＝1マス（最大）。目盛りの向きと絵を一致させる。 */}
-        <div className="flex min-w-0 items-center gap-2" title="左: 小さい → 右: 最大">
-          <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
-          <input
-            type="range"
-            min={1}
-            max={4}
-            step={1}
-            value={gridToSlider[gridSize] ?? 2}
-            onChange={(e) => {
-              const v = parseInt(e.target.value, 10);
-              if (!Number.isFinite(v)) return;
-              const next = sliderToGrid[Math.min(4, Math.max(1, v))];
-              if (next !== undefined) onGridSizeChange(next);
-            }}
-            className="catalog-thumb-size-slider h-1 w-[88px] shrink-0 cursor-pointer accent-emerald-500"
-            aria-label="サムネイルの大きさ"
-          />
-          <Square className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
+    /*
+      上部（サイズ調整＋カテゴリ）は固定、一覧だけがスクロールする（260731 クライアント要望②）。
+      以前は全体が1つのスクロール箱に入っていたため、モデルを探して下へスクロールすると
+      カテゴリのチップが画面外へ流れ、カテゴリを変えるたびに一番上まで戻る必要があった。
+
+      position: sticky ではなく箱を分ける方式にしている。チップ行自体が横スクロールを持つので、
+      sticky にすると縦横2つのスクロール文脈が重なって、端末によって張り付きが崩れるため。
+    */
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div data-testid="model-catalog-header" className={`shrink-0 ${CATALOG_PAD_X}`}>
+        {/* サムネ表示密度（建材カタログと同じ操作・同じ見た目にそろえる）。 */}
+        <div className="mb-2 flex flex-wrap items-center justify-end gap-3">
+          {/* 左端＝細かいマス（小さく多く）、右端＝1マス（最大）。目盛りの向きと絵を一致させる。 */}
+          <div className="flex min-w-0 items-center gap-2" title="左: 小さい → 右: 最大">
+            <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
+            <input
+              type="range"
+              min={1}
+              max={4}
+              step={1}
+              value={gridToSlider[gridSize] ?? 2}
+              onChange={(e) => {
+                const v = parseInt(e.target.value, 10);
+                if (!Number.isFinite(v)) return;
+                const next = sliderToGrid[Math.min(4, Math.max(1, v))];
+                if (next !== undefined) onGridSizeChange(next);
+              }}
+              className="catalog-thumb-size-slider h-1 w-[88px] shrink-0 cursor-pointer accent-emerald-500"
+              aria-label="サムネイルの大きさ"
+            />
+            <Square className="h-3.5 w-3.5 shrink-0 text-neutral-500" aria-hidden />
+          </div>
+        </div>
+
+        {/*
+          カテゴリ（建材カタログのチップと同じ形・同じ大きさ）。
+          「アップロード」だけは横スクロールの外に出して左端へ固定する（260730 クライアント要望）。
+          カテゴリが増えて右へスクロールしても、自分がアップロードしたモデルへは常に1クリックで戻れる。
+          色は他と揃えた形のまま緑にして、「自分の資産」であることが一目で分かるようにする。
+        */}
+        <div className="mb-3">
+          <CatalogChipRow
+            testId="category-scroller"
+            pinned={uploadCategory ? renderCategoryButton(uploadCategory) : undefined}
+          >
+            {scrollableCategories.map((cat) => renderCategoryButton(cat))}
+          </CatalogChipRow>
         </div>
       </div>
 
-      {/*
-        カテゴリ（建材カタログのチップと同じ形・同じ大きさ）。
-        「アップロード」だけは横スクロールの外に出して左端へ固定する（260730 クライアント要望）。
-        カテゴリが増えて右へスクロールしても、自分がアップロードしたモデルへは常に1クリックで戻れる。
-        色は他と揃えた形のまま緑にして、「自分の資産」であることが一目で分かるようにする。
-      */}
-      <div className="mb-3">
-        <CatalogChipRow
-          testId="category-scroller"
-          pinned={uploadCategory ? renderCategoryButton(uploadCategory) : undefined}
-        >
-          {scrollableCategories.map((cat) => renderCategoryButton(cat))}
-        </CatalogChipRow>
-      </div>
-
-      <div className="min-h-[200px] pb-12">
+      <div
+        data-testid="model-catalog-scroller"
+        className={`scroll-dark min-h-0 flex-1 overflow-y-auto ${CATALOG_PAD_X} ${CATALOG_PAD_B}`}
+      >
         <div
           data-testid="model-catalog-grid"
           className="grid gap-2"
@@ -227,6 +242,6 @@ export function ModelCatalogRail({
           </div>
         )}
       </div>
-    </>
+    </div>
   );
 }

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ChevronDown,
   ChevronLeft,
@@ -62,7 +62,8 @@ import {
 import { MAX_STYLE_REFS } from '../hooks/useAiEditSession.js';
 import { AgentChatPanel } from './AgentChatPanel.js';
 import { LensCropFrame } from './LensCropFrame.js';
-import { cropToDataUrl, type NormRect } from '../utils/cropRegion.js';
+import { cropToDataUrl, DEFAULT_CROP_RECT, type NormRect } from '../utils/cropRegion.js';
+import { placeCropBar } from '../utils/cropBarPlacement.js';
 import { HighResExportDialog } from './HighResExportDialog.js';
 import { ModeToggleBar } from './ModeToggleBar.js';
 import { EditorHelpButton } from './EditorHelpButton.js';
@@ -370,15 +371,20 @@ export function AiEditWorkspace({
   const [dragStart, setDragStart] = useState<{ nx: number; ny: number } | null>(null);
   const [dragCurrent, setDragCurrent] = useState<{ nx: number; ny: number } | null>(null);
   const [imgLayout, setImgLayout] = useState({ ox: 0, oy: 0, dw: 1, dh: 1 });
+  /** プレビュー枠（wrapper）の実寸。クロップ操作バーを枠の下／上どちらへ置くかの判定に使う。 */
+  const [wrapSize, setWrapSize] = useState({ width: 0, height: 0 });
 
   /*
    * Google レンズ風クロップ（260729 クライアント要望）。
    * 「画像から商品を特定」を押すとポップアップではなく、このプレビュー上に枠が出る。
-   * 枠は既定で画像全体（＝これまでの「画像全体で検索」と同じ状態）から始まり、
+   * 枠は既定で画像の中央 50%（DEFAULT_CROP_RECT）から始まり、
    * 利用者が対象へ絞り込む。実際の検索はエージェントパネル側の処理を借りて実行する。
    */
   const [cropActive, setCropActive] = useState(false);
-  const [cropRect, setCropRect] = useState<NormRect>({ x: 0, y: 0, w: 1, h: 1 });
+  const [cropRect, setCropRect] = useState<NormRect>(DEFAULT_CROP_RECT);
+  /** 操作バーの実測高さ。文字の折り返しで変わるので、定数にせず measure する。 */
+  const cropBarRef = useRef<HTMLDivElement | null>(null);
+  const [cropBarH, setCropBarH] = useState(0);
   const [cropBusy, setCropBusy] = useState(false);
   const [cropError, setCropError] = useState<string | null>(null);
   // エージェントパネルから預かる検索関数（パネルが履歴と送信状態を持っているため）。
@@ -395,9 +401,53 @@ export function AiEditWorkspace({
   }, []);
   const requestPreviewCrop = useCallback(() => {
     setCropError(null);
-    setCropRect({ x: 0, y: 0, w: 1, h: 1 }); // 毎回いったん全体に戻す（前回の枠が残っていると誤検索の元）
+    // 毎回いったん既定へ戻す（前回の枠が残っていると誤検索の元）。
+    // 既定は画像全体ではなく中央の小さめの枠（260731 クライアント要望③）。
+    setCropRect(DEFAULT_CROP_RECT);
     setCropActive(true);
   }, []);
+  /*
+   * 操作バーの高さを実測する（260731 クライアント要望③）。
+   *
+   * 高さは横幅と文字の折り返しで変わるため、定数にすると反転の判定がずれて
+   * バーが画面外へ出る。ResizeObserver で追う。
+   */
+  useLayoutEffect(() => {
+    if (!cropActive) {
+      setCropBarH(0);
+      return;
+    }
+    const el = cropBarRef.current;
+    if (!el) return;
+    const apply = () => setCropBarH((prev) => (prev === el.offsetHeight ? prev : el.offsetHeight));
+    apply();
+    const ro = new ResizeObserver(apply);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [cropActive]);
+
+  /**
+   * 操作バーの位置。枠の真下へ置き、下に入らなければ枠の上へ回す。
+   *
+   * 枠の矩形は「拡大・パンを織り込んだプレビュー内ピクセル」へ直してから渡す。
+   * バー自身は変形コンテナの外に居る（拡大で文字が巨大化しないように）ので、
+   * 枠の見かけの位置をここで計算しないと、拡大時に枠とバーが離れてしまう。
+   */
+  const cropBar = useMemo(() => {
+    const left = pan.x + zoom * (imgLayout.ox + cropRect.x * imgLayout.dw);
+    const top = pan.y + zoom * (imgLayout.oy + cropRect.y * imgLayout.dh);
+    return placeCropBar({
+      frame: {
+        left,
+        top,
+        width: zoom * cropRect.w * imgLayout.dw,
+        height: zoom * cropRect.h * imgLayout.dh,
+      },
+      wrap: wrapSize,
+      barHeight: cropBarH,
+    });
+  }, [pan, zoom, imgLayout, cropRect, wrapSize, cropBarH]);
+
   /** 画面座標 → 画像内の正規化座標。既存のレターボックス対応の変換をそのまま使う。 */
   const cropToNormalized = useCallback((clientX: number, clientY: number) => {
     const img = imgRef.current;
@@ -501,9 +551,14 @@ export function AiEditWorkspace({
 
   const measureLayout = useCallback(() => {
     const wrap = wrapRef.current;
-    const img = imgRef.current;
-    if (!wrap || !img?.naturalWidth) return;
+    if (!wrap) return;
     const wr = wrap.getBoundingClientRect();
+    // プレビュー枠の実寸。クロップ操作バーの反転（下に入らなければ上へ）の判定に使う。
+    setWrapSize((prev) =>
+      prev.width === wr.width && prev.height === wr.height ? prev : { width: wr.width, height: wr.height },
+    );
+    const img = imgRef.current;
+    if (!img?.naturalWidth) return;
     const { ox, oy, dw, dh } = getContainedRect(
       wr.width,
       wr.height,
@@ -531,7 +586,7 @@ export function AiEditWorkspace({
   /**
    * クロップ枠も画像やタブが変わったら畳む（260729 敵対レビュー）。
    *
-   * 畳まないと重大な副作用がある: 枠は既定で画像全体を覆い、画像より手前に居るので、
+   * 畳まないと重大な副作用がある: 枠は画像より手前に居るので、
    * エージェントタブでクロップを開いたままエリア編集タブへ移ると、
    * クリックが全て枠に吸われてマスクの作図ができなくなる（エラーも出ないので原因が分からない）。
    * さらにタブを離れるとエージェントパネルが外れて検索関数も失われるため、
@@ -2177,11 +2232,20 @@ export function AiEditWorkspace({
                   )}
                   </div>
                   {/*
-                    クロップ中の操作バー（260729 クライアント要望・添付イメージの配置に合わせる）。
+                    クロップ中の操作バー（260729 クライアント要望・260731 で枠へ追従化）。
                     変形コンテナの「外」に置くこと。中に入れると拡大時に文字ごと巨大化して画面外へ流れる。
+                    位置は cropBar が決める（枠の真下／入らなければ枠の上）。
                   */}
                   {cropActive && (
-                    <div className="absolute inset-x-2 bottom-2 z-20 flex items-end justify-between gap-3 rounded-lg border border-white/15 bg-black/80 px-3 py-2 backdrop-blur-sm">
+                    <div
+                      ref={cropBarRef}
+                      data-testid="crop-action-bar"
+                      data-placement={cropBar.placement}
+                      // バーの上での押下をプレビューへ伝えない（拡大中はパンが始まってしまう）。
+                      onMouseDown={(e) => e.stopPropagation()}
+                      className="absolute z-20 flex items-end justify-between gap-3 rounded-lg border border-white/15 bg-black/85 px-3 py-2 shadow-xl backdrop-blur-sm"
+                      style={{ left: cropBar.left, top: cropBar.top, width: cropBar.width }}
+                    >
                       <div className="min-w-0 text-[11px] leading-relaxed text-neutral-200">
                         <p>探したい対象をドラッグで囲んでください。対象物を絞り込んでいただくことで、より正確な特定が可能となります。</p>
                         <p className="text-neutral-400">

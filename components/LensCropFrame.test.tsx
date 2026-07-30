@@ -180,3 +180,52 @@ describe('枠は画像より手前に出る＝出したままにしてはいけ�
     expect(onUnder).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * 260731 クライアント要望③「枠の角を Google レンズのように角丸に」。
+ *
+ * 丸みは枠線・四隅のかぎ括弧・外側の暗転（box-shadow の広がり）の3つに同時に効く必要がある。
+ * どれか1つを直し忘れると、角だけ線が二重になったり、暗転の角だけ直角に残る。
+ */
+describe('角丸（Google レンズ風）', () => {
+  const radiusOf = (el: Element) => (el as HTMLElement).style.borderRadius;
+
+  it('枠そのものが角丸（＝外側の暗転も角丸に切り抜かれる）', () => {
+    setup();
+    const r = parseFloat(radiusOf(frame()));
+    expect(r).toBeGreaterThan(0);
+    // 暗転は同じ要素の box-shadow なので、丸みは自動的に共有される
+    expect(frame().style.boxShadow).toContain('9999px');
+  });
+
+  it('四隅のかぎ括弧は枠と同じ丸み（角で線が二重にならない）', () => {
+    setup();
+    const frameR = parseFloat(radiusOf(frame()));
+    for (const [c, prop] of [
+      ['nw', 'borderTopLeftRadius'],
+      ['ne', 'borderTopRightRadius'],
+      ['sw', 'borderBottomLeftRadius'],
+      ['se', 'borderBottomRightRadius'],
+    ] as const) {
+      const el = document.querySelector(`[data-crop-corner="${c}"]`) as HTMLElement;
+      expect(el, `corner ${c}`).toBeTruthy();
+      expect(parseFloat(el.style[prop]), `corner ${c}`).toBe(frameR);
+    }
+  });
+
+  it('丸めるのは見た目だけ（切り出す範囲は矩形のまま）', () => {
+    // 枠の位置・大きさは丸みに影響されない＝正規化座標の計算へ持ち込んでいない
+    const onRectChange = vi.fn();
+    render(
+      <LensCropFrame
+        rect={{ x: 0.25, y: 0.25, w: 0.5, h: 0.5 }}
+        onRectChange={onRectChange}
+        imgLayout={layout}
+        toNormalized={toNormalized}
+      />,
+    );
+    const s = screen.getAllByTestId('lens-crop-frame').pop()!.style;
+    expect(s.left).toBe('100px'); // 0.25 * 400
+    expect(s.width).toBe('200px'); // 0.5 * 400
+  });
+});

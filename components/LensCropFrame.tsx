@@ -5,7 +5,8 @@ import { clampRect, type NormRect } from '../utils/cropRegion.js';
  * Google レンズ風のクロップ枠（260729 クライアント要望）。
  *
  * 生成画像プレビューの上に直接置き、枠の中だけを明るく残して外側を暗転させる。
- * 枠は既定で画像全体を覆い、利用者が辺・角をドラッグして対象へ絞り込む。
+ * 枠の初期位置は呼び出し側が決める（既定は画像中央の 50%＝utils/cropRegion の DEFAULT_CROP_RECT）。
+ * 利用者は辺・角をドラッグして対象へ絞り込む。
  *
  * 【設計上の約束】
  *  - 位置とサイズは常に「画像全体を1とする正規化座標」で持つ。表示倍率や
@@ -27,6 +28,15 @@ type DragMode = 'move' | 'n' | 's' | 'e' | 'w' | 'ne' | 'nw' | 'se' | 'sw';
 
 /** 枠の最小サイズ（正規化）。これ以上小さいと掴めず、Vision へ送っても情報が足りない。 */
 const MIN_SIZE = 0.05;
+
+/**
+ * 角の丸み（px・260731 クライアント要望③）。
+ *
+ * 枠だけでなく外側の暗転にも効く（box-shadow の広がりは border-radius に沿うため）。
+ * 四隅のかぎ括弧にも同じ値を当てること。片方だけ丸めると、括弧と枠線が角でずれて二重に見える。
+ * 実際に切り出す範囲は矩形のまま＝見た目だけの丸み。ここを座標計算へ持ち込まないこと。
+ */
+const CORNER_RADIUS = 16;
 
 export function LensCropFrame({
   rect,
@@ -129,16 +139,22 @@ export function LensCropFrame({
         // 枠の外側だけを暗くする常套手段。オーバーレイ用の div を4枚置くより
         // 継ぎ目が出ず、枠を動かしても常に画像全体を覆える。
         boxShadow: '0 0 0 9999px rgba(0,0,0,0.55)',
+        // 丸みは box-shadow の広がりにも効くので、暗転の切り抜きごと角丸になる（レンズと同じ）。
+        borderRadius: CORNER_RADIUS,
       }}
       onMouseDown={startDrag('move')}
     >
       {/* 枠線と四隅のかぎ括弧（Google レンズと同じ見え方）。 */}
-      <div className="pointer-events-none absolute inset-0 border border-white/70" />
+      <div
+        className="pointer-events-none absolute inset-0 border border-white/70"
+        style={{ borderRadius: CORNER_RADIUS }}
+      />
       {(['nw', 'ne', 'sw', 'se'] as const).map((c) => (
         <div
           key={c}
           aria-hidden
-          className={`pointer-events-none absolute h-5 w-5 border-white ${
+          data-crop-corner={c}
+          className={`pointer-events-none absolute h-6 w-6 border-white ${
             c === 'nw'
               ? 'left-0 top-0 border-l-[3px] border-t-[3px]'
               : c === 'ne'
@@ -147,6 +163,13 @@ export function LensCropFrame({
                   ? 'bottom-0 left-0 border-b-[3px] border-l-[3px]'
                   : 'bottom-0 right-0 border-b-[3px] border-r-[3px]'
           }`}
+          // かぎ括弧も同じ半径で丸める。枠線とぴったり重なるので、角が二重線にならない。
+          style={{
+            borderTopLeftRadius: c === 'nw' ? CORNER_RADIUS : undefined,
+            borderTopRightRadius: c === 'ne' ? CORNER_RADIUS : undefined,
+            borderBottomLeftRadius: c === 'sw' ? CORNER_RADIUS : undefined,
+            borderBottomRightRadius: c === 'se' ? CORNER_RADIUS : undefined,
+          }}
         />
       ))}
       {!disabled &&

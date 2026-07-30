@@ -16,12 +16,46 @@ const MIN_H = 96;
 const MAX_H = 520;
 const DEFAULT_H = 168;
 
+/**
+ * 背景（260731 クライアント要望①）。
+ *
+ * 以前は #080808 で、レール本体（#050505）とほぼ同じ明るさだった。
+ * 上のカタログと地続きに見えてしまい、どこからが「使用中」なのか分からない、という指摘。
+ *
+ * 対処は「暗い緑がかったグレー＋緑の上境界」。単に明るいグレーにするより、
+ * このアプリの基調色（emerald）に合うぶん浮かず、それでいて明度差がはっきり出る。
+ * カタログ側と同じ値に戻すと区別が付かなくなるので、ここは必ず異なる値を保つこと。
+ */
+const PANEL_BG = '#111815';
+/** レールの地色。ここと同じにしてはいけない、という不変条件をテストから参照するために公開する。 */
+export const RAIL_BG = '#050505';
+
+/**
+ * 画面の高さに対する上限の割合（260731 敵対レビュー）。
+ *
+ * MAX_H(520px) だけを上限にすると、縦の短い端末でカタログ側を 0px まで潰せてしまう。
+ * 潰れても上部（カテゴリ等）は shrink-0 で縮まないため、はみ出した帯が下の枠へ被る。
+ * 「保存した高さ」は端末をまたいで復元されるので、大きな画面で広げた値のまま
+ * ノートPCで開くと初回表示から壊れる。そこで画面高でも頭打ちにする。
+ */
+const MAX_VIEWPORT_RATIO = 0.45;
+
+/** その端末で許す最大高さ。画面が取れない環境（SSR・テスト）では MAX_H をそのまま使う。 */
+export function maxHeightFor(viewportHeight: number | undefined): number {
+  if (!viewportHeight || !Number.isFinite(viewportHeight)) return MAX_H;
+  return Math.max(MIN_H, Math.min(MAX_H, Math.round(viewportHeight * MAX_VIEWPORT_RATIO)));
+}
+
+function currentMaxH(): number {
+  return maxHeightFor(typeof window === 'undefined' ? undefined : window.innerHeight);
+}
+
 function loadHeight(storageKey: string): number {
   try {
     const v = parseInt(localStorage.getItem(storageKey) ?? '', 10);
-    return Number.isFinite(v) ? Math.min(MAX_H, Math.max(MIN_H, v)) : DEFAULT_H;
+    return Number.isFinite(v) ? Math.min(currentMaxH(), Math.max(MIN_H, v)) : Math.min(currentMaxH(), DEFAULT_H);
   } catch {
-    return DEFAULT_H;
+    return Math.min(currentMaxH(), DEFAULT_H);
   }
 }
 
@@ -61,13 +95,21 @@ export function InUsePanel({
     }
   }, [height, storageKey]);
 
+  // ウィンドウが小さくなったら、その画面で許される高さまで詰める（はみ出しを残さない）。
+  useEffect(() => {
+    const onResize = () => setHeight((h) => Math.min(currentMaxH(), Math.max(MIN_H, h)));
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const d = dragRef.current;
       if (!d) return;
       // 上端を掴んでいるので、上（Y が小さい方）へ動かすと高くなる。
       const next = d.startH + (d.startY - e.clientY);
-      setHeight(Math.min(MAX_H, Math.max(MIN_H, next)));
+      setHeight(Math.min(currentMaxH(), Math.max(MIN_H, next)));
     };
     const onUp = () => {
       dragRef.current = null;
@@ -89,8 +131,9 @@ export function InUsePanel({
 
   return (
     <div
-      className="shrink-0 border-t border-white/10 bg-[#080808]"
-      style={{ height }}
+      // 上境界も緑にして「ここから下は別の枠」と分かるようにする（色だけだと弱い）。
+      className="shrink-0 border-t-2 border-emerald-500/30"
+      style={{ height, backgroundColor: PANEL_BG }}
       data-testid="in-use-panel"
     >
       {/* 上端の掴み手。細い帯なので、掴めることが分かるよう中央に線を出す。 */}
@@ -105,7 +148,8 @@ export function InUsePanel({
       </div>
       <div className="flex h-[calc(100%-0.75rem)] flex-col px-6 pb-3 md:px-8">
         <div className="mb-1.5 flex shrink-0 items-center justify-between">
-          <span className="text-[10px] font-black uppercase tracking-widest text-neutral-400">{title}</span>
+          {/* 見出しも緑寄りにして、カタログ側の見出しと取り違えないようにする。 */}
+          <span className="text-[10px] font-black uppercase tracking-widest text-emerald-300/80">{title}</span>
           <span className="font-mono text-[10px] text-neutral-500">{count}</span>
         </div>
         {count === 0 ? (

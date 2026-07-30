@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, cleanup, within } from '@testing-library/react';
-import { InUsePanel } from './InUsePanel.js';
+import { InUsePanel, RAIL_BG, maxHeightFor } from './InUsePanel.js';
 
 /**
  * 260730 クライアント要望②: 右サイドパネル下部に「使用中の建材 / 3Dモデル」を出す。
@@ -133,5 +133,85 @@ describe('高さのドラッグ変更', () => {
     cleanup();
     setup({ storageKey: 'b.v1' });
     expect(panel().style.height).toBe('168px'); // 別キーなので既定のまま
+  });
+});
+
+/**
+ * 260731 クライアント要望①「カタログとの境目が分かりづらいので、使用中パネルの背景色を変えてほしい」。
+ *
+ * レールの地色（RAIL_BG）と同じ・ほぼ同じに戻されたら、この指摘がそのまま再発する。
+ * 「見た目の調整」は次の改修で無意識に巻き戻りやすいので、明度差を数値で固定する。
+ */
+describe('カタログとの見分け（背景色）', () => {
+  /** '#rrggbb' / 'rgb(r, g, b)' から明度（0-255）を出す。 */
+  const luminance = (color: string): number => {
+    const hex = color.match(/^#([0-9a-f]{6})$/i);
+    const rgb = hex
+      ? [parseInt(hex[1].slice(0, 2), 16), parseInt(hex[1].slice(2, 4), 16), parseInt(hex[1].slice(4, 6), 16)]
+      : (color.match(/\d+/g) ?? []).slice(0, 3).map(Number);
+    if (rgb.length < 3) throw new Error(`色を解釈できない: ${color}`);
+    return 0.2126 * rgb[0] + 0.7152 * rgb[1] + 0.0722 * rgb[2];
+  };
+
+  it('レールの地色をそのまま使っていない', () => {
+    setup();
+    const bg = panel().style.backgroundColor;
+    expect(bg).toBeTruthy();
+    expect(luminance(bg)).not.toBeCloseTo(luminance(RAIL_BG), 1);
+  });
+
+  it('カタログより明るい（下の枠が沈んで見えない）', () => {
+    setup();
+    expect(luminance(panel().style.backgroundColor)).toBeGreaterThan(luminance(RAIL_BG) + 5);
+  });
+
+  it('上境界も色を付けて区切る（色差だけに頼らない）', () => {
+    setup();
+    expect(panel().className).toMatch(/border-t/);
+    expect(panel().className).toMatch(/emerald/);
+  });
+
+  it('明るくしすぎない（サムネイルより背景が目立たない）', () => {
+    setup();
+    expect(luminance(panel().style.backgroundColor)).toBeLessThan(60);
+  });
+});
+
+/**
+ * 260731 敵対レビュー: 使用中パネルを広げすぎると、カタログの一覧が 0px まで潰れる。
+ *
+ * 上部（カテゴリ等）は shrink-0 で縮まないため、潰れた分が下の枠へはみ出す。
+ * さらに高さは端末をまたいで復元されるので、大きな画面で広げた値のまま
+ * ノートPCで開くと「初回表示から壊れている」状態になる。画面高でも頭打ちにする。
+ */
+describe('画面の高さに対する上限', () => {
+  it('縦の短い端末では 520px まで広げられない', () => {
+    expect(maxHeightFor(768)).toBeLessThan(520);
+    expect(maxHeightFor(768)).toBe(Math.round(768 * 0.45));
+  });
+
+  it('大きな画面では従来どおり 520px が上限', () => {
+    expect(maxHeightFor(1440)).toBe(520);
+  });
+
+  it('極端に低い画面でも下限（見出しが読める高さ）は守る', () => {
+    expect(maxHeightFor(200)).toBeGreaterThanOrEqual(96);
+  });
+
+  it('画面高が取れない環境では従来の上限を使う（SSR・テスト）', () => {
+    expect(maxHeightFor(undefined)).toBe(520);
+    expect(maxHeightFor(NaN)).toBe(520);
+  });
+
+  it('カタログ側に必ず余地を残す（画面の半分を超えない）', () => {
+    for (const h of [400, 600, 768, 900, 1080, 1440]) {
+      expect(maxHeightFor(h)).toBeLessThanOrEqual(h / 2);
+    }
+  });
+
+  it('大画面で保存した高さは、低い画面で開くと詰められる', () => {
+    localStorage.setItem(KEY, '520'); // 大画面で目一杯広げた状態
+    setup(); // jsdom の innerHeight は 768
+    expect(parseInt(panel().style.height, 10)).toBeLessThanOrEqual(maxHeightFor(768));
   });
 });
