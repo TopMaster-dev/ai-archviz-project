@@ -45,13 +45,18 @@ type ExportResult = { url: string; fileName: string; kind: 'preview' | 'hiRes' }
 /*
  * 書き出しの選択肢（260731 クライアント指摘「白かったカウンターが木目に変わった」の対応で3択へ）。
  *
- * 従来は 'hires'（AI精細化）と 'preview'（等倍そのまま）の2択で、しかも既定が 'hires' だった。
- * つまり「印刷用の大きさが欲しい」だけでも必ずAIが画像全体を描き直す経路しか無く、
- * 描き直しである以上、白い天板に木目が入るような改変は原理的に避けられなかった。
- *
+ * 従来は 'hires'（AI精細化）と 'preview'（等倍そのまま）の2択しか無く、
+ * 「印刷用の大きさが欲しい」だけでも必ずAIが画像全体を描き直す経路を通っていた。
+ * 描き直しである以上、白い天板に木目が入るような改変は原理的に避けられない。
  * そこで「大きさは欲しいが内容は1ピクセルも変えたくない」場合の逃げ道として
- * 'hires-exact'（決定論の拡大のみ・AIを通さない）を追加し、これを既定にする。
- * AI精細化は、ぼけた画像を積極的に描き起こしたいときだけ選ぶオプトインへ降格する。
+ * 'hires-exact'（AIを通さず拡大＋鮮鋭化のみ）を追加した。
+ *
+ * 【260801 クライアント判断】既定は 'hires'（AI精細化）に戻す。
+ * 木目化の直接原因だった指示文（lib/aiEditPrompt.ts の buildEnhanceDetailPrompt）を修正済みで、
+ * 素材名の例示・「のっぺり面を埋めろ」を削除し、保護対象を全ての面へ広げ、
+ * 「無地は無地のまま」を禁止事項として明記してある。そのうえで、
+ * 実務ではぼけの改善を優先したい、というご判断による。
+ * 'hires-exact' は「内容を絶対に変えたくない」ときの選択肢として残す。
  */
 type ExportMode = 'hires-exact' | 'hires' | 'preview';
 
@@ -70,9 +75,9 @@ export function HighResExportDialog({
   const showHiResLimit = ENABLE_FREE_PLAN_HIRES_DL_LIMIT && isFreePlan;
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // 既定は「高解像度（AIなし）」。画面に見えているものを1ピクセルも変えずに大きくする、が既定として安全
-  // （260731・AI精細化を既定にしていたため、白い天板が木目に変わる改変が既定経路で起きていた）。
-  const [mode, setMode] = useState<ExportMode>('hires-exact');
+  // 既定は「高解像度＋AI精細化」（260801 クライアント判断・ぼけの改善を優先）。
+  // 木目化の原因だった指示文は修正済み。内容を変えたくない場合は「高解像度（AIなし）」を選ぶ。
+  const [mode, setMode] = useState<ExportMode>('hires');
   const [sourceNatural, setSourceNatural] = useState<{ w: number; h: number } | null>(null);
   const [sourceNaturalLoading, setSourceNaturalLoading] = useState(false);
   // #4: 書き出し完了後のダウンロード対象を保持し、保存をキャンセルしても再ダウンロードできるようにする。
@@ -126,7 +131,7 @@ export function HighResExportDialog({
 
   useEffect(() => {
     if (open) {
-      setMode('hires-exact');
+      setMode('hires');
       setResult(null);
       setError(null);
       setVerdict(null);
@@ -346,11 +351,40 @@ export function HighResExportDialog({
           {!result && (
             <>
               <p className="text-[10px] text-neutral-500 leading-relaxed">
-                書き出し方法を選んでください。内容を変えたくない場合は「高解像度（AIなし）」を選んでください。
-                「AI精細化」はAIが画像を描き直すため、ぼけは改善しやすい一方で、細部（素材の柄など）が変わることがあります。
+                通常は「高解像度＋AI精細化」をお使いください（ぼけの改善を優先）。
+                AIが描き直すため、まれに細部（素材の柄など）が変わることがあります。
+                内容を1ピクセルも変えたくない場合は「高解像度（AIなし）」をお選びください。
               </p>
               <div className="space-y-2">
-                {/* 高解像度（AIなし・忠実拡大）＝既定。260731: 内容を1ピクセルも変えない逃げ道。 */}
+                {/* 高解像度＋AI精細化＝既定（260801 クライアント判断・ぼけの改善を優先）。既定は先頭に置く。 */}
+                <label
+                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                    mode === 'hires'
+                      ? 'border-emerald-500/50 bg-emerald-950/30'
+                      : 'border-white/10 bg-black/30 hover:border-white/20'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="exportMode"
+                    className="mt-0.5"
+                    checked={mode === 'hires'}
+                    onChange={() => setMode('hires')}
+                    disabled={busy || sourceNaturalLoading}
+                  />
+                  <span>
+                    <span className="text-white font-bold">
+                      高解像度＋AI精細化 <span className="text-emerald-400">（推奨）</span>
+                    </span>
+                    <span className="block text-neutral-400 mt-0.5">
+                      AIが描き直してぼけを改善します。構図・色の維持を優先しますが、細部（素材の柄など）が変わる場合があります
+                    </span>
+                    <span className="font-mono text-neutral-500">
+                      {hiResPreset.width} × {hiResPreset.height} px
+                    </span>
+                  </span>
+                </label>
+                {/* 高解像度（AIなし・忠実拡大）: 内容を1ピクセルも変えたくないときの選択肢。 */}
                 <label
                   className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
                     mode === 'hires-exact'
@@ -370,37 +404,11 @@ export function HighResExportDialog({
                     <span className="text-white font-bold">高解像度（AIなし）</span>
                     <span className="block text-neutral-400 mt-0.5">
                       拡大＋輪郭の鮮鋭化のみ。描き直さないので絵柄・色は絶対に変わりません（費用なし・即時）。
-                      情報量は元画像のままなので、AI精細化よりは softer になります
+                      情報量は元画像のままなので、AI精細化よりは眠い仕上がりになります
                     </span>
                     <span className="font-mono text-neutral-500">
                       {hiResPreset.width} × {hiResPreset.height} px
                       {upscaleFactor > 1 ? `（元画像を約 ${upscaleFactor.toFixed(1)} 倍に拡大）` : ''}
-                    </span>
-                  </span>
-                </label>
-                {/* 高解像度＋AI精細化（オプトイン）。 */}
-                <label
-                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                    mode === 'hires'
-                      ? 'border-emerald-500/50 bg-emerald-950/30'
-                      : 'border-white/10 bg-black/30 hover:border-white/20'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="exportMode"
-                    className="mt-0.5"
-                    checked={mode === 'hires'}
-                    onChange={() => setMode('hires')}
-                    disabled={busy || sourceNaturalLoading}
-                  />
-                  <span>
-                    <span className="text-white font-bold">高解像度＋AI精細化</span>
-                    <span className="block text-neutral-400 mt-0.5">
-                      AIが描き直してぼけを改善します。構図・色の維持を優先しますが、細部が変わる場合があります
-                    </span>
-                    <span className="font-mono text-neutral-500">
-                      {hiResPreset.width} × {hiResPreset.height} px
                     </span>
                   </span>
                 </label>
