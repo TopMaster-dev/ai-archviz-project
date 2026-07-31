@@ -15,6 +15,7 @@ import { pickClosestCropRatio } from '../utils/cropToAspect.js';
 import { aspectLabelForKey, ratioValueForKey } from '../utils/renderAspect.js';
 import { fitDataUrlToSize } from '../utils/fitDataUrl.js';
 import { matchOverallColorToReference } from '../utils/colorMatch.js';
+import { sharpenDataUrl, unsharpParamsForUpscale } from '../utils/unsharpMask.js';
 import {
   ENABLE_FREE_PLAN_HIRES_DL_LIMIT,
   FREE_PLAN_HIRES_DL_PER_MONTH,
@@ -107,6 +108,22 @@ export function HighResExportDialog({
 
   const isPreview = mode === 'preview';
 
+  /*
+   * 実効解像度の表示（260801 クライアント指摘への対応）。
+   *
+   * 「300dpi」はあくまで用紙サイズから逆算した出力の画素数であって、
+   * 元画像がそれだけの情報量を持っているという意味ではない。
+   * 元が長辺2688pxなら、A3・300dpi（長辺4961px）へ拡大しても
+   * 実際の情報量は約163dpi相当にとどまる。ここを黙って「300dpi」とだけ表示するのは不正確なので、
+   * 「元が何pxで、何倍に拡大され、実効何dpi相当か」を必ず出す。
+   * ※AI精細化を選んだ場合も、生成は4K（長辺3840px）なので最後に1.29倍の拡大が入る。
+   *   どちらの経路でも“真の300dpi”にはならない、という事実を隠さない。
+   */
+  const sourceLongEdge = sourceNatural ? Math.max(sourceNatural.w, sourceNatural.h) : 0;
+  const a3LongEdgeMm = 420 / 25.4;
+  const effectiveDpi = sourceLongEdge ? Math.round(sourceLongEdge / a3LongEdgeMm) : 0;
+  const upscaleFactor = sourceLongEdge ? hiResPreset.width / sourceLongEdge : 0;
+
   useEffect(() => {
     if (open) {
       setMode('hires-exact');
@@ -181,15 +198,23 @@ export function HighResExportDialog({
 
     if (mode === 'hires-exact') {
       /*
-       * 【高解像度（AIなし）】AIを一切通さず、canvas の高品質補間だけで印刷サイズへ拡大する。
-       * 画素は増えるが「絵」は増えない＝画面に見えているものがそのまま大きくなる。
+       * 【高解像度（AIなし）】AIを一切通さず、拡大と鮮鋭化だけで印刷サイズへ持ち上げる。
+       *
+       * 補間で拡大するだけでは輪郭が甘くなる（＝クライアントご指摘の「ボヤけた引き伸ばし」）。
+       * そこで拡大後にアンシャープマスクを掛け、輪郭のコントラストを回復させる。
+       * これは元の画素から計算する決定論の処理なので、
+       * 「元画像に無いものは生まれない」という保証を保ったまま見た目の甘さだけを改善できる。
        * AIを呼ばないので課金もフリープランの回数消費も発生しない。
        */
       setBusy(true);
       try {
         const p = hiResPreset;
         const fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
-        const url = await fitDataUrlToSize(src, p.width, p.height, 'cover');
+        const scaled = await fitDataUrlToSize(src, p.width, p.height, 'cover');
+        // 拡大率に応じた強さで鮮鋭化する（等倍・縮小のときは何もしない）。
+        const factor = sourceNatural ? p.width / Math.max(1, sourceNatural.w) : 1;
+        const sharpenOpts = unsharpParamsForUpscale(factor);
+        const url = sharpenOpts ? await sharpenDataUrl(scaled, sharpenOpts) : scaled;
         const exactResult: ExportResult = { url, fileName, kind: 'hiRes' };
         setExportUsedAi(false);
         setResult(exactResult);
@@ -344,10 +369,12 @@ export function HighResExportDialog({
                   <span>
                     <span className="text-white font-bold">高解像度（AIなし）</span>
                     <span className="block text-neutral-400 mt-0.5">
-                      画面の内容をそのまま印刷サイズへ拡大（描き直さないので絵柄・色は変わりません・即時）
+                      拡大＋輪郭の鮮鋭化のみ。描き直さないので絵柄・色は絶対に変わりません（費用なし・即時）。
+                      情報量は元画像のままなので、AI精細化よりは softer になります
                     </span>
                     <span className="font-mono text-neutral-500">
                       {hiResPreset.width} × {hiResPreset.height} px
+                      {upscaleFactor > 1 ? `（元画像を約 ${upscaleFactor.toFixed(1)} 倍に拡大）` : ''}
                     </span>
                   </span>
                 </label>
@@ -413,6 +440,18 @@ export function HighResExportDialog({
                 <p>
                   <span className="text-neutral-500 font-bold">縦横比</span> {contentAspectLabel}
                 </p>
+                {/*
+                  「300dpi」は用紙サイズから逆算した出力画素数であって、元画像の情報量ではない。
+                  どちらの経路でも最後に拡大が入るため、真の300dpiにはならない。ここを隠さず出す。
+                */}
+                {!isPreview && sourceLongEdge > 0 && (
+                  <p>
+                    <span className="text-neutral-500 font-bold">元画像</span> {sourceNatural?.w} × {sourceNatural?.h} px
+                    <span className="ml-2 text-neutral-500">
+                      （実効 約 {effectiveDpi} dpi 相当。表示の {hiResPreset.dpi}dpi は用紙サイズから逆算した出力画素数です）
+                    </span>
+                  </p>
+                )}
               </div>
               <ul className="list-disc list-inside space-y-1 text-neutral-400 leading-relaxed">
                 <li>アプリ内の表示は低解像のままです。印刷にはダウンロード画像を使用してください。</li>

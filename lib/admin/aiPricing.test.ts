@@ -131,3 +131,67 @@ describe('Cloud Vision API の費用', () => {
     expect(priceForModel(CLOUD_VISION_MODEL)?.perCallUsd).toBe(0.0035);
   });
 });
+
+/**
+ * 260801 クライアント指摘「全件集計にしたのに、まだ約8,000円合わない」。
+ *
+ * 原因は2つとも「記録はあるのに金額が出ない」たぐいのもので、
+ * 画面上はもっともらしい数字が並ぶため気付けなかった。
+ */
+describe('計上漏れの修正', () => {
+  it('思考トークン（総トークンの余り）を出力として数える', () => {
+    // Gemini の総トークンは 入力+出力 ではなく、思考トークン等を含む。
+    // 公式には思考トークンも出力単価で課金されるので、差分を出力に足して数える。
+    const withHidden = estimateEventCostUsd({
+      model: 'gemini-2.5-flash',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      totalTokens: 3_000_000, // 余り 1,000,000 = 思考トークン
+    });
+    // 入力$0.30 + 出力$2.50 + 思考$2.50 = $5.30
+    expect(withHidden).toBeCloseTo(5.3, 6);
+  });
+
+  it('総トークンが無い古い記録では従来どおり計算する（後方互換）', () => {
+    const legacy = estimateEventCostUsd({
+      model: 'gemini-2.5-flash',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+    });
+    expect(legacy).toBeCloseTo(2.8, 6); // $0.30 + $2.50
+  });
+
+  it('総トークンが入力＋出力より小さくても負にならない', () => {
+    const odd = estimateEventCostUsd({
+      model: 'gemini-2.5-flash',
+      inputTokens: 1_000_000,
+      outputTokens: 1_000_000,
+      totalTokens: 100,
+    });
+    expect(odd).toBeCloseTo(2.8, 6);
+  });
+
+  it('エージェントの重い相談に使う gemini-2.5-pro の単価が登録されている', () => {
+    // これが抜けていたため、トークンは記録されているのに費用だけ常に0円だった。
+    expect(hasKnownPrice('gemini-2.5-pro')).toBe(true);
+    expect(estimateEventCostUsd({ model: 'gemini-2.5-pro', inputTokens: 1_000_000, outputTokens: 0 })).toBeCloseTo(1.25, 6);
+  });
+
+  it('gemini-2.5-pro が gemini-2.5-flash の単価に誤ヒットしない', () => {
+    expect(priceForModel('gemini-2.5-pro')?.outputPerMTok).toBe(10);
+    expect(priceForModel('gemini-2.5-flash')?.outputPerMTok).toBe(2.5);
+  });
+
+  it('実際に使われるモデル名がすべて単価表で解決できる', () => {
+    // 単価表から漏れると費用0円で黙って合算されるため、既定モデルは必ず解決できること。
+    for (const m of [
+      'gemini-3-pro-image-preview',
+      'gemini-2.5-flash',
+      'gemini-2.5-pro',
+      'gemini-3-pro',
+      'cloud-vision-web-detection',
+    ]) {
+      expect(hasKnownPrice(m), m).toBe(true);
+    }
+  });
+});

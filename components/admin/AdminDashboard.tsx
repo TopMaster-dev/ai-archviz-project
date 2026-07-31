@@ -46,6 +46,10 @@ interface Summary {
   truncated?: boolean;
   /** Cloud Vision の消費ユニット数（260731 要望②）。 */
   visionUnits?: number;
+  /** 単価表に無いモデル名（260801・費用0円で黙って合算されるのを防ぐ）。 */
+  unpricedModels?: string[];
+  /** Cloud Vision を最後に記録した日時（期間フィルタ非適用・計測開始の判断用）。 */
+  visionLastAt?: string | null;
   byModel: GroupAgg[];
   byUser: GroupAgg[];
   byProject: GroupAgg[];
@@ -1263,7 +1267,24 @@ export function AdminDashboard() {
                   1回の操作で複数ユニットを消費します（画像1枚の解析＋類似画像からの再検索・最大3ユニット）。
                   上の「モデル別」に出る金額は無料枠を引く前の総額です。
                 </p>
+                {/*
+                  0 が「使われていない」のか「まだ数え始めていない」のかを区別できるようにする（260801）。
+                  Vision の計測は 2026/07/30 に実装したため、それ以前を指定すると必ず 0 になる。
+                */}
+                <p className="mt-1 text-[11px] text-neutral-500">
+                  計測開始 2026/07/30。
+                  {summary.visionLastAt
+                    ? `最終記録 ${new Date(summary.visionLastAt).toLocaleString('ja-JP')}（期間指定を問わない全体の最新）。`
+                    : '記録はまだ1件もありません（計測開始より前の利用は集計できません）。'}
+                </p>
               </Card>
+              {/* 単価未登録は費用0円で黙って合算されるため、必ず名前を出す（260801）。 */}
+              {summary.unpricedModels && summary.unpricedModels.length > 0 && (
+                <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] text-amber-300">
+                  <b>単価が未登録のモデルがあります</b>（費用0円として合算されているため、実請求より少なく表示されます）:{' '}
+                  <span className="font-mono">{summary.unpricedModels.join(', ')}</span>
+                </div>
+              )}
               <GroupTable title="モデル別" rows={summary.byModel} keyHeader="モデル" note={summary.note} />
               <GroupTable title="ユーザー別（上位）" rows={summary.byUser} keyHeader="ユーザー" onRowClick={(r) => void openUserDrill(r)} />
               <GroupTable

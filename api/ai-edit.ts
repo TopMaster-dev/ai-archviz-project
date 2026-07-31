@@ -35,7 +35,10 @@ export default async function handler(req: any, res: any) {
       if (!a.success) {
         return res.status(a.status).json({ success: false, error: a.error });
       }
-      return res.status(200).json({ success: true, narratives: a.narratives, occluded: a.occluded, openings: a.openings });
+      // usage/model も返す。解析も Gemini の課金対象なのに記録されていなかった（260801）。
+      return res
+        .status(200)
+        .json({ success: true, narratives: a.narratives, occluded: a.occluded, openings: a.openings, usage: a.usage, model: a.model });
     }
 
     const result = await runAiEdit(apiKey, body);

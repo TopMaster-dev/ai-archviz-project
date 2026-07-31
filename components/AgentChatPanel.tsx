@@ -210,6 +210,17 @@ export function AgentChatPanel({
    */
   const recordVisionUnits = (units: unknown) => {
     const n = typeof units === 'number' && Number.isFinite(units) ? Math.max(0, Math.floor(units)) : 0;
+    if (typeof units !== 'number') {
+      /*
+       * サーバが visionUnits を返していない＝サーバ側が計測前の版のまま、という状況。
+       * ここで黙って return すると、管理画面ではただ 0 が並ぶだけになり
+       * 「まだ配信されていない」のか「使われていない」のか区別が付かない
+       * （260801 クライアント指摘「0のまま変動しない」で実際に切り分けができなかった）。
+       * 痕跡だけは残す。
+       */
+      console.warn('[vision] サーバから visionUnits が返っていません（計測前の版の可能性）', units);
+      return;
+    }
     if (n <= 0) return;
     void recordAiUsage({ feature: 'agent', model: CLOUD_VISION_MODEL, imageCount: n });
   };

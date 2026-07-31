@@ -139,6 +139,8 @@ export async function generatePlacementNarratives(
   narratives: Record<string, string>;
   occluded: Record<string, boolean>;
   openings: Record<string, DetectedOpeningRect[]>;
+  /** この解析で消費したトークン（260801: エリア編集ごとに必ず走るのに未計上だったため追加）。 */
+  usage?: TokenUsage | null;
 }> {
   if (!params.objects.length) return { narratives: {}, occluded: {}, openings: {} };
 
@@ -195,9 +197,11 @@ ${spec}
     });
     if (!response.ok) return { narratives: {}, occluded: {}, openings: {} };
     const result = await response.json();
+    // 解析も Gemini の課金対象。JSON が取れなくても呼び出しは課金済みなので usage は必ず返す。
+    const usage = readUsage(result);
     const raw = result.candidates?.[0]?.content?.parts?.find((p: { text?: string }) => p.text)?.text;
-    if (!raw || typeof raw !== 'string') return { narratives: {}, occluded: {}, openings: {} };
-    return parsePlacementNarrativesJson(raw);
+    if (!raw || typeof raw !== 'string') return { narratives: {}, occluded: {}, openings: {}, usage };
+    return { ...parsePlacementNarrativesJson(raw), usage };
   } catch {
     return { narratives: {}, occluded: {}, openings: {} };
   }

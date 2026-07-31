@@ -15,6 +15,18 @@ export interface AiUsageEventLike {
   imageCount?: number | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
+  /**
+   * 実測の総トークン（usageMetadata.totalTokenCount）。
+   *
+   * 【260801 クライアント指摘「まだ約8,000円合わない」の主因のひとつ】
+   * Gemini の総トークンは 入力 + 出力 だけではなく、
+   * 「思考トークン（thoughtsTokenCount）」と「ツール入力（toolUsePromptTokenCount）」を含む。
+   * 思考トークンは公式に出力単価で課金される（Output price including thinking tokens）が、
+   * 従来は入力と出力しか見ていなかったため、この分がまるごと計上漏れになっていた。
+   * 幸い総トークンは記録済みなので、差分（total - 入力 - 出力）を出力扱いで加算すれば
+   * 過去に記録したデータもそのまま正しく再計算できる（記録のやり直し不要）。
+   */
+  totalTokens?: number | null;
 }
 
 interface ModelPrice {
@@ -44,6 +56,15 @@ export const MODEL_PRICES: Record<string, ModelPrice> = {
   'gemini-3-pro': { inputPerMTok: 2, outputPerMTok: 12 },
   // Gemini 2.5 Flash（テキスト・エージェント相談/配置キャプションの既定モデル・lib/gemini.ts）: 入力 $0.30/1M・出力 $2.50/1M。
   'gemini-2.5-flash': { inputPerMTok: 0.3, outputPerMTok: 2.5 },
+  /*
+   * Gemini 2.5 Pro（エージェントの「重い相談」振り分け先・lib/gemini.ts resolveAgentProModel の既定）。
+   * 【260801 クライアント指摘「まだ約8,000円合わない」の主因のひとつ】
+   * このモデルだけ単価表から抜けており、priceForModel が null を返すため
+   * 「トークンは記録されているのに費用は常に0円」という状態になっていた。
+   * しかも前方一致では 'gemini-3-pro' に一致しない（'gemini-2.5-pro' で始まらない）ため、
+   * 気付かないまま合算から漏れ続けていた。
+   */
+  'gemini-2.5-pro': { inputPerMTok: 1.25, outputPerMTok: 10 },
   'gemini-2.0-flash': { inputPerMTok: 0.1, outputPerMTok: 0.4 },
   // 専用エンジン（Replicate/Bria 系）: 従量制。per-call の暫定単価（要実測更新）。
   bria: { perCallUsd: 0.01, provisional: true },
@@ -88,8 +109,16 @@ export function estimateEventCostUsd(ev: AiUsageEventLike): number {
   const price = priceForModel(ev.model);
   if (!price) return 0;
   const inTok = Math.max(0, ev.inputTokens ?? 0);
-  const outTok = Math.max(0, ev.outputTokens ?? 0);
+  const rawOutTok = Math.max(0, ev.outputTokens ?? 0);
   const images = Math.max(0, ev.imageCount ?? 0);
+  /*
+   * 総トークンの余り＝思考トークン＋ツール入力（260801）。
+   * 公式には出力単価で課金されるため、出力に足して数える。
+   * 総トークンが記録されていない古い行では 0 になり、従来どおりの計算になる。
+   */
+  const totalTok = Math.max(0, ev.totalTokens ?? 0);
+  const hiddenTok = Math.max(0, totalTok - inTok - rawOutTok);
+  const outTok = rawOutTok + hiddenTok;
   // トークン従量（最優先・実測に基づく）。入力/出力どちらかでもトークンがあれば採用。
   if ((price.inputPerMTok != null || price.outputPerMTok != null) && (inTok > 0 || outTok > 0)) {
     // 画像モデルで出力（生成画像）トークンが欠落している記録は入力だけの過少計上になるため、

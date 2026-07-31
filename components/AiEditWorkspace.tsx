@@ -1079,6 +1079,17 @@ export function AiEditWorkspace({
           }),
         });
         const adata = await ares.json();
+        // 事前解析も Gemini を呼ぶ＝課金される。エリア編集のたびに（候補枚数ぶん）走るのに
+        // 記録していなかったため、実請求との差の一因になっていた（260801）。
+        if (adata?.usage) {
+          void recordAiUsage({
+            feature: 'ai_edit',
+            usage: adata.usage,
+            model: adata.model,
+            imageCount: 0, // 画像は生成していない（トークンのみ）
+            projectId: projectSession?.projectId ?? null,
+          });
+        }
         if (adata?.success) {
           narratives = adata.narratives ?? {};
           occludedMap = adata.occluded ?? {};

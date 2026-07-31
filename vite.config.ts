@@ -239,7 +239,15 @@ export default defineConfig(({ mode }) => {
                             return res.end(
                                 JSON.stringify(
                                     a.success
-                                        ? { success: true, narratives: a.narratives, occluded: a.occluded, openings: a.openings }
+                                        ? {
+                                              success: true,
+                                              narratives: a.narratives,
+                                              occluded: a.occluded,
+                                              openings: a.openings,
+                                              // 本番(api/ai-edit.ts)と同じ形にする（解析ぶんの費用記録・260801）。
+                                              usage: a.usage,
+                                              model: a.model,
+                                          }
                                         : { success: false, error: a.error }
                                 )
                             );

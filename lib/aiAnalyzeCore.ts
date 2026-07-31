@@ -1,4 +1,9 @@
-import { generatePlacementNarratives, type DetectedOpeningRect } from './gemini.js';
+import {
+  generatePlacementNarratives,
+  resolvePlacementCaptionModel,
+  type DetectedOpeningRect,
+  type TokenUsage,
+} from './gemini.js';
 import type { AiEditObjectReference } from '../types.js';
 import { normalizeObjectReference } from './aiEditNormalize.js';
 
@@ -22,6 +27,9 @@ export type AiAnalyzeResult =
       occluded: Record<string, boolean>;
       /** 面仕上げ（壁/床/天井）の内側に検出した窓・ドア等の開口（正規化矩形・260718）。合成で「面から除外＝元のまま保持」する。 */
       openings: Record<string, DetectedOpeningRect[]>;
+      /** 解析で消費したトークンと実モデル名（260801: 未計上だった費用を記録するため）。 */
+      usage?: TokenUsage | null;
+      model?: string;
     }
   | { success: false; status: number; error: string };
 
@@ -44,11 +52,12 @@ export async function runAiAnalyze(apiKey: string, body: AiAnalyzeRequestBody): 
     return { success: true, narratives: {}, occluded: {}, openings: {} };
   }
   try {
-    const { narratives, occluded, openings } = await generatePlacementNarratives(apiKey, {
+    const { narratives, occluded, openings, usage } = await generatePlacementNarratives(apiKey, {
       baseImageDataUrl: body.baseImage,
       objects,
     });
-    return { success: true, narratives, occluded, openings };
+    // 解析も課金される。呼び出し側が記録できるよう usage と実モデル名を返す（260801）。
+    return { success: true, narratives, occluded, openings, usage, model: resolvePlacementCaptionModel() };
   } catch (e) {
     // 解析失敗は致命ではない（呼び出し側は非クロップで続行）。空を返す。
     return { success: true, narratives: {}, occluded: {}, openings: {} };

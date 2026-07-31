@@ -178,6 +178,25 @@ export interface UsageSummary {
   truncated?: boolean;
   /** Cloud Vision の消費ユニット数（無料枠の残りを判断するため回数のまま出す・260731 要望②）。 */
   visionUnits?: number;
+  /**
+   * 単価表に無いモデル名（260801）。
+   *
+   * 単価が引けないモデルは費用0円として黙って合算されるため、金額が実請求より少なく出る。
+   * 実際 gemini-2.5-pro（エージェントの重い相談の振り分け先）が表から漏れており、
+   * トークンは記録されているのに費用だけ0円という状態が続いていた。
+   * 今後モデルを増やしたときに同じことが起きないよう、名前を表に出して気付けるようにする。
+   */
+  unpricedModels?: string[];
+  /**
+   * Cloud Vision を最後に記録した日時（ISO・記録が1件も無ければ null）。
+   *
+   * 【260801 クライアント指摘「Vision が 0 のまま変動しない」への対応】
+   * Vision の計測は 2026/07/30 に実装したため、それ以前の期間を指定すると必ず 0 になる。
+   * これは不具合ではないが、画面上は「壊れている」のと区別が付かない。
+   * 「いつから数え始めたか」「最後に数えたのはいつか」を出して、
+   * 期間の問題なのか記録の問題なのかを運営が自分で判断できるようにする。
+   */
+  visionLastAt?: string | null;
   byModel: GroupAgg[];
   byUser: GroupAgg[];
   byProject: GroupAgg[];
@@ -316,6 +335,8 @@ export async function getUsageSummary(opts?: {
       imageCount: row.image_count,
       inputTokens: row.input_tokens,
       outputTokens: row.output_tokens,
+      // 総トークンも渡す（思考トークン分を出力として数えるため・260801）。
+      totalTokens: row.total_tokens,
     });
     totalCostUsd += cost;
     addTo(byModel, row.model || '(不明)', row, cost);
@@ -349,6 +370,25 @@ export async function getUsageSummary(opts?: {
     if (g.key === CLOUD_VISION_MODEL) g.label = 'Cloud Vision API（画像から商品を特定）';
   }
   const visionUnits = byModel.get(CLOUD_VISION_MODEL)?.images ?? 0;
+  // 単価が引けなかったモデル＝費用0円で合算されている行。黙って少なく見せないため名前を出す。
+  const unpricedModels = [...byModel.keys()].filter((m) => m !== '(不明)' && !hasKnownPrice(m));
+
+  /*
+   * Vision を最後に記録した日時。期間フィルタは掛けない（＝「そもそも記録が存在するのか」を見るため）。
+   * ここが null なら「まだ一度も記録されていない」、日時があるのに期間内が 0 なら「期間の指定違い」と切り分けられる。
+   */
+  let visionLastAt: string | null = null;
+  try {
+    const { data: lastVision } = await sb
+      .from('ai_usage_events')
+      .select('created_at')
+      .eq('model', CLOUD_VISION_MODEL)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    visionLastAt = (lastVision as { created_at: string }[] | null)?.[0]?.created_at ?? null;
+  } catch {
+    /* 取得できなくても集計は返す（診断用の補助情報にすぎない） */
+  }
 
   return {
     ok: true,
@@ -356,6 +396,8 @@ export async function getUsageSummary(opts?: {
     totalCostUsd,
     truncated: fetched.truncated,
     visionUnits,
+    unpricedModels,
+    visionLastAt,
     byModel: modelRows,
     byUser: byUserTop,
     byProject: byProjectTop,
@@ -426,6 +468,7 @@ export async function getUserUsageHistory(
       imageCount: r.image_count,
       inputTokens: r.input_tokens,
       outputTokens: r.output_tokens,
+      totalTokens: r.total_tokens,
     });
   }
   const totalEvents = rows.length;
@@ -441,6 +484,7 @@ export async function getUserUsageHistory(
       imageCount: r.image_count,
       inputTokens: r.input_tokens,
       outputTokens: r.output_tokens,
+      totalTokens: r.total_tokens,
     }),
     costEstimated: !hasKnownPrice(r.model),
   }));
