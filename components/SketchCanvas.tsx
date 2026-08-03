@@ -43,10 +43,20 @@ import {
   clampOpeningRatioWithCollisions,
   getEffectiveOpeningWidthMm,
   getFurnitureFootprintMm,
+  furnitureFootprintCornersMm,
   isFurnitureFootprintInsidePolygon,
   slideFurnitureCenterMmWithWallContact
 } from '../utils/sketchTransform.js';
 import { applyGroupRotation, computeGroupCentroidXZ, resolveMoveMembers, type Vec2XZ } from '../utils/furnitureGroupMove.js';
+import {
+  boundsFromPoints,
+  boundsFromRect,
+  boundsFromRotatedRect,
+  computeFitView,
+  computeMinZoom,
+  unionAllBounds,
+  type BoundsMm,
+} from '../utils/sketchViewFit.js';
 
 const SKETCH_VIEW_DEFAULT_ZOOM = 0.08;
 
@@ -63,6 +73,15 @@ const MIN_ZOOM_FOR_FURNITURE_FULL_GIZMO = SKETCH_VIEW_DEFAULT_ZOOM * 0.625;
 
 /** 図面外接矩形の余白 mm（handleFitToScreen の padding と一致） */
 const FLOORPLAN_ZOOM_PADDING_MM = 1000;
+
+/**
+ * 下絵の「移動/拡縮」ボタンを出すか（260806 クライアント要望③で非表示指定）。
+ *
+ * 下絵の位置は「基準点＋位置(X/Y)」、大きさは「用紙サイズ＋縮尺」で数値指定する運用に変わったため、
+ * ドラッグでの移動・拡縮は数値と食い違う原因になる（ドラッグすると縮尺が変わってしまう）。
+ * 仕組み自体は残してあるので、必要になったらこの定数を true に戻すだけで復活する。
+ */
+const ENABLE_UNDERLAY_MOVE_MODE = false;
 const PERF_TRACE = false;
 const PERF_FRAME_WARN_MS = 20;
 /**
@@ -74,37 +93,16 @@ const ZOOM_OUT_MIN_RELATIVE_TO_FIT = 0.2;
 const GLOBAL_ZOOM_MIN = 0.0025;
 const GLOBAL_ZOOM_MAX = 10;
 
-/**
- * 作図点の外接矩形に基づき、これ以上ズームアウト（数値を下げる）しない下限を返す。
- * 点が2未満のときはグローバル下限のみ。
- */
-function computeMinZoomForFloorplan(
-  floorPointsMm: Point[],
-  canvasW: number,
-  canvasH: number
-): number {
-  if (floorPointsMm.length < 2) return GLOBAL_ZOOM_MIN;
-  let minX = Infinity;
-  let maxX = -Infinity;
-  let minY = Infinity;
-  let maxY = -Infinity;
-  for (const p of floorPointsMm) {
-    if (p.x < minX) minX = p.x;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.y > maxY) maxY = p.y;
-  }
-  const widthMm = maxX - minX + FLOORPLAN_ZOOM_PADDING_MM * 2;
-  const heightMm = maxY - minY + FLOORPLAN_ZOOM_PADDING_MM * 2;
-  if (!Number.isFinite(widthMm) || !Number.isFinite(heightMm) || widthMm <= 0 || heightMm <= 0) {
-    return GLOBAL_ZOOM_MIN;
-  }
-  const zoomX = canvasW / widthMm;
-  const zoomY = canvasH / heightMm;
-  const zoomFit = Math.min(zoomX, zoomY, 2.0);
-  if (!Number.isFinite(zoomFit) || zoomFit <= 0) return GLOBAL_ZOOM_MIN;
-  const floorMin = zoomFit * ZOOM_OUT_MIN_RELATIVE_TO_FIT;
-  return Math.min(GLOBAL_ZOOM_MAX, Math.max(GLOBAL_ZOOM_MIN, floorMin));
+/** 全体表示・ズーム下限で共有する設定（両者が食い違うと「−」で拡大する）。 */
+const FIT_VIEW_OPTIONS = {
+  paddingMm: FLOORPLAN_ZOOM_PADDING_MM,
+  maxZoom: 2.0,
+  minZoom: GLOBAL_ZOOM_MIN,
+} as const;
+
+/** 画面に収めるべき中身の外接矩形に基づく、ズームアウトの下限。 */
+function computeMinZoomForBounds(bounds: BoundsMm | null, canvasW: number, canvasH: number): number {
+  return computeMinZoom(bounds, canvasW, canvasH, FIT_VIEW_OPTIONS, ZOOM_OUT_MIN_RELATIVE_TO_FIT);
 }
 
 /** ズームに応じてギズモ矢印のスケール（参照は初期ズーム） */
@@ -314,6 +312,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
   const viewZoomRef = useRef(DEFAULT_ZOOM);
   const viewOffsetRef = useRef(DEFAULT_OFFSET);
+  /**
+   * 利用者が自分で視点を動かしたか（ホイール・パン・ズームボタン）。
+   * 2Dを開いたときの全体表示（要望④）は、プロジェクトの読み込み待ちで遅れることがある。
+   * その間に利用者が動かしていたら、あとから勝手に視点を戻さないためのフラグ。
+   */
+  const userMovedViewRef = useRef(false);
   /** ホイールを1フレームにまとめてメインスレッド負荷を抑える */
   const wheelPendingZoomRef = useRef<number | null>(null);
   const wheelPendingOffsetRef = useRef<Point | null>(null);
@@ -389,6 +393,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       file?: File;
       pageCount: number;
       pageNumber: number;
+      /** 読み込みの世代番号。ダイアログの入力初期化の鍵に使う（別ファイルなら必ず初期化する）。 */
+      loadId: number;
     } | null
   >(null);
   /** 挿入ダイアログでページを差し替えている最中か（プレビューにスピナーを出す）。 */
@@ -457,6 +463,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   // キャンバスは利用可能領域いっぱいにレスポンシブ表示する。getCanvasMousePos は表示矩形を
   // そのまま座標に使うため、属性サイズ(=canvasSize)を実表示サイズ（コンテナ）に一致させる。
   const [canvasSize, setCanvasSize] = useState({ width: 1100, height: 740 });
+  /**
+   * 実際の描画領域を測り終えたか。初期値は「実測前の仮の大きさ」なので、
+   * これが立つまで全体表示の自動調整（要望④）をしてはいけない（仮の大きさに合わせるとズレる）。
+   * canvasSize の変化で判定できない: 実測値がたまたま仮の値と同じだと setState が何もせず、
+   * 再レンダーが起きないため自動調整が一生走らない。別の state として持つ。
+   */
+  const [canvasMeasured, setCanvasMeasured] = useState(false);
   useEffect(() => {
     const el = canvasBoxRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -465,6 +478,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         const w = Math.max(320, Math.floor(entry.contentRect.width));
         const h = Math.max(240, Math.floor(entry.contentRect.height));
         setCanvasSize((prev) => (prev.width === w && prev.height === h ? prev : { width: w, height: h }));
+        setCanvasMeasured(true);
       }
     });
     ro.observe(el);
@@ -577,6 +591,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         showFurnitureHint('下絵ファイルが大きすぎます（10MB以下にしてください）');
         return;
       }
+      /*
+        読み込みの世代番号。大きなPDFは数秒かかるため、待ちきれずに別のファイルを選び直せる。
+        ここで番号を進め、完了時に自分が最新かを確かめることで「最後に選んだファイルが勝つ」。
+        これが無いと、先に終わった古い読み込みが新しい選択を上書きする。
+      */
+      const req = ++underlayPageReqRef.current;
       try {
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         let dataUrl: string;
@@ -612,8 +632,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           im.onerror = () => resolve({ w: 0, h: 0 });
           im.src = dataUrl;
         });
-        // 前のファイルのページ差し替えが飛んでいたら、その結果は捨てる（別ファイルの画像で上書きされる）。
-        underlayPageReqRef.current++;
+        // 自分より後に始まった読み込みがあれば、こちらは捨てる（古い画像で上書きしない）。
+        if (req !== underlayPageReqRef.current) return;
         // ページ差し替えのために File も持っておく（PDFのみ）。
         setPendingUnderlay({
           dataUrl,
@@ -623,6 +643,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           file: isPdf ? file : undefined,
           pageCount,
           pageNumber: 1,
+          loadId: req,
         });
       } catch (err) {
         console.error('[underlay] failed to load', err);
@@ -1071,9 +1092,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   };
 
   const handleZoomButton = (direction: 'in' | 'out') => {
+    // 利用者が自分でズームした＝以後の自動全体表示（要望④）はしない。
+    userMovedViewRef.current = true;
     const center = getFigureCenter();
     const factor = direction === 'in' ? 1.2 : 1 / 1.2;
-    const minZ = computeMinZoomForFloorplan(pointsMm, canvasSize.width, canvasSize.height);
+    // 下限は全体表示と同じ外接矩形から出す（食い違うと「−」で拡大してしまう）。
+    const minZ = computeMinZoomForBounds(getContentBoundsMm(), canvasSize.width, canvasSize.height);
     const newZoom = Math.max(minZ, Math.min(GLOBAL_ZOOM_MAX, viewZoomRef.current * factor));
     const canvasCenter = { x: canvasSize.width / 2, y: canvasSize.height / 2 };
     const newOffsetX = canvasCenter.x - center.x * newZoom;
@@ -1083,35 +1107,96 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     viewOffsetRef.current = clampViewOffset({ x: newOffsetX, y: newOffsetY });
   };
 
+  /**
+   * 画面に収めるべき「図面」の外接矩形（mm）。
+   *
+   * 部屋の輪郭だけでなく、家具・梁も含める。輪郭の外に置かれた家具が
+   * 「全体」で見えないと、あるはずの物が消えたように見えるため。
+   * 下絵は、まだ何も描いていないときだけ対象にする（下絵は図面より遥かに大きいことがあり、
+   * 常に含めると描いている部屋が豆粒になる）。
+   */
+  const getContentBoundsMm = useCallback((): BoundsMm | null => {
+    const parts: (BoundsMm | null)[] = [boundsFromPoints(pointsMmRef.current)];
+
+    // 家具は回転を含めた実際の足跡の四隅で測る。
+    for (const item of furnitureItemsRef.current) {
+      const { width, depth } = getFurnitureFootprintMm(item);
+      const center = furniturePositionToMm(item.position, centerMm);
+      parts.push(boundsFromPoints(furnitureFootprintCornersMm(center, item.rotation[1] || 0, width, depth)));
+    }
+
+    // 壁に乗る梁は壁（＝輪郭）の内側なので、自由配置の梁だけ測れば足りる。
+    for (const b of beamsRef.current) {
+      if (b.wallIndex !== undefined) continue;
+      parts.push(boundsFromRotatedRect(b.cx, b.cy, b.lengthMm, b.widthMm, b.angleDeg));
+    }
+
+    const drawn = unionAllBounds(parts);
+    if (drawn) return drawn;
+
+    // 何も描かれていないときは下絵に合わせる（下絵をなぞり始める前でも図面が見える）。
+    const ul = underlayRef.current;
+    const img = underlayImgRef.current;
+    if (ul?.visible && img && img.width > 0 && img.height > 0) {
+      const mmPerPx = ul.scaleMmPerPx && ul.scaleMmPerPx > 0 ? ul.scaleMmPerPx : 10;
+      return boundsFromRect(
+        ul.offsetX,
+        ul.offsetY,
+        ul.offsetX + img.width * mmPerPx,
+        ul.offsetY + img.height * mmPerPx,
+      );
+    }
+    return null;
+  }, [centerMm]);
+
+  /**
+   * ホイールハンドラは購読を張り替えたくないので（張り替えると passive:false の登録が毎回外れる）、
+   * 最新の外接矩形計算を ref 経由で読む。
+   */
+  const getContentBoundsRef = useRef(getContentBoundsMm);
+  getContentBoundsRef.current = getContentBoundsMm;
+
+  /**
+   * 図面全体を画面中央に収める。「全体」ボタンと、2Dビューを開いたときの自動調整で共有する
+   * （別々に計算すると、自動調整の見え方と「全体」の見え方が食い違う）。
+   * @returns 実際に視点を変えたか（中身が無い・キャンバス未実測なら false）
+   */
+  const fitViewToContent = useCallback((): boolean => {
+    const view = computeFitView(getContentBoundsMm(), canvasSize.width, canvasSize.height, FIT_VIEW_OPTIONS);
+    if (!view) return false;
+    viewZoomRef.current = view.zoom;
+    viewOffsetRef.current = clampViewOffset(view.offset);
+    return true;
+  }, [getContentBoundsMm, canvasSize.width, canvasSize.height]);
+
   const handleFitToScreen = () => {
-    if (pointsMm.length === 0) {
+    // 中身が無いときだけ既定の視点へ戻す（原点まわりのグリッドが見える状態）。
+    if (!fitViewToContent()) {
       viewZoomRef.current = DEFAULT_ZOOM;
       viewOffsetRef.current = DEFAULT_OFFSET;
-      return;
     }
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    pointsMm.forEach(p => {
-      if (p.x < minX) minX = p.x;
-      if (p.x > maxX) maxX = p.x;
-      if (p.y < minY) minY = p.y;
-      if (p.y > maxY) maxY = p.y;
-    });
-    const padding = 1000;
-    const width = maxX - minX + padding * 2;
-    const height = maxY - minY + padding * 2;
-    const zoomX = canvasSize.width / width;
-    const zoomY = canvasSize.height / height;
-    const newZoom = Math.min(zoomX, zoomY, 2.0);
-    const centerX = (minX + maxX) / 2;
-    const centerY = (minY + maxY) / 2;
-    const canvasCenter = { x: canvasSize.width / 2, y: canvasSize.height / 2 };
-    if (!Number.isFinite(newZoom) || !Number.isFinite(centerX) || !Number.isFinite(centerY)) return;
-    viewZoomRef.current = newZoom;
-    viewOffsetRef.current = clampViewOffset({
-      x: canvasCenter.x - centerX * newZoom,
-      y: canvasCenter.y - centerY * newZoom
-    });
   };
+
+  /**
+   * 2Dビューを開いた（3Dから切り替えた）ときに、図面全体が画面中央に来るよう自動で合わせる
+   * （260806 クライアント要望④）。SketchCanvas は 2D のときだけマウントされるので、
+   * 「マウント時に1回」がそのまま「2Dへ切り替えるたび」になる。
+   *
+   * 注意点:
+   *  - キャンバスの実測前（canvasSize が仮値）に合わせると、実際の描画領域とズレる。実測を待つ。
+   *  - プロジェクトの読み込みが後から終わる経路（2Dで直接開く）では、マウント時点で図面が空。
+   *    中身が入るまで待ち、入った時点で1回だけ合わせる。
+   *  - 待っている間に利用者がキャンバスに触れていたら、もう合わせない（操作を勝手に取り消さない）。
+   *    handlePointerDown が userMovedViewRef を立てる。これが無いと、白紙から1点目を打った瞬間に
+   *    「中身が入った」と見なして発火し、置いたばかりの点が画面中央へ飛ぶ。
+   */
+  const didInitialFitRef = useRef(false);
+  // 依存配列を付けない＝毎レンダー確認する。図面・家具・梁・下絵のどれが後から入っても
+  // 拾えるようにするため（成立したら以後は即 return するので負荷にならない）。
+  useEffect(() => {
+    if (didInitialFitRef.current || userMovedViewRef.current || !canvasMeasured) return;
+    if (fitViewToContent()) didInitialFitRef.current = true;
+  });
 
   const handleDeleteSelected = () => {
     if (activeFurnitureId) {
@@ -1182,6 +1267,13 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   }, [selectedPointIndex, selectedEdgeIndex, selectedBeamId, beams, onBeamsChange]);
 
   const handlePointerDown = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    /*
+      キャンバスに触れた時点で「利用者が操作中」とみなし、以後の自動全体表示（要望④）を止める。
+      自動全体表示は図面の到着待ちで遅れることがあり、白紙から1点目を打った瞬間に発火すると、
+      置いたばかりの点が画面中央へ飛びズームも変わる（作図中に足元が動く）。
+      2Dを開いた直後の自動調整はキャンバスに触れる前に済んでいるので、これで妨げられない。
+    */
+    userMovedViewRef.current = true;
     const pixels = getCanvasMousePos(e);
     if (pixels.x < rulerSize || pixels.y < rulerSize) return;
     const mm = screenToWorld(pixels);
@@ -1193,6 +1285,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     const shiftSelectsFurniture =
       (isSelectMode || isAddFurniture) && !!shiftHitForSelect && !!shiftHitForSelect.ceilingMount === isCeilingView;
     if (e.button === 2 || (e.shiftKey && !shiftSelectsFurniture)) {
+      // 利用者が自分で画面を動かした＝以後の自動全体表示（要望④）はしない。
+      userMovedViewRef.current = true;
       setIsPanning(true);
       lastMousePixelsRef.current = pixels;
       tryPointerCapture(e);
@@ -1918,6 +2012,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
+      // 利用者が自分でズームした＝以後の自動全体表示（要望④）はしない。
+      userMovedViewRef.current = true;
       const zoomIntensity = 0.1;
       const rect = canvas.getBoundingClientRect();
       const pixels = { x: e.clientX - rect.left, y: e.clientY - rect.top };
@@ -1942,7 +2038,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         return;
       }
       const newZoom = e.deltaY > 0 ? curZ * (1 - zoomIntensity) : curZ * (1 + zoomIntensity);
-      const minZ = computeMinZoomForFloorplan(pointsMmRef.current, canvas.width, canvas.height);
+      // 下限は全体表示と同じ外接矩形から出す（食い違うとホイールの縮小が効かなくなる）。
+      const minZ = computeMinZoomForBounds(getContentBoundsRef.current(), canvas.width, canvas.height);
       const clampedZoom = Math.max(minZ, Math.min(GLOBAL_ZOOM_MAX, newZoom));
       const nextOffset = {
         x: pixels.x - mmBefore.x * clampedZoom,
@@ -3273,16 +3370,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                 >
                   {underlay.visible ? '表示' : '非表示'}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setUnderlayMoveMode((v) => !v)}
-                  disabled={!underlay.visible}
-                  className={`px-2 py-1 rounded transition disabled:opacity-40 ${underlayMoveMode ? 'bg-emerald-500 text-black' : 'hover:bg-white/10'
-                    }`}
-                  title="オンにして下絵をドラッグで移動、右下角のハンドルをドラッグでサイズ変更"
-                >
-                  移動/拡縮
-                </button>
+                {ENABLE_UNDERLAY_MOVE_MODE && (
+                  <button
+                    type="button"
+                    onClick={() => setUnderlayMoveMode((v) => !v)}
+                    disabled={!underlay.visible}
+                    className={`px-2 py-1 rounded transition disabled:opacity-40 ${underlayMoveMode ? 'bg-emerald-500 text-black' : 'hover:bg-white/10'
+                      }`}
+                    title="オンにして下絵をドラッグで移動、右下角のハンドルをドラッグでサイズ変更"
+                  >
+                    移動/拡縮
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -3451,7 +3550,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   </>
                 );
               })()}
-              {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）＋ サイズ変更のヒント */}
+              {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着） */}
               <div className="flex items-center gap-2 text-[10px] text-neutral-400">
                 <button
                   type="button"
@@ -3465,7 +3564,9 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                 >
                   下絵スナップ {isUnderlaySnapEnabled ? 'ON' : 'OFF'}
                 </button>
-                <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
+                {ENABLE_UNDERLAY_MOVE_MODE && (
+                  <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
+                )}
               </div>
             </div>
           )}
@@ -3494,6 +3595,7 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             ? pendingUnderlay.paperMmPerPx * pendingUnderlay.imageW
             : null
         }
+        loadId={pendingUnderlay?.loadId ?? 0}
         pageCount={pendingUnderlay?.pageCount ?? 1}
         pageNumber={pendingUnderlay?.pageNumber ?? 1}
         pageLoading={pendingPageLoading}
@@ -3763,34 +3865,37 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           描画エリアの中央より約164px 左へずれる。
           この箱はキャンバスと同じ大きさなので、left-1/2 がそのまま描画エリアの中央になる。
         */}
+        {/*
+          並びとデザインは 260806 クライアント支給の画像どおり:
+          丸い「＋」/「−」で「全体」を挟む（＋ 全体 −）。区切り線は入れず、
+          外枠は角丸のカプセル、ボタンだけを円で浮かせる。
+        */}
         <div
           data-testid="sketch-zoom-bar"
-          className="absolute bottom-5 left-1/2 z-50 -translate-x-1/2 flex items-stretch overflow-hidden rounded-2xl border border-white/10 bg-[#111]/80 shadow-xl backdrop-blur-xl animate-in slide-in-from-bottom duration-700"
+          className="absolute bottom-5 left-1/2 z-50 -translate-x-1/2 flex items-center gap-3 rounded-full border border-white/10 bg-[#111]/80 px-3 py-2 shadow-xl backdrop-blur-xl animate-in slide-in-from-bottom duration-700"
         >
           <button
             onClick={() => handleZoomButton('in')}
             title="拡大"
             aria-label="拡大"
-            className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg font-bold leading-none text-white transition-all hover:bg-white/15"
           >
             +
           </button>
-          <span className="w-px self-stretch bg-white/10" aria-hidden />
+          <button
+            onClick={handleFitToScreen}
+            title="図面全体を表示"
+            className="rounded-full px-2 text-xs font-bold tracking-wide text-neutral-300 transition-all hover:text-white"
+          >
+            全体
+          </button>
           <button
             onClick={() => handleZoomButton('out')}
             title="縮小"
             aria-label="縮小"
-            className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
+            className="flex h-9 w-9 items-center justify-center rounded-full border border-white/15 bg-white/5 text-lg font-bold leading-none text-white transition-all hover:bg-white/15"
           >
-            -
-          </button>
-          <span className="w-px self-stretch bg-white/10" aria-hidden />
-          <button
-            onClick={handleFitToScreen}
-            title="図面全体を表示"
-            className="flex h-11 items-center justify-center px-4 text-xs font-black uppercase tracking-tighter text-neutral-300 transition-all hover:bg-white/10"
-          >
-            全体
+            −
           </button>
         </div>
       </div>

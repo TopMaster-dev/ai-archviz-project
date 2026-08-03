@@ -39,6 +39,7 @@ export function UnderlayInsertDialog({
   imageHeight,
   detectedPaperId,
   defaultWidthMm,
+  loadId = 0,
   pageCount = 1,
   pageNumber = 1,
   pageLoading = false,
@@ -57,6 +58,11 @@ export function UnderlayInsertDialog({
    * 空欄から始めると、規格外の用紙（長尺図面など）で必ず手入力が要る。
    */
   defaultWidthMm?: number | null;
+  /**
+   * 読み込んだファイルの識別番号。ファイルを読み込むたびに増える。
+   * これが変わったら入力を初期化する（ページを選び直しただけでは変わらない）。
+   */
+  loadId?: number;
   /** PDFの総ページ数。2以上のときだけページ選択を出す。 */
   pageCount?: number;
   pageNumber?: number;
@@ -89,19 +95,27 @@ export function UnderlayInsertDialog({
     else if (!text.trim()) setHeightText('');
   };
 
-  const wasOpen = useRef(false);
+  /*
+    読み込んだファイルが変わったときに全項目を初期化する。
+    「開いた瞬間だけ」では足りない: 大きなPDFの読み込み中に別のファイルを選び直すと、
+    ダイアログが開いたまま中身だけ差し替わることがあり、前のファイルの用紙・縮尺が
+    新しい画像に適用されてしまう（実寸が狂う）。ページを選び直しただけでは変わらない
+    loadId を鍵にすることで、入力済みの縮尺を保ちつつ、別ファイルなら必ず初期化する。
+  */
+  const prevLoadIdRef = useRef<number | null>(null);
   useEffect(() => {
-    // 開いた瞬間だけ全項目を初期化する。ページを選び直しただけで、
-    // すでに入力済みの縮尺まで 100 に戻ってしまうのを避ける（下の効果で用紙だけ追従させる）。
-    if (open && !wasOpen.current) {
-      setPaperId(detectedPaperId ?? 'A3');
-      setDenominatorText('100');
-      applyWidth(defaultWidthMm && defaultWidthMm > 0 ? String(Math.round(defaultWidthMm)) : '');
+    if (!open) {
+      prevLoadIdRef.current = null;
+      return;
     }
-    wasOpen.current = open;
+    if (prevLoadIdRef.current === loadId) return;
+    prevLoadIdRef.current = loadId;
+    setPaperId(detectedPaperId ?? 'A3');
+    setDenominatorText('100');
+    applyWidth(defaultWidthMm && defaultWidthMm > 0 ? String(Math.round(defaultWidthMm)) : '');
     // applyWidth は毎レンダー作り直されるため依存に入れない（入れると初期化が繰り返される）。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, detectedPaperId, defaultWidthMm]);
+  }, [open, loadId, detectedPaperId, defaultWidthMm]);
 
   // ページを選び直すと用紙も画像サイズも変わりうる。用紙の判定と、
   // カスタム時の寸法だけを新しいページに合わせ直す（縮尺は利用者の入力を残す）。
@@ -131,14 +145,18 @@ export function UnderlayInsertDialog({
     return p ? paperMmLandscape(p).widthMm : null;
   }, [isCustom, widthText, paperId]);
 
-  /** 用紙上の高さ（mm）。画像を歪めないため、幅と画像の縦横比から決まる。 */
-  const paperHeightMm = useMemo(() => {
-    if (!isCustom) {
-      const p = paperSizeById(paperId);
-      return p ? paperMmLandscape(p).heightMm : null;
-    }
-    return paperWidthMm != null && aspect > 0 ? paperWidthMm * aspect : null;
-  }, [isCustom, paperId, paperWidthMm, aspect]);
+  /**
+   * 用紙上の高さ（mm）。常に「幅 × 画像の縦横比」で求める。
+   *
+   * 規格用紙を選んでも、用紙の短辺（A3なら297mm）を出してはいけない。
+   * 取り込み時の実寸は幅（＝用紙の長辺 ÷ 画素幅）だけから決まり、高さは画像の画素数に従うため、
+   * A判でない画像（A3の紙をスマホで撮った4:3の写真など）では用紙の短辺と実際の配置が食い違う。
+   * 確認のための表示が実際と違うと、間違いに気付けないまま取り込んでしまう。
+   */
+  const paperHeightMm = useMemo(
+    () => (paperWidthMm != null && aspect > 0 ? paperWidthMm * aspect : null),
+    [paperWidthMm, aspect],
+  );
 
   /** 高さ(mm)を入れ、幅を縦横比から逆算する（幅・高さのどちらからでも指定できるように）。 */
   const applyHeight = (text: string) => {
