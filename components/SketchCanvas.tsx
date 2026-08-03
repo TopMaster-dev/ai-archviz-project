@@ -3488,41 +3488,6 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         }}
       />
 
-      {/*
-        ズーム操作（260803 クライアント要望）。
-        以前は右端に3つ縦並びだったが、資料のとおり描画エリアの下部中央へ移し、
-        横長の1パネルにまとめた。ボタンが3つに分かれて見えないよう、枠は1つで区切り線で分ける。
-      */}
-      <div
-        data-testid="sketch-zoom-bar"
-        className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-stretch overflow-hidden rounded-2xl border border-white/10 bg-[#111]/80 shadow-xl backdrop-blur-xl animate-in slide-in-from-bottom duration-700"
-      >
-        <button
-          onClick={() => handleZoomButton('in')}
-          title="拡大"
-          aria-label="拡大"
-          className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
-        >
-          +
-        </button>
-        <span className="w-px self-stretch bg-white/10" aria-hidden />
-        <button
-          onClick={() => handleZoomButton('out')}
-          title="縮小"
-          aria-label="縮小"
-          className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
-        >
-          -
-        </button>
-        <span className="w-px self-stretch bg-white/10" aria-hidden />
-        <button
-          onClick={handleFitToScreen}
-          title="図面全体を表示"
-          className="flex h-11 items-center justify-center px-4 text-xs font-black uppercase tracking-tighter text-neutral-300 transition-all hover:bg-white/10"
-        >
-          全体
-        </button>
-      </div>
 
       {/* Floating Toolbar (Top Right) - Unified Controls */}
       {/* レスポンシブ（管理表 row 13）: md以上は最上段（top-6, モード切替の右隣の空きを活用）に上げ、
@@ -3686,6 +3651,45 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             </div>
           </div>
         )}
+
+        {/*
+          ズーム操作（260803 要望で下部中央へ・260804 中央ズレの修正）。
+          ここ（キャンバスを包む箱）の中に置くことが重要。
+          外側のルート要素は左サイドパネルぶんの余白（lg:pl-[352px]）を持っており、
+          そちらに置くと left-1/2 が「パネルを含めた全体の中央」になって、
+          描画エリアの中央より約164px 左へずれる。
+          この箱はキャンバスと同じ大きさなので、left-1/2 がそのまま描画エリアの中央になる。
+        */}
+        <div
+          data-testid="sketch-zoom-bar"
+          className="absolute bottom-5 left-1/2 z-50 -translate-x-1/2 flex items-stretch overflow-hidden rounded-2xl border border-white/10 bg-[#111]/80 shadow-xl backdrop-blur-xl animate-in slide-in-from-bottom duration-700"
+        >
+          <button
+            onClick={() => handleZoomButton('in')}
+            title="拡大"
+            aria-label="拡大"
+            className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
+          >
+            +
+          </button>
+          <span className="w-px self-stretch bg-white/10" aria-hidden />
+          <button
+            onClick={() => handleZoomButton('out')}
+            title="縮小"
+            aria-label="縮小"
+            className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
+          >
+            -
+          </button>
+          <span className="w-px self-stretch bg-white/10" aria-hidden />
+          <button
+            onClick={handleFitToScreen}
+            title="図面全体を表示"
+            className="flex h-11 items-center justify-center px-4 text-xs font-black uppercase tracking-tighter text-neutral-300 transition-all hover:bg-white/10"
+          >
+            全体
+          </button>
+        </div>
       </div>
     </div>
   );
