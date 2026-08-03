@@ -28,16 +28,20 @@ export function buildPreviewFileName(projectName?: string | null, now: Date = ne
 }
 
 /**
- * 高解像度書き出しのファイル名 = 日付＋プロジェクト名＋DPI＋寸法＋.png（260625 クライアント要望 #1）。
- * 複数プリセット（300/250/200/150 dpi）をダウンロードした際に、ファイル名で各種設定の違いが分かるようにする。
+ * 高解像度書き出しのファイル名 = 日付＋プロジェクト名＋「高解像度」＋.png。
+ *
+ * 【260803 クライアント要望E】以前は `_300dpi_4961x2790` を付けていたが、
+ * この 300dpi は用紙サイズから逆算した出力の画素数であって、
+ * 元画像がその情報量を持っているという意味ではない（実効は約230dpi相当）。
+ * 実際より高い品質を名乗ることになるため、dpi と寸法の表記をやめる。
+ * 例: 2026-08-03_マイプロジェクト_高解像度.png
  */
 export function buildHiResFileName(
   projectName: string | null | undefined,
-  spec: { dpi: number; width: number; height: number },
   now: Date = new Date(),
 ): string {
   const safe = sanitizeFileNamePart((projectName ?? '').trim()) || 'プロジェクト';
-  return `${exportDateStamp(now)}_${safe}_${spec.dpi}dpi_${spec.width}x${spec.height}.png`;
+  return `${exportDateStamp(now)}_${safe}_高解像度.png`;
 }
 
 /**

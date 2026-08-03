@@ -8,6 +8,14 @@ import { useProjectStore } from '../lib/store/projectStore.js';
 import { useStore } from 'zustand';
 import { Undo2, Redo2 } from 'lucide-react';
 import { useConfirm } from './ConfirmDialog.js';
+import { shouldUseAlignSnap } from '../utils/snapPriority.js';
+import { UnderlayInsertDialog } from './UnderlayInsertDialog.js';
+import {
+  paperSizeById,
+  paperMmPerPxForImage,
+  realMmPerPx,
+  detectPaperIdFromMmPerPx,
+} from '../utils/underlayScale.js';
 import {
   SKETCH_BASE_SCALE,
   getRoomTransform,
@@ -357,6 +365,14 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
   const [isVertexSnapEnabled] = useState(true);
   // 下絵スナップ（背景画像の枠・辺・中心へ吸着）。既定OFF・任意。
   const [isUnderlaySnapEnabled, setIsUnderlaySnapEnabled] = useState(false);
+  /**
+   * 挿入待ちの下絵（260803）。ファイルを読み終えたらここへ入れ、
+   * 用紙サイズ・縮尺のダイアログで確定してから実際に配置する。
+   * paperMmPerPx は PDF のときだけ入る（用紙寸法をファイルが持っているため）。
+   */
+  const [pendingUnderlay, setPendingUnderlay] = useState<
+    { dataUrl: string; paperMmPerPx?: number; imageW: number; imageH: number } | null
+  >(null);
 
   // Selection & Interaction State
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
@@ -552,18 +568,20 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           });
         }
         if (!dataUrl) return;
-        // PDF は用紙mm/px が分かるので、既定の縮尺 1:100 で実寸 scaleMmPerPx を自動算出（後で縮尺を変更可）。
-        const DEFAULT_DENOM = 100;
-        const scaleMmPerPx = paperMmPerPx != null ? paperMmPerPx * DEFAULT_DENOM : 10;
-        onUnderlayChange?.({
-          dataUrl,
-          opacity: 0.5,
-          scaleMmPerPx,
-          offsetX: 0,
-          offsetY: 0,
-          visible: true,
-          ...(paperMmPerPx != null ? { paperMmPerPx, scaleDenominator: DEFAULT_DENOM } : {}),
+        /*
+         * 【260803 クライアント要望・管理表124行目】
+         * 即座に貼らず、まず「用紙サイズ」と「縮尺」を伺うダイアログを出す。
+         * この2つが分かれば図面の実寸が決まるため、貼ってから幅(mm)を手入力する手間が無くなる。
+         * PDFはファイル自身が用紙寸法を持つので検出値を初期選択に使い、画像は利用者に選んでいただく。
+         * 用紙の向きは画像の縦横比から自動判定するので、ここで画素数も測っておく。
+         */
+        const size = await new Promise<{ w: number; h: number }>((resolve) => {
+          const im = new Image();
+          im.onload = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+          im.onerror = () => resolve({ w: 0, h: 0 });
+          im.src = dataUrl;
         });
+        setPendingUnderlay({ dataUrl, paperMmPerPx, imageW: size.w, imageH: size.h });
       } catch (err) {
         console.error('[underlay] failed to load', err);
         // 原因が分かる場合はそのまま出す（260728 #4: 「下絵の読み込みに失敗しました」だけでは
@@ -825,23 +843,40 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           return { x: v.x, y: v.y };
         }
       }
-      // 2b. X/Y 整列スナップ（既存頂点と同じ X もしくは Y に揃える）
-      let snappedX = rawMm.x;
-      let snappedY = rawMm.y;
-      let alignedX = false;
-      let alignedY = false;
-      for (const v of pointsMm) {
-        if (originMm && v.x === originMm.x && v.y === originMm.y) continue;
-        const vs = worldToScreen(v);
-        if (!alignedX && Math.abs(vs.x - rawScreen.x) < VERTEX_PX) { snappedX = v.x; alignedX = true; }
-        if (!alignedY && Math.abs(vs.y - rawScreen.y) < VERTEX_PX) { snappedY = v.y; alignedY = true; }
-        if (alignedX && alignedY) break;
-      }
-      if (alignedX || alignedY) {
-        // 整列しない軸はグリッドが有効なら従来どおりグリッドへ。
-        if (!alignedX && isGridSnapEnabled && gridSize > 0) snappedX = snapValue(rawMm.x, gridSize);
-        if (!alignedY && isGridSnapEnabled && gridSize > 0) snappedY = snapValue(rawMm.y, gridSize);
-        return { x: snappedX, y: snappedY };
+      /*
+       * 2b. X/Y 整列スナップ（既存頂点と同じ X もしくは Y に揃える＝「頂点の延長線上」への吸着）。
+       *
+       * 【260803 クライアント要望】この整列が、利用者が明示的に設定した
+       * 「長さ・角度・グリッド」のスナップより先に成立して return してしまい、
+       * 設定した寸法どおりに描けない、という指摘があった（動画で再現を確認）。
+       * 実際この処理には ON/OFF が無く常時有効で、しかも成立時点で以降の
+       * 長さ・角度・グリッド（Priority 3）へ到達しない構造になっていた。
+       *
+       * そこで「3つとも無効のときだけ効く」ようにする。
+       * 何もスナップを設定していないときの補助としては引き続き有用なので削除はしない。
+       */
+      if (
+        shouldUseAlignSnap({
+          lengthEnabled: isLengthSnapEnabled,
+          lengthMm: lengthSnapSize,
+          angleEnabled: isAngleSnapEnabled,
+          angleDeg: angleSnap,
+          gridEnabled: isGridSnapEnabled,
+          gridMm: gridSize,
+        })
+      ) {
+        let snappedX = rawMm.x;
+        let snappedY = rawMm.y;
+        let alignedX = false;
+        let alignedY = false;
+        for (const v of pointsMm) {
+          if (originMm && v.x === originMm.x && v.y === originMm.y) continue;
+          const vs = worldToScreen(v);
+          if (!alignedX && Math.abs(vs.x - rawScreen.x) < VERTEX_PX) { snappedX = v.x; alignedX = true; }
+          if (!alignedY && Math.abs(vs.y - rawScreen.y) < VERTEX_PX) { snappedY = v.y; alignedY = true; }
+          if (alignedX && alignedY) break;
+        }
+        if (alignedX || alignedY) return { x: snappedX, y: snappedY };
       }
     }
 
@@ -3135,14 +3170,21 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               <ToggleSwitch enabled={isAngleSnapEnabled ?? true} onChange={() => onAngleSnapToggle(!isAngleSnapEnabled)} />
             </div>
           </div>
+          {/*
+            グリッドの間隔（260803 クライアント要望）。
+            以前は 500mm / 1m / 10m の3択だったが、任意の間隔で作図したいというご要望により
+            「長さ」と同じ数値入力へ変更。0以下はグリッドが成立しない（割り算が破綻する）ので下限で止める。
+          */}
           <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] font-bold text-neutral-400">グリッド</span>
+            <span className="text-[10px] font-bold text-neutral-400">グリッド(mm)</span>
             <div className="flex items-center gap-2 shrink-0">
-              <select value={gridSize} onChange={(e) => onGridSizeChange(Number(e.target.value))} className="bg-[#000]/30 border border-white/10 rounded-lg pl-2 pr-1 h-8 text-xs font-mono text-emerald-400 focus:outline-none cursor-pointer hover:bg-white/5 transition-all">
-                <option value="500">500mm</option>
-                <option value="1000">1m</option>
-                <option value="10000">10m</option>
-              </select>
+              <NumericField
+                value={gridSize}
+                onChange={(v) => onGridSizeChange(Math.max(1, Math.round(v)))}
+                dragSensitivity={10}
+                className="h-8 w-[72px]"
+                inputClassName="h-8 py-0 text-center text-emerald-400 focus-visible:ring-emerald-500/50"
+              />
               <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
             </div>
           </div>
@@ -3291,24 +3333,25 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               {underlay.paperMmPerPx != null && (() => {
                 const paper = underlay.paperMmPerPx!;
                 const effDenom = paper > 0 ? Math.round((underlay.scaleMmPerPx ?? paper * 100) / paper) : 100;
-                const STD = [10, 20, 30, 50, 100, 150, 200, 250, 300, 500];
-                const opts = STD.includes(effDenom) ? STD : [...STD, effDenom].sort((a, b) => a - b);
                 return (
                   <label className="flex items-center gap-1 text-[10px] text-neutral-300">
                     縮尺 1:
-                    <select
+                    {/*
+                      260803 クライアント要望: 固定のプルダウンではなく任意の縮尺を入れられるように。
+                      1/150 のような規格外の縮尺で描かれた図面が実際にあるため。
+                    */}
+                    <input
+                      type="number"
+                      min={1}
+                      step={1}
                       value={effDenom}
                       onChange={(e) => {
                         const denom = Number(e.target.value);
                         if (denom > 0) onUnderlayChange?.({ ...underlay, scaleDenominator: denom, scaleMmPerPx: paper * denom });
                       }}
-                      className="rounded bg-black/40 border border-white/10 px-1 py-0.5 text-emerald-400"
+                      className="w-16 rounded bg-black/40 border border-white/10 px-1 py-0.5 text-right text-emerald-400"
                       title="図面の縮尺。用紙サイズと縮尺から下絵を実寸に合わせます。幅(mm)で微調整すると実際の縮尺に追従します。"
-                    >
-                      {opts.map((d) => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
+                    />
                     <span className="text-neutral-500">の図面</span>
                   </label>
                 );
@@ -3341,12 +3384,73 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         </div>
       </div>
 
-      {/* Floating Toolbar (Right) — 全幅で右中央。スナップ設定を左パネルへ移したので上部ツールバーは低くなり干渉しない。
-          260730 クライアント要望: 中央から 30px 下げる（中心位置をずらすので、上下の余白比だけが変わる）。 */}
-      <div className="absolute top-[calc(50%+30px)] -translate-y-1/2 right-4 flex flex-col gap-3 z-50 animate-in slide-in-from-right duration-700">
-        <button onClick={() => handleZoomButton('in')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">+</button>
-        <button onClick={() => handleZoomButton('out')} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-white hover:bg-white/10 transition-all shadow-xl font-bold text-xl">-</button>
-        <button onClick={handleFitToScreen} className="w-14 h-14 glass rounded-2xl flex items-center justify-center text-xs font-black text-neutral-400 hover:bg-white/10 transition-all uppercase tracking-tighter">全体</button>
+      {/* 下絵の挿入（用紙サイズ＋縮尺で実寸に合わせる・260803 クライアント要望） */}
+      <UnderlayInsertDialog
+        open={pendingUnderlay != null}
+        imageWidth={pendingUnderlay?.imageW ?? 0}
+        imageHeight={pendingUnderlay?.imageH ?? 0}
+        detectedPaperId={
+          pendingUnderlay?.paperMmPerPx != null && pendingUnderlay.imageW > 0
+            ? detectPaperIdFromMmPerPx(pendingUnderlay.paperMmPerPx, pendingUnderlay.imageW, pendingUnderlay.imageH)
+            : null
+        }
+        onCancel={() => setPendingUnderlay(null)}
+        onConfirm={({ paperId, scaleDenominator }) => {
+          const p = pendingUnderlay;
+          setPendingUnderlay(null);
+          if (!p) return;
+          const paper = paperSizeById(paperId);
+          // 用紙上の mm/px は、PDFなら実測値を、画像なら選ばれた用紙から求める。
+          const paperMmPerPx =
+            p.paperMmPerPx ?? (paper ? paperMmPerPxForImage(paper, p.imageW, p.imageH) : null);
+          const mmPerPx = paperMmPerPx != null ? realMmPerPx(paperMmPerPx, scaleDenominator) : null;
+          onUnderlayChange?.({
+            dataUrl: p.dataUrl,
+            opacity: 0.5,
+            // 換算できなかった場合だけ従来の既定値（後から幅mmで調整できる）。
+            scaleMmPerPx: mmPerPx ?? 10,
+            offsetX: 0,
+            offsetY: 0,
+            visible: true,
+            ...(paperMmPerPx != null ? { paperMmPerPx, scaleDenominator } : {}),
+          });
+        }}
+      />
+
+      {/*
+        ズーム操作（260803 クライアント要望）。
+        以前は右端に3つ縦並びだったが、資料のとおり描画エリアの下部中央へ移し、
+        横長の1パネルにまとめた。ボタンが3つに分かれて見えないよう、枠は1つで区切り線で分ける。
+      */}
+      <div
+        data-testid="sketch-zoom-bar"
+        className="absolute bottom-5 left-1/2 -translate-x-1/2 z-50 flex items-stretch overflow-hidden rounded-2xl border border-white/10 bg-[#111]/80 shadow-xl backdrop-blur-xl animate-in slide-in-from-bottom duration-700"
+      >
+        <button
+          onClick={() => handleZoomButton('in')}
+          title="拡大"
+          aria-label="拡大"
+          className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
+        >
+          +
+        </button>
+        <span className="w-px self-stretch bg-white/10" aria-hidden />
+        <button
+          onClick={() => handleZoomButton('out')}
+          title="縮小"
+          aria-label="縮小"
+          className="flex h-11 w-14 items-center justify-center text-xl font-bold text-white transition-all hover:bg-white/10"
+        >
+          -
+        </button>
+        <span className="w-px self-stretch bg-white/10" aria-hidden />
+        <button
+          onClick={handleFitToScreen}
+          title="図面全体を表示"
+          className="flex h-11 items-center justify-center px-4 text-xs font-black uppercase tracking-tighter text-neutral-300 transition-all hover:bg-white/10"
+        >
+          全体
+        </button>
       </div>
 
       {/* Floating Toolbar (Top Right) - Unified Controls */}

@@ -49,6 +49,7 @@ import {
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
 import { PREVIEW_GEMINI_IMAGE_SIZE, AREA_EDIT_BASE_MAX_SIDE } from '../utils/printExportSpec.js';
 import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
+import { matchOverallColorToReference } from '../utils/colorMatch.js';
 import {
   ENABLE_HARMONIZE_FLATTEN,
   ENABLE_KEEP_QUALITY_ENHANCE,
@@ -1520,9 +1521,13 @@ export function AiEditWorkspace({
       void recordAiUsage({ feature: 'ai_edit', usage: edata.usage, model: edata.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
       // 精細化は合成を伴わない（全画面1枚）ので、生成結果の解像度を縮めずに採用する。
       // ベース寸法へ落とすと、せっかく描き起こした細部をその場で捨てることになり「押しても変わらない」の一因だった。
-      const outSize = await loadImageNaturalSize(edata.url as string);
+      // 全体の色味を精細化前へ合わせる（260803 クライアント要望A）。
+      // 精細化はAIによる描き直しなので、鮮明さとは別に色（赤み）がズレることがある。
+      // 書き出しと同じ処理を通し、両方の経路で同じ色になるようにする。
+      const colorMatched = await matchOverallColorToReference(edata.url as string, src);
+      const outSize = await loadImageNaturalSize(colorMatched);
       const target = keepGeneratedSize({ w: baseW, h: baseH }, outSize);
-      const fitted = await fitDataUrlToSize(edata.url as string, target.w, target.h, 'cover');
+      const fitted = await fitDataUrlToSize(colorMatched, target.w, target.h, 'cover');
       commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, fitted);
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : '精細化に失敗しました。');
@@ -2790,26 +2795,15 @@ export function AiEditWorkspace({
                   </span>
                 </label>
               )}
-              {/* 画質を高める（精細化・260710）: 旧「見本画像を2枚目として添付」方式（ゴースト原因）を廃止し、
-                  生成後に現在の1枚だけをAIで精細化する後処理に刷新。2枚目を渡さないのでゴースト/二重は起きない。 */}
-              {activeTool === 'area' && ENABLE_KEEP_QUALITY_ENHANCE && (
-                <label className="flex items-start gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    className="mt-0.5 accent-emerald-500"
-                    checked={keepQuality}
-                    onChange={(e) => setKeepQuality(e.target.checked)}
-                    disabled={isSubmitting}
-                  />
-                  <span className="text-[11px] leading-snug text-neutral-300">
-                    <span className="font-bold text-neutral-100">画質を高める（仕上げに精細化）</span>
-                    <span className="block text-neutral-500">生成後に、構図・家具・配置・色を一切変えずに、ぼやけ・のっぺりを抑えて素材の精細感だけを引き上げます。編集を繰り返して画質が落ちてきたときにON（もう一度AIを通すため少し時間がかかります）。</span>
-                  </span>
-                </label>
-              )}
+              {/*
+                「画質を高める（仕上げに精細化）」のチェックは削除した（260803 クライアント要望B・一本化）。
+                サーバへ送る内容が「画質を戻す」と完全に同一で、UI上に同じ処理が2つ並んでいたため。
+                自動実行の分岐そのものは lib/aiEditPrompt.ts の ENABLE_KEEP_QUALITY_ENHANCE=false で止めてある。
+              */}
               {/* 画質を戻す（精細化・260722 クライアント要望）: いまの画像を、内容を変えずに1回だけくっきりさせる。
-                  編集を重ねてぼやけたときに、編集せずワンクリックで精細化できる（エリア/コーディネート共通）。 */}
-              {activeVersion && ENABLE_KEEP_QUALITY_ENHANCE && (
+                  編集を重ねてぼやけたときに、編集せずワンクリックで精細化できる（エリア/コーディネート共通）。
+                  一本化後はこれが唯一の精細化操作なので、上記フラグでは隠さない。 */}
+              {activeVersion && (
                 <button
                   type="button"
                   onClick={() => void runEnhanceCurrent()}

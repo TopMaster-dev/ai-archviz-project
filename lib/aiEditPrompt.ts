@@ -275,7 +275,18 @@ export const ENABLE_KEEP_QUALITY_HYBRID = false;
  * だけをもう一度AIに通して精細化する後処理パス**（harmonize と同じ単一画像パターン）。入力が1枚なので
  * ゴーストは構造的に起きえない。UI のチェックはこのフラグで表示する。
  */
-export const ENABLE_KEEP_QUALITY_ENHANCE = true;
+/*
+ * 【260803 クライアント要望B・機能の一本化】false へ変更。
+ *
+ * 「画質を高める（仕上げに精細化）」と「画質を戻す（今の画像を精細化）」は、
+ * サーバへ送る内容が完全に同一（同じ /api/ai-edit へ enhanceDetail:true）で、
+ * 違いは「編集直後に自動で走るか」「利用者が任意のタイミングで押すか」だけだった。
+ * 同じ処理がUI上に2つある状態は利用者の混乱を招くため、手動の「画質を戻す」へ一本化する。
+ *
+ * false にすると自動実行の分岐（applyAreaEditFinish の runEnhance）が動かなくなる。
+ * 型や状態はそのまま残してあるので、方針が変わればこのフラグを true に戻すだけで復帰できる。
+ */
+export const ENABLE_KEEP_QUALITY_ENHANCE = false;
 
 /**
  * 面仕上げ（壁の緑化/塗装/タイル等）での「窓・ドアの決定論的な開口保持（case B・260718）」の有効化フラグ。

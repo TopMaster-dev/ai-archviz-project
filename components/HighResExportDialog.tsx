@@ -76,7 +76,7 @@ export function HighResExportDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // 既定は「高解像度＋AI精細化」（260801 クライアント判断・ぼけの改善を優先）。
-  // 木目化の原因だった指示文は修正済み。内容を変えたくない場合は「高解像度（AIなし）」を選ぶ。
+  // 木目化の原因だった指示文は修正済み。AIなしの選択肢は 260803 の要望で非表示（経路は残置）。
   const [mode, setMode] = useState<ExportMode>('hires');
   const [sourceNatural, setSourceNatural] = useState<{ w: number; h: number } | null>(null);
   const [sourceNaturalLoading, setSourceNaturalLoading] = useState(false);
@@ -214,7 +214,7 @@ export function HighResExportDialog({
       setBusy(true);
       try {
         const p = hiResPreset;
-        const fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
+        const fileName = buildHiResFileName(projectName);
         const scaled = await fitDataUrlToSize(src, p.width, p.height, 'cover');
         // 拡大率に応じた強さで鮮鋭化する（等倍・縮小のときは何もしない）。
         const factor = sourceNatural ? p.width / Math.max(1, sourceNatural.w) : 1;
@@ -236,7 +236,7 @@ export function HighResExportDialog({
     setBusy(true);
     try {
       const p = hiResPreset; // 最高解像度（一択）
-      const fileName = buildHiResFileName(projectName, { dpi: p.dpi, width: p.width, height: p.height });
+      const fileName = buildHiResFileName(projectName);
       // 【高解像度画像＝AI高精細化】構図・色を変えない精細化専用経路（enhanceDetail・温度0.12・buildEnhanceDetailPrompt）。
       // 初回レンダ用 proVisualizerPrompt の再ライティングを避け、色/形を保ったまま鮮明に高解像度化する（260724）。
       const inputImage = await downscaleDataUrlIfNeeded(src, EXPORT_RENDER_INPUT_MAX_SIDE);
@@ -351,9 +351,9 @@ export function HighResExportDialog({
           {!result && (
             <>
               <p className="text-[10px] text-neutral-500 leading-relaxed">
-                通常は「高解像度＋AI精細化」をお使いください（ぼけの改善を優先）。
-                AIが描き直すため、まれに細部（素材の柄など）が変わることがあります。
-                内容を1ピクセルも変えたくない場合は「高解像度（AIなし）」をお選びください。
+                印刷用は「高解像度＋AI精細化」をお使いください。AIが描き直して細部を鮮明にします。
+                描き直しのため、まれに素材の柄など細部が変わることがあります。
+                いま画面に見えているものをそのまま保存したい場合は「プレビュー画像」をお選びください。
               </p>
               <div className="space-y-2">
                 {/* 高解像度＋AI精細化＝既定（260801 クライアント判断・ぼけの改善を優先）。既定は先頭に置く。 */}
@@ -384,34 +384,12 @@ export function HighResExportDialog({
                     </span>
                   </span>
                 </label>
-                {/* 高解像度（AIなし・忠実拡大）: 内容を1ピクセルも変えたくないときの選択肢。 */}
-                <label
-                  className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
-                    mode === 'hires-exact'
-                      ? 'border-emerald-500/50 bg-emerald-950/30'
-                      : 'border-white/10 bg-black/30 hover:border-white/20'
-                  }`}
-                >
-                  <input
-                    type="radio"
-                    name="exportMode"
-                    className="mt-0.5"
-                    checked={mode === 'hires-exact'}
-                    onChange={() => setMode('hires-exact')}
-                    disabled={busy || sourceNaturalLoading}
-                  />
-                  <span>
-                    <span className="text-white font-bold">高解像度（AIなし）</span>
-                    <span className="block text-neutral-400 mt-0.5">
-                      拡大＋輪郭の鮮鋭化のみ。描き直さないので絵柄・色は絶対に変わりません（費用なし・即時）。
-                      情報量は元画像のままなので、AI精細化よりは眠い仕上がりになります
-                    </span>
-                    <span className="font-mono text-neutral-500">
-                      {hiResPreset.width} × {hiResPreset.height} px
-                      {upscaleFactor > 1 ? `（元画像を約 ${upscaleFactor.toFixed(1)} 倍に拡大）` : ''}
-                    </span>
-                  </span>
-                </label>
+                {/*
+                  「高解像度（AIなし）」は非表示（260803 クライアント要望2）。
+                  拡大しただけの画像は実務のパース成果物として使えない、というご判断による。
+                  経路（mode==='hires-exact' の分岐と鮮鋭化処理）はそのまま残してあるので、
+                  方針が変われば、この選択肢のJSXを戻すだけで復帰できる。
+                */}
                 {/* プレビュー画像（そのまま保存・再生成なし） */}
                 <label
                   className={`flex items-start gap-2 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
@@ -466,7 +444,7 @@ export function HighResExportDialog({
                 {mode === 'hires' && (
                   <li>
                     AI精細化は画像を描き直す処理です。ぼけの改善が見込める一方、素材の柄など細部が変わることがあります。
-                    画面のとおりに出力したい場合は「高解像度（AIなし）」をお選びください。
+                    仕上がりが意図と違う場合は、書き出し後の評価（いいね／わるいね）でお知らせください。
                   </li>
                 )}
                 <li>最終出力は印刷所・DTP の指定に合わせてください。</li>

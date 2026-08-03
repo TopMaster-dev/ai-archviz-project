@@ -41,26 +41,24 @@ describe('buildPreviewFileName', () => {
 });
 
 describe('buildHiResFileName', () => {
-  it('日付＋プロジェクト名＋DPI＋寸法＋.png（プリセットを区別できる）', () => {
-    expect(buildHiResFileName('リビング提案', { dpi: 300, width: 5906, height: 3321 }, NOW)).toBe(
-      '2026-06-25_リビング提案_300dpi_5906x3321.png',
-    );
-    // 別プリセットはファイル名で区別できる。
-    expect(buildHiResFileName('リビング提案', { dpi: 150, width: 2953, height: 1662 }, NOW)).toBe(
-      '2026-06-25_リビング提案_150dpi_2953x1662.png',
-    );
+  /**
+   * 260803 クライアント要望E: 以前は「_300dpi_4961x2790」を付けていたが、
+   * この 300dpi は用紙サイズから逆算した出力の画素数であって、元画像の情報量ではない
+   * （実効は約230dpi相当）。実際より高い品質を名乗ることになるため表記をやめた。
+   */
+  it('日付＋プロジェクト名＋高解像度＋.png', () => {
+    expect(buildHiResFileName('リビング提案', NOW)).toBe('2026-06-25_リビング提案_高解像度.png');
+  });
+  it('dpi・寸法は名乗らない（実際より高い解像度に見せない）', () => {
+    const name = buildHiResFileName('リビング提案', NOW);
+    expect(name).not.toMatch(/dpi/i);
+    expect(name).not.toMatch(/[0-9]{3,}x[0-9]{3,}/);
   });
   it('不正文字を含む名前をサニタイズ', () => {
-    expect(buildHiResFileName('A/B 案', { dpi: 250, width: 4922, height: 2768 }, NOW)).toBe(
-      '2026-06-25_A_B_案_250dpi_4922x2768.png',
-    );
+    expect(buildHiResFileName('A/B 案', NOW)).toBe('2026-06-25_A_B_案_高解像度.png');
   });
   it('名前が空/未指定なら既定値にフォールバック', () => {
-    expect(buildHiResFileName('', { dpi: 200, width: 3937, height: 2216 }, NOW)).toBe(
-      '2026-06-25_プロジェクト_200dpi_3937x2216.png',
-    );
-    expect(buildHiResFileName(null, { dpi: 150, width: 2953, height: 1662 }, NOW)).toBe(
-      '2026-06-25_プロジェクト_150dpi_2953x1662.png',
-    );
+    expect(buildHiResFileName('', NOW)).toBe('2026-06-25_プロジェクト_高解像度.png');
+    expect(buildHiResFileName(null, NOW)).toBe('2026-06-25_プロジェクト_高解像度.png');
   });
 });
