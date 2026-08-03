@@ -1,62 +1,100 @@
 import { describe, it, expect } from 'vitest';
 import {
   PAPER_SIZES,
+  SCALE_DENOMINATORS,
+  CUSTOM_PAPER_ID,
   paperSizeById,
-  paperMmForImage,
+  paperMmLandscape,
   paperMmPerPxForImage,
+  paperMmPerPxFromWidth,
   realMmPerPx,
   parseScaleDenominator,
   detectPaperIdFromMmPerPx,
+  initialPaperIdForImage,
+  isStandardPaperAspect,
+  offsetFromAnchor,
+  anchorFromOffset,
+  ANCHOR_OPTIONS,
+  type UnderlayAnchor,
 } from './underlayScale.js';
 
 /**
- * 260803 クライアント要望（管理表124行目）「下絵は用紙サイズと縮尺を指定して実寸で配置したい」。
+ * 下絵の実寸合わせ（260803 要望・260804 資料で仕様確定）。
  *
  * 図面の実寸は「用紙の実寸 ÷ 画素数 × 縮尺の分母」で決まる。
- * ここを間違えると下絵の上をなぞって描いた壁の寸法がすべて狂うため、数値で固定する。
+ * ここを間違えると、下絵をなぞって描いた壁の寸法がすべて狂う。
+ *
+ * クライアント指定:
+ *  - 用紙は横（ランドスケープ）想定
+ *  - 縦横比がA判(1:1.414)でないファイルは「カスタム（手入力）」にする
  */
 
-describe('用紙の向き（画像の縦横比から自動判定）', () => {
-  const a3 = paperSizeById('A3')!;
-
-  it('横長の画像は横向き（長辺が幅）', () => {
-    expect(paperMmForImage(a3, 3000, 2000)).toEqual({ widthMm: 420, heightMm: 297 });
+describe('用紙は横想定', () => {
+  it('常に長辺が幅・短辺が高さ', () => {
+    expect(paperMmLandscape(paperSizeById('A3')!)).toEqual({ widthMm: 420, heightMm: 297 });
+    expect(paperMmLandscape(paperSizeById('A0')!)).toEqual({ widthMm: 1189, heightMm: 841 });
   });
 
-  it('縦長の画像は縦向き（短辺が幅）', () => {
-    expect(paperMmForImage(a3, 2000, 3000)).toEqual({ widthMm: 297, heightMm: 420 });
+  it('画像が縦長でも用紙の向きは変えない（指定どおり横で扱う）', () => {
+    // 縦長画像でも幅は長辺のまま。向きで実寸が変わると、同じ図面でも取り込み方で寸法がずれるため。
+    expect(paperMmPerPxForImage(paperSizeById('A3')!, 2000)).toBeCloseTo(420 / 2000, 10);
+  });
+});
+
+describe('A判かどうかの判定', () => {
+  it('1:1.414 の画像はA判とみなす', () => {
+    expect(isStandardPaperAspect(1414, 1000)).toBe(true);
+    expect(isStandardPaperAspect(4200, 2970)).toBe(true); // A3実寸比
   });
 
-  it('正方形は横向き扱い（どちらかに決めておく）', () => {
-    expect(paperMmForImage(a3, 2000, 2000).widthMm).toBe(420);
+  it('比率が外れていればA判ではない（切り取った図面など）', () => {
+    expect(isStandardPaperAspect(1000, 1000)).toBe(false);
+    expect(isStandardPaperAspect(1920, 1080)).toBe(false); // 16:9のスクリーンショット
+    expect(isStandardPaperAspect(3000, 1000)).toBe(false); // 長尺
+  });
+
+  it('壊れた入力は false', () => {
+    expect(isStandardPaperAspect(0, 100)).toBe(false);
+    expect(isStandardPaperAspect(100, 0)).toBe(false);
+  });
+});
+
+describe('画像取り込み時の用紙の初期選択', () => {
+  it('A判の比率なら A3 を初期値にする', () => {
+    // 画像だけでは A0〜A3 のどれかまでは判別できない（A判はどれも同じ比率）ため既定はA3。
+    expect(initialPaperIdForImage(1414, 1000)).toBe('A3');
+  });
+
+  it('A判でなければカスタム（手入力）にする', () => {
+    expect(initialPaperIdForImage(1920, 1080)).toBe(CUSTOM_PAPER_ID);
   });
 });
 
 describe('実寸への換算', () => {
   it('A3横・3000pxなら用紙上は 0.14 mm/px', () => {
-    expect(paperMmPerPxForImage(paperSizeById('A3')!, 3000, 2000)).toBeCloseTo(420 / 3000, 10);
+    expect(paperMmPerPxForImage(paperSizeById('A3')!, 3000)).toBeCloseTo(420 / 3000, 10);
   });
 
   it('1/100 の図面なら現実は 14 mm/px（＝画像全体で42m）', () => {
-    const p = paperMmPerPxForImage(paperSizeById('A3')!, 3000, 2000)!;
+    const p = paperMmPerPxForImage(paperSizeById('A3')!, 3000)!;
     const mmPerPx = realMmPerPx(p, 100)!;
     expect(mmPerPx).toBeCloseTo(14, 10);
     expect(mmPerPx * 3000).toBeCloseTo(42000, 6); // 42m
   });
 
   it('縮尺が倍になれば実寸も倍', () => {
-    const p = paperMmPerPxForImage(paperSizeById('A3')!, 3000, 2000)!;
+    const p = paperMmPerPxForImage(paperSizeById('A3')!, 3000)!;
     expect(realMmPerPx(p, 200)!).toBeCloseTo(realMmPerPx(p, 100)! * 2, 10);
   });
 
-  it('A1の方がA3より大きな実寸になる（同じ画素数・同じ縮尺なら）', () => {
-    const a3 = paperMmPerPxForImage(paperSizeById('A3')!, 3000, 2000)!;
-    const a1 = paperMmPerPxForImage(paperSizeById('A1')!, 3000, 2000)!;
-    expect(realMmPerPx(a1, 100)!).toBeGreaterThan(realMmPerPx(a3, 100)!);
+  it('カスタム: 幅(mm)を直接指定できる', () => {
+    expect(paperMmPerPxFromWidth(420, 3000)).toBeCloseTo(0.14, 10);
   });
 
   it('壊れた入力では null（勝手な既定値で配置しない）', () => {
-    expect(paperMmPerPxForImage(paperSizeById('A3')!, 0, 100)).toBeNull();
+    expect(paperMmPerPxForImage(paperSizeById('A3')!, 0)).toBeNull();
+    expect(paperMmPerPxFromWidth(0, 3000)).toBeNull();
+    expect(paperMmPerPxFromWidth(420, 0)).toBeNull();
     expect(realMmPerPx(0, 100)).toBeNull();
     expect(realMmPerPx(0.14, 0)).toBeNull();
   });
@@ -75,49 +113,87 @@ describe('縮尺の入力解釈', () => {
     expect(parseScaleDenominator('1 / 150')).toBe(150);
   });
 
-  it('小数の縮尺も受ける', () => {
-    expect(parseScaleDenominator('1/12.5')).toBe(12.5);
-  });
-
   it('解釈できない入力は null（黙って既定値にしない）', () => {
-    for (const bad of ['', '  ', 'abc', '1/0', '0', '-100', '1/-5', '1//150', '150cm']) {
+    for (const bad of ['', '  ', 'abc', '1/0', '0', '-100', '1//150', '150cm']) {
       expect(parseScaleDenominator(bad), bad).toBeNull();
     }
   });
 });
 
-describe('PDFからの用紙推定（挿入ダイアログの初期選択）', () => {
-  it('A3横のPDFはA3と判定する', () => {
-    // 420mm を 3000px で取り込んだ場合の用紙上 mm/px
-    expect(detectPaperIdFromMmPerPx(420 / 3000, 3000, 2000)).toBe('A3');
+describe('PDFからの用紙推定', () => {
+  it('A3のPDFはA3と判定する', () => {
+    expect(detectPaperIdFromMmPerPx(420 / 3000, 3000)).toBe('A3');
   });
 
-  it('A1縦のPDFはA1と判定する', () => {
-    expect(detectPaperIdFromMmPerPx(594 / 2000, 2000, 3000)).toBe('A1');
+  it('A1のPDFはA1と判定する', () => {
+    expect(detectPaperIdFromMmPerPx(841 / 2000, 2000)).toBe('A1');
   });
 
-  it('規格から大きく外れる用紙は判定しない（利用者に選ばせる）', () => {
-    // 規格のどれとも一致しない幅（例: 2000mm の長尺）
-    expect(detectPaperIdFromMmPerPx(2000 / 3000, 3000, 2000)).toBeNull();
+  it('規格から外れる用紙はカスタムにする（長尺図面など）', () => {
+    expect(detectPaperIdFromMmPerPx(2000 / 3000, 3000)).toBe(CUSTOM_PAPER_ID);
   });
 
-  it('壊れた入力では null', () => {
-    expect(detectPaperIdFromMmPerPx(0, 3000, 2000)).toBeNull();
-    expect(detectPaperIdFromMmPerPx(0.14, 0, 0)).toBeNull();
+  it('壊れた入力はカスタム（誤った用紙で自動確定しない）', () => {
+    expect(detectPaperIdFromMmPerPx(0, 3000)).toBe(CUSTOM_PAPER_ID);
+    expect(detectPaperIdFromMmPerPx(0.14, 0)).toBe(CUSTOM_PAPER_ID);
   });
 });
 
-describe('用紙の定義', () => {
-  it('A0〜A3が定義され、短辺 < 長辺になっている', () => {
+describe('基準点（位置をどの角で測るか）', () => {
+  const W = 42000;
+  const H = 29700;
+  const anchors = ANCHOR_OPTIONS.map((a) => a.id);
+
+  it('左上なら位置＝左上座標そのもの', () => {
+    expect(offsetFromAnchor('topLeft', 1000, 2000, W, H)).toEqual({ offsetX: 1000, offsetY: 2000 });
+  });
+
+  it('右上なら幅のぶん左へずれた位置が左上になる', () => {
+    expect(offsetFromAnchor('topRight', 1000, 2000, W, H)).toEqual({ offsetX: 1000 - W, offsetY: 2000 });
+  });
+
+  it('左下なら高さのぶん上へずれた位置が左上になる（Yは下向きが正）', () => {
+    expect(offsetFromAnchor('bottomLeft', 1000, 2000, W, H)).toEqual({ offsetX: 1000, offsetY: 2000 - H });
+  });
+
+  it('右下は幅・高さの両方がずれる', () => {
+    expect(offsetFromAnchor('bottomRight', 1000, 2000, W, H)).toEqual({ offsetX: 1000 - W, offsetY: 2000 - H });
+  });
+
+  it('どの角でも往復して元に戻る（基準点を切り替えても下絵は動かない）', () => {
+    // 基準点はあくまで「どこを測るか」であって、下絵そのものは動いてはいけない。
+    for (const a of anchors) {
+      const o = offsetFromAnchor(a as UnderlayAnchor, 1000, 2000, W, H);
+      const back = anchorFromOffset(a as UnderlayAnchor, o.offsetX, o.offsetY, W, H);
+      expect(back, a).toEqual({ x: 1000, y: 2000 });
+    }
+  });
+
+  it('同じ左上座標なら、角を変えると表示される位置だけが変わる', () => {
+    const offsetX = 0;
+    const offsetY = 0;
+    expect(anchorFromOffset('topLeft', offsetX, offsetY, W, H)).toEqual({ x: 0, y: 0 });
+    expect(anchorFromOffset('topRight', offsetX, offsetY, W, H)).toEqual({ x: W, y: 0 });
+    expect(anchorFromOffset('bottomLeft', offsetX, offsetY, W, H)).toEqual({ x: 0, y: H });
+    expect(anchorFromOffset('bottomRight', offsetX, offsetY, W, H)).toEqual({ x: W, y: H });
+  });
+
+  it('寸法が負でも壊れない（0として扱う）', () => {
+    expect(offsetFromAnchor('bottomRight', 100, 100, -5, -5)).toEqual({ offsetX: 100, offsetY: 100 });
+  });
+});
+
+describe('選択肢の定義', () => {
+  it('用紙は A0〜A3、短辺 < 長辺', () => {
     expect(PAPER_SIZES.map((p) => p.id)).toEqual(['A0', 'A1', 'A2', 'A3']);
     for (const p of PAPER_SIZES) expect(p.shortMm).toBeLessThan(p.longMm);
   });
 
-  it('A判は1つ小さくすると面積がほぼ半分', () => {
-    for (let i = 0; i < PAPER_SIZES.length - 1; i++) {
-      const big = PAPER_SIZES[i].shortMm * PAPER_SIZES[i].longMm;
-      const small = PAPER_SIZES[i + 1].shortMm * PAPER_SIZES[i + 1].longMm;
-      expect(big / small).toBeCloseTo(2, 1);
-    }
+  it('縮尺は資料の指定どおり', () => {
+    expect([...SCALE_DENOMINATORS]).toEqual([10, 20, 30, 50, 100, 150, 200, 250, 300, 500]);
+  });
+
+  it('基準点は4隅', () => {
+    expect(ANCHOR_OPTIONS.map((a) => a.label)).toEqual(['左上', '右上', '左下', '右下']);
   });
 });

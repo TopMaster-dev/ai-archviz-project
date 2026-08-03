@@ -13,8 +13,17 @@ import { UnderlayInsertDialog } from './UnderlayInsertDialog.js';
 import {
   paperSizeById,
   paperMmPerPxForImage,
+  paperMmPerPxFromWidth,
   realMmPerPx,
   detectPaperIdFromMmPerPx,
+  initialPaperIdForImage,
+  offsetFromAnchor,
+  anchorFromOffset,
+  PAPER_SIZES,
+  SCALE_DENOMINATORS,
+  ANCHOR_OPTIONS,
+  CUSTOM_PAPER_ID,
+  type UnderlayAnchor,
 } from '../utils/underlayScale.js';
 import {
   SKETCH_BASE_SCALE,
@@ -3188,50 +3197,11 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               <ToggleSwitch enabled={isGridSnapEnabled} onChange={() => setIsGridSnapEnabled(!isGridSnapEnabled)} />
             </div>
           </div>
-          {/* グリッド基準点（原点）: 任意位置に設定・#5 260715。数値入力＋画面中心へ＋リセット。 */}
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] font-bold text-neutral-400">基準点</span>
-            <div className="flex items-center gap-1.5 shrink-0">
-              <label className="flex items-center gap-1 text-[10px] text-neutral-300">
-                X
-                <input
-                  type="number"
-                  value={Math.round(gridOrigin?.x ?? 0)}
-                  onChange={(e) => onGridOriginChange?.({ x: Number(e.target.value), y: gridOrigin?.y ?? 0 })}
-                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right text-emerald-400"
-                />
-              </label>
-              <label className="flex items-center gap-1 text-[10px] text-neutral-300">
-                Y
-                <input
-                  type="number"
-                  value={Math.round(gridOrigin?.y ?? 0)}
-                  onChange={(e) => onGridOriginChange?.({ x: gridOrigin?.x ?? 0, y: Number(e.target.value) })}
-                  className="w-14 rounded bg-black/40 px-1 py-0.5 text-right text-emerald-400"
-                />
-              </label>
-              <button
-                type="button"
-                title="画面中心を基準点にする"
-                onClick={() => {
-                  const c = screenToWorld({ x: (rulerSize + canvasSize.width) / 2, y: (rulerSize + canvasSize.height) / 2 });
-                  onGridOriginChange?.({ x: Math.round(c.x), y: Math.round(c.y) });
-                }}
-                className="px-2 h-7 rounded border border-white/10 text-[10px] text-neutral-200 transition hover:bg-white/10"
-              >
-                画面中心へ
-              </button>
-              <button
-                type="button"
-                title="基準点をワールド原点(0,0)に戻す"
-                onClick={() => onGridOriginChange?.(null)}
-                disabled={!gridOrigin}
-                className="px-2 h-7 rounded border border-white/10 text-[10px] text-neutral-300 transition hover:bg-white/10 disabled:opacity-40"
-              >
-                リセット
-              </button>
-            </div>
-          </div>
+          {/*
+            グリッドの基準点（原点）の設定はスナップパネルから削除（260804 クライアント資料）。
+            この欄は「下絵の基準点」として下絵パネル側へ移設した（意味が別物なので、
+            グリッド原点の設定自体は廃止し、グリッドは常にワールド原点(0,0)基準とする）。
+          */}
         </div>
         <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-2 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
           {!underlay ? (
@@ -3292,68 +3262,153 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   ×
                 </button>
               </div>
-              {/* キャリブレーション: 実寸幅(mm) と 位置(mm) */}
-              <div className="flex items-center gap-2 text-[10px] text-neutral-300">
-                <label className="flex items-center gap-1">
-                  幅
-                  <input
-                    type="number"
-                    value={underlayImgSize ? Math.round(underlayImgSize.w * (underlay.scaleMmPerPx ?? 10)) : 0}
-                    onChange={(e) => {
-                      const widthMm = Number(e.target.value);
-                      if (underlayImgSize && underlayImgSize.w > 0 && widthMm > 0) {
-                        onUnderlayChange?.({ ...underlay, scaleMmPerPx: widthMm / underlayImgSize.w });
-                      }
-                    }}
-                    className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
-                  />
-                  mm
-                </label>
-                <label className="flex items-center gap-1">
-                  X
-                  <input
-                    type="number"
-                    value={Math.round(underlay.offsetX)}
-                    onChange={(e) => onUnderlayChange?.({ ...underlay, offsetX: Number(e.target.value) })}
-                    className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
-                  />
-                </label>
-                <label className="flex items-center gap-1">
-                  Y
-                  <input
-                    type="number"
-                    value={Math.round(underlay.offsetY)}
-                    onChange={(e) => onUnderlayChange?.({ ...underlay, offsetY: Number(e.target.value) })}
-                    className="w-14 rounded bg-black/40 px-1 py-0.5 text-right"
-                  />
-                </label>
-              </div>
-              {/* PDF図面の縮尺（用紙サイズ＋縮尺で実寸に合わせる・#5a 260715）。用紙mm/px×縮尺分母 = 実寸mm/px。
-                  表示分母は実際の scaleMmPerPx から逆算する（幅mm手入力や角ドラッグで scale を変えても縮尺表示が正しく追従する・260715検証で修正）。 */}
-              {underlay.paperMmPerPx != null && (() => {
-                const paper = underlay.paperMmPerPx!;
-                const effDenom = paper > 0 ? Math.round((underlay.scaleMmPerPx ?? paper * 100) / paper) : 100;
+              {/*
+                下絵の設定（260804 クライアント資料の指定どおりの並び）。
+                「基準点＋位置」「用紙/画像サイズ＋幅」「縮尺」の3行。
+                内部では offsetX/offsetY を常に左上座標で持ち、表示・入力のときだけ選ばれた角へ換算する
+                （角を変えるたびに保存値を書き換えると、往復で誤差が積もるため）。
+              */}
+              {(() => {
+                const imgW = underlayImgSize?.w ?? 0;
+                const imgH = underlayImgSize?.h ?? 0;
+                const mmPerPx = underlay.scaleMmPerPx ?? 10;
+                // 実寸（mm）。基準点の換算に使う。
+                const realW = imgW * mmPerPx;
+                const realH = imgH * mmPerPx;
+                const anchor = (underlay.anchor ?? 'topLeft') as UnderlayAnchor;
+                const pos = anchorFromOffset(anchor, underlay.offsetX, underlay.offsetY, realW, realH);
+                // 用紙上の mm/px（未設定なら実寸から逆算せず、幅の手入力で決める）。
+                const paperPerPx = underlay.paperMmPerPx;
+                const paperWidthMm = paperPerPx != null && imgW > 0 ? paperPerPx * imgW : 0;
+                const effDenom =
+                  paperPerPx != null && paperPerPx > 0 ? Math.round(mmPerPx / paperPerPx) : (underlay.scaleDenominator ?? 100);
+                const paperId = underlay.paperId ?? (paperPerPx != null && imgW > 0 ? detectPaperIdFromMmPerPx(paperPerPx, imgW) : CUSTOM_PAPER_ID);
+                const isCustomPaper = paperId === CUSTOM_PAPER_ID;
+
+                /** 位置を変えたとき: 選ばれた角の座標 → 左上座標へ戻して保存する。 */
+                const setPos = (nx: number, ny: number) => {
+                  const o = offsetFromAnchor(anchor, nx, ny, realW, realH);
+                  onUnderlayChange?.({ ...underlay, offsetX: o.offsetX, offsetY: o.offsetY });
+                };
+                /** 用紙上 mm/px を変えたとき: 縮尺は据え置き、実寸(scaleMmPerPx)を再計算する。 */
+                const setPaperMmPerPx = (p: number, nextPaperId: string) => {
+                  if (!(p > 0)) return;
+                  onUnderlayChange?.({
+                    ...underlay,
+                    paperMmPerPx: p,
+                    paperId: nextPaperId,
+                    scaleDenominator: effDenom,
+                    scaleMmPerPx: p * effDenom,
+                  });
+                };
+
                 return (
-                  <label className="flex items-center gap-1 text-[10px] text-neutral-300">
-                    縮尺 1:
-                    {/*
-                      260803 クライアント要望: 固定のプルダウンではなく任意の縮尺を入れられるように。
-                      1/150 のような規格外の縮尺で描かれた図面が実際にあるため。
-                    */}
-                    <input
-                      type="number"
-                      min={1}
-                      step={1}
-                      value={effDenom}
-                      onChange={(e) => {
-                        const denom = Number(e.target.value);
-                        if (denom > 0) onUnderlayChange?.({ ...underlay, scaleDenominator: denom, scaleMmPerPx: paper * denom });
-                      }}
-                      className="w-16 rounded bg-black/40 border border-white/10 px-1 py-0.5 text-right text-emerald-400"
-                      title="図面の縮尺。用紙サイズと縮尺から下絵を実寸に合わせます。幅(mm)で微調整すると実際の縮尺に追従します。"
-                    />
-                    <span className="text-neutral-500">の図面</span>
-                  </label>
+                  <>
+                    {/* 基準点（どの角を基準に位置を測るか）＋ 位置 */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-neutral-300">
+                      <span className="text-neutral-400">基準点</span>
+                      <select
+                        value={anchor}
+                        onChange={(e) => onUnderlayChange?.({ ...underlay, anchor: e.target.value as UnderlayAnchor })}
+                        className="rounded border border-white/10 bg-black/40 px-1 py-0.5 text-emerald-400"
+                        title="位置(X/Y)をどの角で測るか"
+                      >
+                        {ANCHOR_OPTIONS.map((a) => (
+                          <option key={a.id} value={a.id}>{a.label}</option>
+                        ))}
+                      </select>
+                      <span className="text-neutral-400">位置</span>
+                      <label className="flex items-center gap-1">
+                        X:
+                        <input
+                          type="number"
+                          value={Math.round(pos.x)}
+                          onChange={(e) => setPos(Number(e.target.value), pos.y)}
+                          className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
+                        />
+                        mm
+                      </label>
+                      <label className="flex items-center gap-1">
+                        Y:
+                        <input
+                          type="number"
+                          value={Math.round(pos.y)}
+                          onChange={(e) => setPos(pos.x, Number(e.target.value))}
+                          className="w-16 rounded bg-black/40 px-1 py-0.5 text-right"
+                        />
+                        mm
+                      </label>
+                    </div>
+
+                    {/* 用紙 / 画像サイズ: 用紙上の幅(mm)＋用紙の選択（カスタムのとき幅を手入力） */}
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-neutral-300">
+                      <span className="text-neutral-400">用紙 / 画像サイズ</span>
+                      <label className="flex items-center gap-1">
+                        幅
+                        <input
+                          type="number"
+                          value={Math.round(paperWidthMm)}
+                          disabled={!isCustomPaper}
+                          onChange={(e) => {
+                            const p = paperMmPerPxFromWidth(Number(e.target.value), imgW);
+                            if (p != null) setPaperMmPerPx(p, CUSTOM_PAPER_ID);
+                          }}
+                          className="w-16 rounded bg-black/40 px-1 py-0.5 text-right disabled:opacity-60"
+                          title={isCustomPaper ? '用紙上の幅（mm）' : '用紙サイズから自動。手入力するには「カスタム」を選んでください'}
+                        />
+                        mm
+                      </label>
+                      <select
+                        value={paperId}
+                        onChange={(e) => {
+                          const id = e.target.value;
+                          if (id === CUSTOM_PAPER_ID) {
+                            onUnderlayChange?.({ ...underlay, paperId: id });
+                            return;
+                          }
+                          const p = paperSizeById(id);
+                          const next = p ? paperMmPerPxForImage(p, imgW) : null;
+                          if (next != null) setPaperMmPerPx(next, id);
+                        }}
+                        className="rounded border border-white/10 bg-black/40 px-1 py-0.5 text-emerald-400"
+                        title="図面が描かれた用紙サイズ（横向き想定）"
+                      >
+                        {PAPER_SIZES.map((p) => (
+                          <option key={p.id} value={p.id}>{p.label}</option>
+                        ))}
+                        <option value={CUSTOM_PAPER_ID}>カスタム</option>
+                      </select>
+                    </div>
+
+                    {/* 縮尺 */}
+                    <label className="flex items-center gap-1 text-[10px] text-neutral-300">
+                      <span className="text-neutral-400">縮尺</span>
+                      1:
+                      <select
+                        value={effDenom}
+                        onChange={(e) => {
+                          const denom = Number(e.target.value);
+                          if (!(denom > 0)) return;
+                          const p = paperPerPx ?? (imgW > 0 ? mmPerPx / effDenom : 0);
+                          onUnderlayChange?.({
+                            ...underlay,
+                            scaleDenominator: denom,
+                            ...(p > 0 ? { paperMmPerPx: p, scaleMmPerPx: p * denom } : {}),
+                          });
+                        }}
+                        className="rounded border border-white/10 bg-black/40 px-1 py-0.5 text-emerald-400"
+                        title="図面の縮尺。用紙サイズと縮尺から下絵を実寸に合わせます。"
+                      >
+                        {(SCALE_DENOMINATORS as readonly number[]).includes(effDenom)
+                          ? null
+                          : <option value={effDenom}>{effDenom}</option>}
+                        {SCALE_DENOMINATORS.map((d) => (
+                          <option key={d} value={d}>{d}</option>
+                        ))}
+                      </select>
+                      <span className="text-neutral-500">の図面（実寸 約 {(realW / 1000).toFixed(1)} m）</span>
+                    </label>
+                  </>
                 );
               })()}
               {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）＋ サイズ変更のヒント */}
@@ -3389,20 +3444,34 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         open={pendingUnderlay != null}
         imageWidth={pendingUnderlay?.imageW ?? 0}
         imageHeight={pendingUnderlay?.imageH ?? 0}
+        /*
+          初期選択（260804 クライアント指定）:
+          PDFは用紙の実寸が分かるので規格から判定。画像は縦横比がA判(1:1.414)なら A3、
+          そうでなければ「カスタム（手入力）」にする。
+        */
         detectedPaperId={
-          pendingUnderlay?.paperMmPerPx != null && pendingUnderlay.imageW > 0
-            ? detectPaperIdFromMmPerPx(pendingUnderlay.paperMmPerPx, pendingUnderlay.imageW, pendingUnderlay.imageH)
+          pendingUnderlay
+            ? pendingUnderlay.paperMmPerPx != null && pendingUnderlay.imageW > 0
+              ? detectPaperIdFromMmPerPx(pendingUnderlay.paperMmPerPx, pendingUnderlay.imageW)
+              : initialPaperIdForImage(pendingUnderlay.imageW, pendingUnderlay.imageH)
             : null
         }
         onCancel={() => setPendingUnderlay(null)}
-        onConfirm={({ paperId, scaleDenominator }) => {
+        onConfirm={({ paperId, scaleDenominator, customWidthMm }) => {
           const p = pendingUnderlay;
           setPendingUnderlay(null);
           if (!p) return;
           const paper = paperSizeById(paperId);
-          // 用紙上の mm/px は、PDFなら実測値を、画像なら選ばれた用紙から求める。
+          /*
+           * 用紙上の mm/px の決め方:
+           *  - カスタム → 入力された幅(mm) から
+           *  - 規格用紙 → 用紙の幅（横想定）から
+           *  - どちらも取れず PDF なら、PDFの実測値をそのまま使う
+           */
           const paperMmPerPx =
-            p.paperMmPerPx ?? (paper ? paperMmPerPxForImage(paper, p.imageW, p.imageH) : null);
+            paperId === CUSTOM_PAPER_ID
+              ? (customWidthMm != null ? paperMmPerPxFromWidth(customWidthMm, p.imageW) : p.paperMmPerPx ?? null)
+              : (paper ? paperMmPerPxForImage(paper, p.imageW) : p.paperMmPerPx ?? null);
           const mmPerPx = paperMmPerPx != null ? realMmPerPx(paperMmPerPx, scaleDenominator) : null;
           onUnderlayChange?.({
             dataUrl: p.dataUrl,
@@ -3412,6 +3481,8 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
             offsetX: 0,
             offsetY: 0,
             visible: true,
+            anchor: 'topLeft',
+            paperId,
             ...(paperMmPerPx != null ? { paperMmPerPx, scaleDenominator } : {}),
           });
         }}

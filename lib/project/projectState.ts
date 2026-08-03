@@ -28,6 +28,16 @@ export interface UnderlaySettings {
   paperMmPerPx?: number;
   /** PDF図面の縮尺の分母（1:denom）。未設定=手動幅指定。 */
   scaleDenominator?: number;
+  /**
+   * 選択中の用紙（'A0'〜'A3' または 'custom'）。260804 クライアント資料。
+   * 幅(mm)は paperMmPerPx×画素幅 で求まるが、どの用紙を選んだかは復元できないため保持する。
+   */
+  paperId?: string;
+  /**
+   * 位置を測る基準の角（既定は左上）。260804 クライアント資料。
+   * offsetX/offsetY は常に左上の座標で保持し、表示・入力のときだけこの角へ換算する。
+   */
+  anchor?: 'topLeft' | 'topRight' | 'bottomLeft' | 'bottomRight';
 }
 
 /**

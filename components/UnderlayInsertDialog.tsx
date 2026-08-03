@@ -2,28 +2,31 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { X } from 'lucide-react';
 import {
   PAPER_SIZES,
-  SCALE_PRESETS,
+  SCALE_DENOMINATORS,
+  CUSTOM_PAPER_ID,
   paperSizeById,
-  paperMmForImage,
-  parseScaleDenominator,
+  paperMmLandscape,
+  isStandardPaperAspect,
 } from '../utils/underlayScale.js';
 
 /**
- * 下絵の挿入ダイアログ（260803 クライアント要望・管理表124行目）。
+ * 下絵の挿入ダイアログ（260803 クライアント要望・管理表124行目／260804 資料で仕様確定）。
  *
  * 従来は画像を選ぶと即座に貼り付けられ、実寸は後から「幅(mm)」を手入力して合わせる必要があった。
- * 図面は「どの用紙に、どの縮尺で」描かれたかが分かれば実寸が決まるので、
- * 挿入時にその2つを伺い、自動で正しい大きさに置く。
+ * 図面は「どの用紙に、どの縮尺で」描かれたかが分かれば実寸が決まるので、挿入時にその2つを伺う。
  *
- * PDFは用紙寸法をファイル自身が持っているため、検出した用紙を初期選択する（変更も可）。
- * 用紙の向きは画像の縦横比から自動判定する（クライアント指定）。
+ * 【クライアント指定】
+ *  - 用紙は横（ランドスケープ）想定。
+ *  - 読み込んだファイルの縦横比がA判（1:1.414）でない場合は「カスタム（手入力）」にする。
  */
 
 export interface UnderlayInsertResult {
-  /** 選んだ用紙（idのみ。実寸は縦横比とあわせて確定する）。 */
+  /** 選んだ用紙（'A0'〜'A3' または 'custom'）。 */
   paperId: string;
   /** 縮尺の分母（1/100 なら 100）。 */
   scaleDenominator: number;
+  /** カスタムのときの用紙上の幅（mm）。規格用紙のときは未設定。 */
+  customWidthMm?: number;
 }
 
 export function UnderlayInsertDialog({
@@ -35,46 +38,50 @@ export function UnderlayInsertDialog({
   onConfirm,
 }: {
   open: boolean;
-  /** 取り込む画像の画素数。用紙の向きの自動判定と、プレビュー表示に使う。 */
+  /** 取り込む画像の画素数。用紙の判定と実寸プレビューに使う。 */
   imageWidth: number;
   imageHeight: number;
-  /** PDFから用紙が判別できた場合の初期選択。判別できなければ null。 */
+  /** PDFの実測、または画像の縦横比から決めた初期選択。 */
   detectedPaperId?: string | null;
   onCancel: () => void;
   onConfirm: (result: UnderlayInsertResult) => void;
 }) {
   const [paperId, setPaperId] = useState<string>(detectedPaperId ?? 'A3');
-  const [scaleChoice, setScaleChoice] = useState<string>('100');
-  const [customScale, setCustomScale] = useState<string>('');
+  const [denominator, setDenominator] = useState<number>(100);
+  const [customWidth, setCustomWidth] = useState<string>('');
+
+  const standardAspect = isStandardPaperAspect(imageWidth, imageHeight);
 
   useEffect(() => {
     if (!open) return;
     setPaperId(detectedPaperId ?? 'A3');
-    setScaleChoice('100');
-    setCustomScale('');
+    setDenominator(100);
+    setCustomWidth('');
   }, [open, detectedPaperId]);
 
-  const paper = paperSizeById(paperId);
-  const isCustom = scaleChoice === 'custom';
-  const denominator = useMemo(
-    () => (isCustom ? parseScaleDenominator(customScale) : Number(scaleChoice)),
-    [isCustom, customScale, scaleChoice],
-  );
+  const isCustom = paperId === CUSTOM_PAPER_ID;
+  const customWidthMm = useMemo(() => {
+    const v = Number(customWidth);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  }, [customWidth]);
 
-  // 選んだ内容で下絵が実寸何mになるかを先に見せる（入力ミスにその場で気付けるように）。
+  // 用紙上の幅（mm）。規格用紙は横想定の長辺、カスタムは入力値。
+  const paperWidthMm = useMemo(() => {
+    if (isCustom) return customWidthMm;
+    const p = paperSizeById(paperId);
+    return p ? paperMmLandscape(p).widthMm : null;
+  }, [isCustom, customWidthMm, paperId]);
+
+  // 確定前に実寸を見せる（縮尺の指定違いに、なぞり始める前に気付けるように）。
   const preview = useMemo(() => {
-    if (!paper || !denominator || !(imageWidth > 0) || !(imageHeight > 0)) return null;
-    const { widthMm, heightMm } = paperMmForImage(paper, imageWidth, imageHeight);
-    return {
-      widthM: (widthMm * denominator) / 1000,
-      heightM: (heightMm * denominator) / 1000,
-      landscape: imageWidth >= imageHeight,
-    };
-  }, [paper, denominator, imageWidth, imageHeight]);
+    if (!paperWidthMm || !(imageWidth > 0) || !(imageHeight > 0)) return null;
+    const mmPerPx = (paperWidthMm / imageWidth) * denominator;
+    return { widthM: (imageWidth * mmPerPx) / 1000, heightM: (imageHeight * mmPerPx) / 1000 };
+  }, [paperWidthMm, imageWidth, imageHeight, denominator]);
 
   if (!open) return null;
 
-  const canConfirm = !!paper && !!denominator;
+  const canConfirm = !!paperWidthMm && denominator > 0;
 
   return (
     <div className="fixed inset-0 z-[10002] flex items-center justify-center bg-black/75 p-4" role="dialog" aria-modal="true">
@@ -89,12 +96,20 @@ export function UnderlayInsertDialog({
         <div className="space-y-4 p-4 text-xs text-neutral-300">
           <p className="text-[11px] leading-relaxed text-neutral-500">
             図面が描かれた用紙サイズと縮尺を選んでください。この2つから実寸を計算し、正しい大きさで配置します。
-            用紙の向きは画像の縦横比から自動で判定します。
+            用紙は横向きとして扱います。
           </p>
+
+          {/* 規格用紙でないファイルは、そのまま用紙サイズを当てはめると実寸が狂う。理由を明示する。 */}
+          {!standardAspect && imageWidth > 0 && (
+            <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-[11px] leading-relaxed text-amber-300">
+              このファイルの縦横比は用紙サイズ（1:1.414）と一致しません。図面の一部を切り取った画像などの可能性があるため、
+              「カスタム」で用紙上の幅（mm）を直接ご指定ください。
+            </p>
+          )}
 
           <div className="grid grid-cols-2 gap-3">
             <label className="block">
-              <span className="mb-1 block text-[11px] font-bold text-neutral-400">用紙サイズ</span>
+              <span className="mb-1 block text-[11px] font-bold text-neutral-400">用紙 / 画像サイズ</span>
               <select
                 value={paperId}
                 onChange={(e) => setPaperId(e.target.value)}
@@ -102,49 +117,47 @@ export function UnderlayInsertDialog({
               >
                 {PAPER_SIZES.map((p) => (
                   <option key={p.id} value={p.id}>
-                    {p.label}（{p.shortMm} × {p.longMm} mm）
+                    {p.label}（{paperMmLandscape(p).widthMm} × {paperMmLandscape(p).heightMm} mm）
                   </option>
                 ))}
+                <option value={CUSTOM_PAPER_ID}>カスタム（手入力）</option>
               </select>
             </label>
 
             <label className="block">
               <span className="mb-1 block text-[11px] font-bold text-neutral-400">縮尺</span>
               <select
-                value={scaleChoice}
-                onChange={(e) => setScaleChoice(e.target.value)}
+                value={denominator}
+                onChange={(e) => setDenominator(Number(e.target.value))}
                 className="h-9 w-full rounded-lg border border-white/15 bg-black/40 px-2 text-xs text-white outline-none focus:border-emerald-500/60"
               >
-                {SCALE_PRESETS.map((d) => (
-                  <option key={d} value={String(d)}>
-                    1/{d}
+                {SCALE_DENOMINATORS.map((d) => (
+                  <option key={d} value={d}>
+                    1 / {d}
                   </option>
                 ))}
-                <option value="custom">任意入力</option>
               </select>
             </label>
           </div>
 
           {isCustom && (
             <label className="block">
-              <span className="mb-1 block text-[11px] font-bold text-neutral-400">縮尺（任意入力）</span>
+              <span className="mb-1 block text-[11px] font-bold text-neutral-400">用紙上の幅（mm）</span>
               <input
-                type="text"
-                value={customScale}
-                onChange={(e) => setCustomScale(e.target.value)}
-                placeholder="例: 1/150"
+                type="number"
+                min={1}
+                value={customWidth}
+                onChange={(e) => setCustomWidth(e.target.value)}
+                placeholder="例: 420"
                 autoFocus
                 className="h-9 w-full rounded-lg border border-white/15 bg-black/40 px-2 text-xs text-white outline-none focus:border-emerald-500/60"
               />
-              {customScale.trim() && !denominator && (
-                <span className="mt-1 block text-[11px] font-bold text-amber-300">
-                  「1/150」のように入力してください。
-                </span>
+              {customWidth.trim() && !customWidthMm && (
+                <span className="mt-1 block text-[11px] font-bold text-amber-300">正の数値を入力してください。</span>
               )}
             </label>
           )}
 
-          {/* 入力の結果どうなるかを先に見せる（挿入してから間違いに気付くのを防ぐ）。 */}
           <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-[11px]">
             {preview ? (
               <>
@@ -152,7 +165,7 @@ export function UnderlayInsertDialog({
                 <b className="font-mono text-emerald-400">
                   約 {preview.widthM.toFixed(1)} m × {preview.heightM.toFixed(1)} m
                 </b>
-                <span className="text-neutral-400"> になります（{preview.landscape ? '横向き' : '縦向き'}と判定）。</span>
+                <span className="text-neutral-400"> になります。</span>
               </>
             ) : (
               <span className="text-neutral-500">用紙サイズと縮尺を選ぶと、配置される実寸を表示します。</span>
@@ -160,7 +173,7 @@ export function UnderlayInsertDialog({
           </div>
 
           <p className="text-[11px] leading-relaxed text-neutral-500">
-            図面の一部だけを切り取った画像など、用紙サイズに当てはまらない場合は、挿入後に「幅(mm)」で調整してください。
+            挿入後も、左のパネルで基準点・位置・用紙サイズ・縮尺を変更できます。
           </p>
         </div>
 
@@ -175,7 +188,14 @@ export function UnderlayInsertDialog({
           <button
             type="button"
             disabled={!canConfirm}
-            onClick={() => canConfirm && onConfirm({ paperId, scaleDenominator: denominator! })}
+            onClick={() =>
+              canConfirm &&
+              onConfirm({
+                paperId,
+                scaleDenominator: denominator,
+                ...(isCustom && customWidthMm ? { customWidthMm } : {}),
+              })
+            }
             className="rounded-lg bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
           >
             この内容で下絵を挿入
