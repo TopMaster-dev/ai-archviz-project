@@ -197,3 +197,40 @@ describe('選択肢の定義', () => {
     expect(ANCHOR_OPTIONS.map((a) => a.label)).toEqual(['左上', '右上', '左下', '右下']);
   });
 });
+
+/**
+ * 260805 クライアント要望「取り込んだファイルのサイズ（幅/高さ）をプレビューを見ながら決定する」。
+ *
+ * 幅と高さの両方を入力できるようにするが、下絵は1つの倍率で配置するため画像は歪められない。
+ * つまり高さは常に「幅 × 画像の縦横比」で決まる。ここが崩れると図面が引き伸ばされ、
+ * なぞって描いた寸法が縦横で食い違う。
+ */
+describe('幅と高さの連動（画像を歪めない）', () => {
+  /** ダイアログと同じ計算: 高さ = 幅 × (画素高 ÷ 画素幅)。 */
+  const heightFromWidth = (widthMm: number, imgW: number, imgH: number) => (widthMm * imgH) / imgW;
+  const widthFromHeight = (heightMm: number, imgW: number, imgH: number) => (heightMm * imgW) / imgH;
+
+  it('A3横(420×297)の画像なら、幅420に対して高さは297', () => {
+    expect(heightFromWidth(420, 4200, 2970)).toBeCloseTo(297, 6);
+  });
+
+  it('幅→高さ→幅 で元に戻る', () => {
+    const w = 420;
+    const h = heightFromWidth(w, 3000, 2000);
+    expect(widthFromHeight(h, 3000, 2000)).toBeCloseTo(w, 6);
+  });
+
+  it('縦横比は用紙の指定によらず画像のものが使われる（引き伸ばさない）', () => {
+    // 16:9のスクリーンショットにA3(420×297)を当てても、高さは420×(9/16)であって297にはならない。
+    const h = heightFromWidth(420, 1920, 1080);
+    expect(h).toBeCloseTo(420 * (1080 / 1920), 6);
+    expect(h).not.toBeCloseTo(297, 1);
+  });
+
+  it('実寸は「用紙上の寸法 × 縮尺の分母」', () => {
+    // 1/100 なら100倍（クライアント指定の確認）。
+    const paperW = 420;
+    const denom = 100;
+    expect(realMmPerPx(paperMmPerPxFromWidth(paperW, 3000)!, denom)! * 3000).toBeCloseTo(paperW * denom, 6);
+  });
+});

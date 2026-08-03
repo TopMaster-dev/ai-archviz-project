@@ -47,10 +47,24 @@ export function fitRasterScale(baseWidthPt: number, baseHeightPt: number, desire
   return Math.min(desiredScale, cap);
 }
 
+/**
+ * 取り込むページ番号を、実在するページ（1〜pageCount）へ丸める。
+ * 範囲外を pdfjs に渡すと例外になるが、ここはユーザーの選択なのでエラーにせず、
+ * 一番近い実在ページへ寄せる（260805 のページ選択で、前ページ数より少ないPDFに
+ * 差し替わった場合などに空白ページを掴まない）。
+ */
+export function clampPageNumber(pageNumber: number, pageCount: number): number {
+  const total = Math.max(1, Math.floor(pageCount) || 1);
+  if (!Number.isFinite(pageNumber)) return 1;
+  return Math.min(Math.max(1, Math.round(pageNumber)), total);
+}
+
 export interface PdfRasterResult {
   dataUrl: string;
   /** 実際に使ったスケール（上限で切り下げられている場合がある）。mm/px の算出はこの値で行うこと。 */
   usedScale: number;
+  /** PDF の総ページ数（260805 クライアント要望・複数ページなら何枚目を取り込むか選ばせる）。 */
+  pageCount: number;
 }
 
 /**
@@ -62,7 +76,7 @@ export interface PdfRasterResult {
  *
  * @param scale 希望する描画スケール。大きすぎる場合は上限内へ自動で切り下げる。
  */
-export async function pdfFirstPageToDataUrl(file: File, scale = 2): Promise<PdfRasterResult> {
+export async function pdfPageToDataUrl(file: File, pageNumber = 1, scale = 2): Promise<PdfRasterResult> {
   let pdfjs: PdfjsModule;
   try {
     pdfjs = (await import('pdfjs-dist/legacy/build/pdf.mjs')) as unknown as PdfjsModule;
@@ -84,7 +98,10 @@ export async function pdfFirstPageToDataUrl(file: File, scale = 2): Promise<PdfR
   }
 
   try {
-    const page = await pdf.getPage(1);
+    // 範囲外のページ番号は実在ページへ丸める（利用者の指定ミスでエラーにしない）。
+    const pageCount = pdf.numPages;
+    const targetPage = clampPageNumber(pageNumber, pageCount);
+    const page = await pdf.getPage(targetPage);
     const base = page.getViewport({ scale: 1 });
     const usedScale = fitRasterScale(base.width, base.height, scale);
     const viewport = page.getViewport({ scale: usedScale });
@@ -103,10 +120,10 @@ export async function pdfFirstPageToDataUrl(file: File, scale = 2): Promise<PdfR
     if (!dataUrl || dataUrl.length < 32) {
       throw new UnderlayError(`PDFの画像化に失敗しました（${canvas.width}×${canvas.height}px・メモリ不足の可能性）。`);
     }
-    return { dataUrl, usedScale };
+    return { dataUrl, usedScale, pageCount };
   } finally {
     // cleanup 自体が投げると finally の例外が本来の診断メッセージを握り潰す。
-    // 描画中断時 pdfjs は「Page 1 is currently rendering.」を投げるため、まさに失敗を伝えたい場面で
+    // 描画中断時 pdfjs は「Page N is currently rendering.」を投げるため、まさに失敗を伝えたい場面で
     // 原因が英語の内部エラーにすり替わってしまう（260728 敵対レビュー指摘）。必ず握りつぶす。
     try {
       await pdf.cleanup();
@@ -127,15 +144,21 @@ export interface PdfPageRaster {
    * 図面の縮尺 1:denom を適用するときの実寸 mm/px は paperMmPerPx × denom（#5a・260715）。
    */
   paperMmPerPx: number;
+  /** PDF の総ページ数。2以上なら取り込むページを選ばせる（260805 クライアント要望）。 */
+  pageCount: number;
 }
 
 /**
- * PDFの1ページ目をラスタライズし、下絵の実寸合わせに必要な paperMmPerPx（用紙mm/px）も返す。
+ * PDFの指定ページをラスタライズし、下絵の実寸合わせに必要な paperMmPerPx（用紙mm/px）も返す。
  * これに図面の縮尺(1:denom)を掛ければ実寸 scaleMmPerPx が求まり、用紙サイズ＋縮尺で下絵を正しいサイズにできる。
+ *
+ * 【260805 クライアント要望】複数ページのPDFでは何枚目を取り込むか選べるようにするため、
+ * ページ番号を受け取る。ページごとに用紙サイズが違うPDFもあるので、paperMmPerPx は
+ * 選んだページから毎回求め直すこと（1ページ目の値を使い回すと実寸がずれる）。
  */
-export async function pdfFirstPageToUnderlay(file: File, scale = 2): Promise<PdfPageRaster> {
+export async function pdfPageToUnderlay(file: File, pageNumber = 1, scale = 2): Promise<PdfPageRaster> {
   // 実際に使われたスケールで mm/px を出す。上限で切り下げられた場合に希望スケールで割ると
   // 用紙実寸がズレる（＝縮尺合わせが狂う）ので、必ず usedScale を使う。
-  const { dataUrl, usedScale } = await pdfFirstPageToDataUrl(file, scale);
-  return { dataUrl, paperMmPerPx: MM_PER_PT / usedScale };
+  const { dataUrl, usedScale, pageCount } = await pdfPageToDataUrl(file, pageNumber, scale);
+  return { dataUrl, paperMmPerPx: MM_PER_PT / usedScale, pageCount };
 }

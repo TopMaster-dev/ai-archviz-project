@@ -380,8 +380,27 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
    * paperMmPerPx は PDF のときだけ入る（用紙寸法をファイルが持っているため）。
    */
   const [pendingUnderlay, setPendingUnderlay] = useState<
-    { dataUrl: string; paperMmPerPx?: number; imageW: number; imageH: number } | null
+    {
+      dataUrl: string;
+      paperMmPerPx?: number;
+      imageW: number;
+      imageH: number;
+      /** PDFのみ。ページを選び直すときに再ラスタライズするため保持する。 */
+      file?: File;
+      pageCount: number;
+      pageNumber: number;
+    } | null
   >(null);
+  /** 挿入ダイアログでページを差し替えている最中か（プレビューにスピナーを出す）。 */
+  const [pendingPageLoading, setPendingPageLoading] = useState(false);
+  /**
+   * ページ差し替えの世代番号。ラスタライズは非同期なので、
+   *  - ページを続けて切り替える（先の要求が後から返る）
+   *  - 読み込み中にキャンセルして別のファイルを選ぶ
+   * のどちらでも、古い結果が新しい状態を上書きしうる（＝別ページ/別ファイルの画像が入る）。
+   * 発行時の番号と一致するときだけ書き戻す。
+   */
+  const underlayPageReqRef = useRef(0);
 
   // Selection & Interaction State
   const [draggingPointIndex, setDraggingPointIndex] = useState<number | null>(null);
@@ -562,12 +581,15 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
         const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
         let dataUrl: string;
         let paperMmPerPx: number | undefined;
+        let pageCount = 1;
         if (isPdf) {
           // pdfjs を動的 import（PDF 選択時のみ読み込み）して1ページ目をラスタライズ＋用紙mm/px を取得。
-          const { pdfFirstPageToUnderlay } = await import('../utils/pdfToImage.js');
-          const raster = await pdfFirstPageToUnderlay(file);
+          // 総ページ数も受け取り、複数ページなら挿入ダイアログでどのページを使うか選ばせる（260805 要望）。
+          const { pdfPageToUnderlay } = await import('../utils/pdfToImage.js');
+          const raster = await pdfPageToUnderlay(file, 1);
           dataUrl = raster.dataUrl;
           paperMmPerPx = raster.paperMmPerPx;
+          pageCount = raster.pageCount;
         } else {
           dataUrl = await new Promise<string>((resolve, reject) => {
             const reader = new FileReader();
@@ -590,7 +612,18 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
           im.onerror = () => resolve({ w: 0, h: 0 });
           im.src = dataUrl;
         });
-        setPendingUnderlay({ dataUrl, paperMmPerPx, imageW: size.w, imageH: size.h });
+        // 前のファイルのページ差し替えが飛んでいたら、その結果は捨てる（別ファイルの画像で上書きされる）。
+        underlayPageReqRef.current++;
+        // ページ差し替えのために File も持っておく（PDFのみ）。
+        setPendingUnderlay({
+          dataUrl,
+          paperMmPerPx,
+          imageW: size.w,
+          imageH: size.h,
+          file: isPdf ? file : undefined,
+          pageCount,
+          pageNumber: 1,
+        });
       } catch (err) {
         console.error('[underlay] failed to load', err);
         // 原因が分かる場合はそのまま出す（260728 #4: 「下絵の読み込みに失敗しました」だけでは
@@ -3384,7 +3417,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                     <label className="flex items-center gap-1 text-[10px] text-neutral-300">
                       <span className="text-neutral-400">縮尺</span>
                       1:
-                      <select
+                      {/*
+                        縮尺は任意の数値を受ける（260805 クライアント指定「数値は任意で設定できるようにしてほしい」）。
+                        1/75 や 1/60 のような一覧に無い縮尺の図面があるため、選択式にしない。
+                        よく使う値は datalist で候補として出す（入力の手間は減らしつつ、値は縛らない）。
+                      */}
+                      <input
+                        type="number"
+                        min={1}
+                        step={1}
+                        list="underlay-scale-denominators"
                         value={effDenom}
                         onChange={(e) => {
                           const denom = Number(e.target.value);
@@ -3396,16 +3438,14 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                             ...(p > 0 ? { paperMmPerPx: p, scaleMmPerPx: p * denom } : {}),
                           });
                         }}
-                        className="rounded border border-white/10 bg-black/40 px-1 py-0.5 text-emerald-400"
-                        title="図面の縮尺。用紙サイズと縮尺から下絵を実寸に合わせます。"
-                      >
-                        {(SCALE_DENOMINATORS as readonly number[]).includes(effDenom)
-                          ? null
-                          : <option value={effDenom}>{effDenom}</option>}
+                        className="w-16 rounded border border-white/10 bg-black/40 px-1 py-0.5 text-right text-emerald-400"
+                        title="図面の縮尺の分母。1/100 なら 100。用紙サイズと縮尺から下絵を実寸に合わせます。"
+                      />
+                      <datalist id="underlay-scale-denominators">
                         {SCALE_DENOMINATORS.map((d) => (
-                          <option key={d} value={d}>{d}</option>
+                          <option key={d} value={d} />
                         ))}
-                      </select>
+                      </datalist>
                       <span className="text-neutral-500">の図面（実寸 約 {(realW / 1000).toFixed(1)} m）</span>
                     </label>
                   </>
@@ -3442,8 +3482,69 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       {/* 下絵の挿入（用紙サイズ＋縮尺で実寸に合わせる・260803 クライアント要望） */}
       <UnderlayInsertDialog
         open={pendingUnderlay != null}
+        imageDataUrl={pendingUnderlay?.dataUrl ?? null}
         imageWidth={pendingUnderlay?.imageW ?? 0}
         imageHeight={pendingUnderlay?.imageH ?? 0}
+        /*
+          カスタム用紙の幅の初期値。PDFはページの実寸（用紙mm/px × 画素数）が分かるので
+          それを入れておく。規格外の用紙（長尺図面など）でも手入力から始めずに済む。
+        */
+        defaultWidthMm={
+          pendingUnderlay?.paperMmPerPx != null && pendingUnderlay.imageW > 0
+            ? pendingUnderlay.paperMmPerPx * pendingUnderlay.imageW
+            : null
+        }
+        pageCount={pendingUnderlay?.pageCount ?? 1}
+        pageNumber={pendingUnderlay?.pageNumber ?? 1}
+        pageLoading={pendingPageLoading}
+        /*
+          ページを選び直したら、そのページを描き直して差し替える（260805 要望）。
+          ページごとに用紙サイズが違うPDFもあるため、paperMmPerPx も必ず取り直す
+          （1ページ目の値を使い回すと実寸がずれる）。
+        */
+        onPageChange={async (page) => {
+          const p = pendingUnderlay;
+          if (!p?.file || page === p.pageNumber) return;
+          const req = ++underlayPageReqRef.current;
+          setPendingPageLoading(true);
+          try {
+            const { pdfPageToUnderlay } = await import('../utils/pdfToImage.js');
+            const raster = await pdfPageToUnderlay(p.file, page);
+            const size = await new Promise<{ w: number; h: number }>((resolve) => {
+              const im = new Image();
+              im.onload = () => resolve({ w: im.naturalWidth, h: im.naturalHeight });
+              im.onerror = () => resolve({ w: 0, h: 0 });
+              im.src = raster.dataUrl;
+            });
+            // 追い越された要求・キャンセル後の要求は捨てる（古い画像で上書きしない）。
+            if (req !== underlayPageReqRef.current) return;
+            // 画素数が取れないと用紙mm/pxが出せず、実寸が狂ったまま配置されてしまう。
+            if (!(size.w > 0) || !(size.h > 0)) throw new Error('rasterized page has no size');
+            setPendingUnderlay((cur) =>
+              cur
+                ? {
+                    ...cur,
+                    dataUrl: raster.dataUrl,
+                    paperMmPerPx: raster.paperMmPerPx,
+                    pageCount: raster.pageCount,
+                    pageNumber: page,
+                    imageW: size.w,
+                    imageH: size.h,
+                  }
+                : cur,
+            );
+          } catch (err) {
+            console.error('[underlay] page change failed', err);
+            // 追い越された要求の失敗で、今表示しているページに警告を出さない。
+            if (req === underlayPageReqRef.current) {
+              showFurnitureHint('このページを読み込めませんでした。別のページをお試しください。');
+            }
+          } finally {
+            // 最後に出した要求だけがスピナーを消す（先に返った古い要求で消すと、
+            // まだ描画中なのに操作できてしまう）。
+            if (req === underlayPageReqRef.current) setPendingPageLoading(false);
+          }
+        }}
         /*
           初期選択（260804 クライアント指定）:
           PDFは用紙の実寸が分かるので規格から判定。画像は縦横比がA判(1:1.414)なら A3、
@@ -3456,10 +3557,12 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
               : initialPaperIdForImage(pendingUnderlay.imageW, pendingUnderlay.imageH)
             : null
         }
-        onCancel={() => setPendingUnderlay(null)}
+        onCancel={() => { underlayPageReqRef.current++; setPendingUnderlay(null); setPendingPageLoading(false); }}
         onConfirm={({ paperId, scaleDenominator, customWidthMm }) => {
           const p = pendingUnderlay;
+          underlayPageReqRef.current++;
           setPendingUnderlay(null);
+          setPendingPageLoading(false);
           if (!p) return;
           const paper = paperSizeById(paperId);
           /*

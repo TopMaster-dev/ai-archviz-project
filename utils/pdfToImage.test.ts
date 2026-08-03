@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fitRasterScale } from './pdfToImage.js';
+import { fitRasterScale, clampPageNumber } from './pdfToImage.js';
 
 /**
  * 260728 クライアント #4:「PDFを選ぶと『下絵の読み込みに失敗しました』」対策。
@@ -48,5 +48,37 @@ describe('fitRasterScale', () => {
     expect(fitRasterScale(0, 800, 2)).toBe(1);
     expect(fitRasterScale(600, Number.NaN, 2)).toBe(1);
     expect(fitRasterScale(600, 800, 0)).toBe(1);
+  });
+});
+
+/**
+ * 取り込むページの選択（260805 クライアント要望・複数ページPDFで何枚目かを確認する）。
+ * 存在しないページを掴むと pdfjs が例外を投げ、「読み込めません」になってしまう。
+ */
+describe('clampPageNumber', () => {
+  it('範囲内はそのまま', () => {
+    expect(clampPageNumber(3, 5)).toBe(3);
+    expect(clampPageNumber(1, 1)).toBe(1);
+  });
+
+  it('総ページ数を超えたら最終ページへ寄せる', () => {
+    expect(clampPageNumber(9, 5)).toBe(5);
+  });
+
+  it('0や負数は1ページ目へ', () => {
+    expect(clampPageNumber(0, 5)).toBe(1);
+    expect(clampPageNumber(-3, 5)).toBe(1);
+  });
+
+  it('小数は四捨五入する（select の値が文字列経由で崩れても実在ページになる）', () => {
+    expect(clampPageNumber(2.4, 5)).toBe(2);
+    expect(clampPageNumber(2.6, 5)).toBe(3);
+  });
+
+  it('壊れた入力でも必ず実在ページを返す', () => {
+    expect(clampPageNumber(NaN, 5)).toBe(1);
+    expect(clampPageNumber(Infinity, 5)).toBe(1);
+    expect(clampPageNumber(2, 0)).toBe(1);
+    expect(clampPageNumber(2, NaN)).toBe(1);
   });
 });
