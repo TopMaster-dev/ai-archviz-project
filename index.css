@@ -133,6 +133,30 @@ canvas {
 .scroll-dark::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 9999px; }
 .scroll-dark::-webkit-scrollbar-track { background: transparent; }
 
+/*
+ * プルダウン（select）の選択肢が読めない問題の修正（260804 クライアント指摘）。
+ *
+ * select 本体には Tailwind で暗い背景と色を当てているが、開いたときに出る選択肢の一覧は
+ * 別の描画（OS/ブラウザ側の一覧）で、option に背景色を指定していないと OS 既定のグレーになる。
+ * そこへ select から文字色（emerald 等の明るい色）だけが継承されるため、
+ * 「グレーの背景に薄い緑の文字」という読めない組み合わせになっていた。
+ *
+ * アプリ全体が暗色基調で、明るい背景の select は存在しないため、ここで一括して指定する
+ * （下絵パネルだけ直しても、他の11箇所で同じ指摘が出るため）。
+ * color-scheme: dark はブラウザに暗色UIであることを伝え、一覧の枠や矢印もそれに合わせさせる。
+ */
+select { color-scheme: dark; }
+select option {
+  background-color: #16181d;
+  color: #e8ecf2;
+}
+/* 選択中の項目は塗りで示す（文字色だけだと暗色背景では判別しづらい）。 */
+select option:checked,
+select option:hover {
+  background-color: #065f46;
+  color: #ffffff;
+}
+
 /* 全ページ共通の暗色スクロールバー（260623・既定スクロールバーもダーク基調になじむデザインに）。 */
 * { scrollbar-color: rgba(255, 255, 255, 0.18) transparent; scrollbar-width: thin; }
 *::-webkit-scrollbar { width: 8px; height: 8px; }
