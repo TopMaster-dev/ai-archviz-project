@@ -25,6 +25,22 @@ import {
 
 /** ウォーク時の壁からの最小距離（m）。near 面が壁にめり込まないよう少し余裕を持たせる。 */
 const WALK_WALL_MARGIN = 0.12;
+
+/**
+ * 建材（床・壁・天井・梁）の質感を固定する（260808 クライアント要望①）。
+ *
+ * 従来は素材ごとの既定値（壁0.8 / 床0.4 / 窓0.05 など）に、利用者が「ツヤ」「金属感」の
+ * スライダーで上書きできる形だった。クライアント指定により、スライダーを廃止し
+ * 建材はすべてこの値へ統一する。素材カタログ側（api/materials.ts の pbr）は
+ * 触らず、描画側で固定する: カタログを書き換えると dev/prod の既定値の差
+ * （vite.config.ts の開発用モック）まで揃える必要があり、戻すのも難しくなるため。
+ *
+ * 保存済みプロジェクトが持つ roughness/metalness は読まれなくなるだけで消さない
+ * （スライダーを戻す判断があったときにそのまま復帰できる）。
+ * 家具・建具（窓ガラス/ドア）はこの経路を通らず、従来どおり個別の値で描画される。
+ */
+const BUILDING_MATERIAL_ROUGHNESS = 0.5;
+const BUILDING_MATERIAL_METALNESS = 0;
 /** 部屋ポリゴン（XZ・原点中心メートル）。ウォークの閉じ込めに使う。 */
 type WalkPolygon = { x: number; z: number }[];
 import { MaterialCategory, Product, FurnitureItem, Opening, CameraBlendRequest } from '../types.js';
@@ -720,8 +736,8 @@ const updateMeshMaterial = (mesh: THREE.Mesh, prod: Product | null, materialSett
 
     mesh.material = new THREE.MeshStandardMaterial({
         map: texture,
-        roughness: settings.roughness ?? prod.pbr.roughness,
-        metalness: settings.metalness ?? prod.pbr.metalness,
+        roughness: BUILDING_MATERIAL_ROUGHNESS,
+        metalness: BUILDING_MATERIAL_METALNESS,
         side: THREE.FrontSide
     });
 };
@@ -812,8 +828,8 @@ const TexturedMaterial: React.FC<TexturedMaterialProps> = ({
   return (
     <meshStandardMaterial
       map={mapTexture}
-      roughness={settings.roughness ?? product.pbr.roughness}
-      metalness={settings.metalness ?? product.pbr.metalness}
+      roughness={BUILDING_MATERIAL_ROUGHNESS}
+      metalness={BUILDING_MATERIAL_METALNESS}
       envMapIntensity={1.0}
       side={doubleSided ? THREE.DoubleSide : THREE.FrontSide}
       polygonOffset

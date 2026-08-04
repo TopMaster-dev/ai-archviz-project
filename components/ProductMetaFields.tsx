@@ -10,8 +10,11 @@ import React, { useState } from 'react';
  * 表示・バリデーション・URLリンクの扱いを揃える。値は「上書き（override）」モデルで、
  * 未入力なら元データ（カタログ/アップロード台帳）の値が使われる＝placeholder に元値を出す。
  *
- * レイアウト方針: 価格は使用頻度が高いので常時表示、それ以外は行ごとの「詳細」トグルの中に置く。
- * 全項目を常時展開すると1行が縦に伸びすぎ、面数の多い案件でパネルが実用に耐えないため。
+ * レイアウト方針（260808 クライアント指定）: 5項目すべてを「商品詳細を記入」の中へ収める。
+ * 単価も外に出さず中に入れる。全項目を常時展開すると1行が縦に伸びすぎ、
+ * 面数の多い案件でパネルが実用に耐えないため、開閉式は維持する。
+ * 並び順は 名前 → メーカー → 品番 → 単価 → URL → メモ で全セクション統一する
+ * （クライアント指定は 名前/メーカー/品番/単価/メモ。URL は仕様5項目の1つなので単価とメモの間に置く）。
  */
 export interface ProductMetaValues {
   name?: string;
@@ -34,7 +37,7 @@ export interface ProductMetaFieldsProps {
   onChange: (patch: ProductMetaValues) => void;
   /** 入力確定時（blur）に呼ぶ。アップロード台帳への書き戻しなど、重い処理はここで。 */
   onCommit?: () => void;
-  /** 詳細欄の見出し（既定「詳細」）。 */
+  /** 詳細欄の見出し（既定「商品詳細を記入」）。 */
   detailLabel?: string;
 }
 
@@ -53,11 +56,18 @@ export const ProductMetaFields: React.FC<ProductMetaFieldsProps> = ({
   priceUnitLabel,
   onChange,
   onCommit,
-  detailLabel = '詳細',
+  detailLabel = '商品詳細を記入',
 }) => {
   const [open, setOpen] = useState(false);
-  // 上書きが1つでも入っていれば、閉じていても分かるように印を出す。
-  const hasDetail = !!(values.name || values.brand || values.modelNumber || values.productUrl || values.memo);
+  // 上書きが1つでも入っていれば、閉じていても分かるように印を出す（単価も対象）。
+  const hasDetail = !!(
+    values.name ||
+    values.brand ||
+    values.modelNumber ||
+    values.productUrl ||
+    values.memo ||
+    (values.unitPrice != null && values.unitPrice > 0)
+  );
 
   const text = (
     key: keyof ProductMetaValues,
@@ -80,38 +90,45 @@ export const ProductMetaFields: React.FC<ProductMetaFieldsProps> = ({
 
   return (
     <div className="mt-2 space-y-1.5">
-      {/* 価格は常時表示（最も使う項目） */}
-      <div className="flex items-center gap-1">
-        <span className={`${labelClass} w-[52px]`}>価格</span>
-        <input
-          inputMode="numeric"
-          value={values.unitPrice ?? ''}
-          placeholder={placeholders?.unitPrice != null ? String(Math.round(placeholders.unitPrice)) : '未設定'}
-          onChange={(e) => {
-            const raw = e.target.value.trim();
-            onChange({ unitPrice: raw === '' ? undefined : Math.max(0, Number(raw) || 0) });
-          }}
-          onBlur={onCommit}
-          className={inputClass}
-        />
-        <span className="text-[9px] font-bold text-neutral-500 shrink-0">{priceUnitLabel}</span>
-      </div>
-
+      {/*
+        開閉ボタンは他のUI（下絵スナップ等）と同じ緑系にして視認性を上げる（260808 クライアント指定）。
+        以前は薄いグレーの文字だけで、押せる場所だと気付きにくかった。
+      */}
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-[9px] font-bold text-neutral-400 transition hover:text-white"
+        className={`flex w-full items-center gap-1 rounded-lg border px-2 py-1 text-[10px] font-bold transition ${
+          open
+            ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-200'
+            : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
+        }`}
       >
         <span>{open ? '▾' : '▸'}</span>
-        <span>{detailLabel}（名前・メーカー・品番・URL・メモ）</span>
-        {hasDetail && !open && <span className="text-emerald-400">●</span>}
+        <span>{detailLabel}</span>
+        {hasDetail && !open && <span className="ml-auto text-emerald-400">●</span>}
       </button>
 
       {open && (
+        // 並び順はクライアント指定（名前 → メーカー → 品番 → 単価 → URL → メモ）。
         <div className="space-y-1.5 rounded-lg border border-white/10 bg-black/20 p-1.5">
           {text('name', '名前', placeholders?.name)}
           {text('brand', 'メーカー', placeholders?.brand)}
           {text('modelNumber', '品番', placeholders?.modelNumber)}
+          <div className="flex items-center gap-1">
+            <span className={`${labelClass} w-[52px]`}>単価</span>
+            <input
+              inputMode="numeric"
+              value={values.unitPrice ?? ''}
+              placeholder={placeholders?.unitPrice != null ? String(Math.round(placeholders.unitPrice)) : '未設定'}
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                onChange({ unitPrice: raw === '' ? undefined : Math.max(0, Number(raw) || 0) });
+              }}
+              onBlur={onCommit}
+              className={inputClass}
+            />
+            <span className="text-[9px] font-bold text-neutral-500 shrink-0">{priceUnitLabel}</span>
+          </div>
           <div className="flex items-center gap-1">
             <span className={`${labelClass} w-[52px]`}>URL</span>
             <input
@@ -134,13 +151,16 @@ export const ProductMetaFields: React.FC<ProductMetaFieldsProps> = ({
               </a>
             )}
           </div>
-          <input
-            value={values.memo ?? ''}
-            placeholder="メモ（任意）"
-            onChange={(e) => onChange({ memo: e.target.value })}
-            onBlur={onCommit}
-            className={inputClass}
-          />
+          <div className="flex items-center gap-1">
+            <span className={`${labelClass} w-[52px]`}>メモ</span>
+            <input
+              value={values.memo ?? ''}
+              placeholder="任意"
+              onChange={(e) => onChange({ memo: e.target.value })}
+              onBlur={onCommit}
+              className={inputClass}
+            />
+          </div>
         </div>
       )}
     </div>

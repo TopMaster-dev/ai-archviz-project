@@ -82,6 +82,14 @@ const FLOORPLAN_ZOOM_PADDING_MM = 1000;
  * 仕組み自体は残してあるので、必要になったらこの定数を true に戻すだけで復活する。
  */
 const ENABLE_UNDERLAY_MOVE_MODE = false;
+
+/**
+ * 下絵スナップの ON/OFF ボタンを出すか（260808 クライアント要望④で非表示指定）。
+ *
+ * 既定が OFF のトグルなので、隠している間は吸着も働かない（＝挙動は「常に OFF」で一定）。
+ * 壁は下絵をなぞって引くため、吸着が要るという判断になれば true に戻すだけでよい。
+ */
+const ENABLE_UNDERLAY_SNAP_TOGGLE = false;
 const PERF_TRACE = false;
 const PERF_FRAME_WARN_MS = 20;
 /**
@@ -3550,24 +3558,30 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
                   </>
                 );
               })()}
-              {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着） */}
-              <div className="flex items-center gap-2 text-[10px] text-neutral-400">
-                <button
-                  type="button"
-                  onClick={() => setIsUnderlaySnapEnabled((v) => !v)}
-                  disabled={!underlay.visible}
-                  className={`px-2 py-0.5 rounded border transition disabled:opacity-40 ${isUnderlaySnapEnabled
-                      ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
-                      : 'border-white/15 text-neutral-300 hover:bg-white/10'
-                    }`}
-                  title="壁の頂点を下絵の枠・辺・中心へ吸着する"
-                >
-                  下絵スナップ {isUnderlaySnapEnabled ? 'ON' : 'OFF'}
-                </button>
-                {ENABLE_UNDERLAY_MOVE_MODE && (
-                  <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
-                )}
-              </div>
+              {/* 下絵スナップ ON/OFF（壁の頂点を下絵の枠・辺・中心へ吸着）。
+                  260808 クライアント要望④で非表示。機能自体は ENABLE_UNDERLAY_SNAP_TOGGLE を
+                  true に戻せば復活する（既定OFFなので、隠している間は吸着も働かない）。 */}
+              {(ENABLE_UNDERLAY_SNAP_TOGGLE || ENABLE_UNDERLAY_MOVE_MODE) && (
+                <div className="flex items-center gap-2 text-[10px] text-neutral-400">
+                  {ENABLE_UNDERLAY_SNAP_TOGGLE && (
+                    <button
+                      type="button"
+                      onClick={() => setIsUnderlaySnapEnabled((v) => !v)}
+                      disabled={!underlay.visible}
+                      className={`px-2 py-0.5 rounded border transition disabled:opacity-40 ${isUnderlaySnapEnabled
+                          ? 'border-emerald-500/60 bg-emerald-500/15 text-emerald-300'
+                          : 'border-white/15 text-neutral-300 hover:bg-white/10'
+                        }`}
+                      title="壁の頂点を下絵の枠・辺・中心へ吸着する"
+                    >
+                      下絵スナップ {isUnderlaySnapEnabled ? 'ON' : 'OFF'}
+                    </button>
+                  )}
+                  {ENABLE_UNDERLAY_MOVE_MODE && (
+                    <span className="text-neutral-500">「移動/拡縮」ON中は角ドラッグで拡縮</span>
+                  )}
+                </div>
+              )}
             </div>
           )}
           <input

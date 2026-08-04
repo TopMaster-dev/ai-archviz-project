@@ -36,7 +36,8 @@ import type { CostBreakdownEntry } from './utils/estimateExport.js';
 import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
-import { wallBeamWallCoverAreaM2, freeBeamWallCoverAreaM2 } from './utils/beamArea.js';
+import { beamCeilingCoverM2, wallBeamCoverStrip, freeBeamCoverStrip, wallBeamCoverUnionM2 } from './utils/beamSurfaceCover.js';
+import type { Rect } from './utils/rectUnion.js';
 import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
 import { THUMBNAIL_CAMERA, thumbnailFitScale } from './utils/thumbnailFraming.js';
@@ -777,54 +778,38 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                     <div className="text-[9px] font-mono text-neutral-500">1 個</div>
                     <div className={`text-xs font-mono font-bold ${isHighlighted ? 'text-emerald-400' : 'text-white'}`}>¥{(f.customPrice || 0).toLocaleString()}</div>
                   </div>
-                  <div className="mt-2 flex items-center gap-1">
-                    <span className="text-[9px] font-bold text-neutral-400">1個単価</span>
-                    <input
-                      value={f.customPrice ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value.trim();
-                        setFurnitureItems((prev) =>
-                          prev.map((item) =>
-                            item.id === f.id ? { ...item, customPrice: raw === '' ? undefined : Math.max(0, Number(raw) || 0) } : item
-                          )
-                        );
-                      }}
-                      className="w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
-                    <span className="text-[9px] font-bold text-neutral-500">円/個</span>
-                  </div>
-                  <input
-                    value={f.customMemo ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setFurnitureItems((prev) => prev.map((item) => (item.id === f.id ? { ...item, customMemo: v } : item)));
+                  {/* 建材・巾木と同じ統一フォーム（260808 クライアント要望②）。
+                      従来この行には 名前・メーカー の入力欄が無く、3Dビューで対象を選ばないと
+                      編集できなかった（AI編集/2Dビューからは実質入力できない状態だった）。 */}
+                  <ProductMetaFields
+                    values={{
+                      name: f.customName,
+                      brand: f.customBrand,
+                      modelNumber: f.modelNumber,
+                      unitPrice: f.customPrice,
+                      productUrl: f.productUrl,
+                      memo: f.customMemo,
                     }}
-                    placeholder="メモ（任意）"
-                    className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                    placeholders={{ name: f.name, brand: f.type }}
+                    priceUnitLabel="円/個"
+                    onChange={(patch) =>
+                      setFurnitureItems((prev) =>
+                        prev.map((item) =>
+                          item.id === f.id
+                            ? {
+                                ...item,
+                                ...('name' in patch ? { customName: patch.name } : {}),
+                                ...('brand' in patch ? { customBrand: patch.brand } : {}),
+                                ...('modelNumber' in patch ? { modelNumber: patch.modelNumber } : {}),
+                                ...('unitPrice' in patch ? { customPrice: patch.unitPrice } : {}),
+                                ...('productUrl' in patch ? { productUrl: patch.productUrl } : {}),
+                                ...('memo' in patch ? { customMemo: patch.memo } : {}),
+                              }
+                            : item,
+                        ),
+                      )
+                    }
                   />
-                  <input
-                    value={f.modelNumber ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setFurnitureItems((prev) => prev.map((item) => (item.id === f.id ? { ...item, modelNumber: v } : item)));
-                    }}
-                    placeholder="品番（任意）"
-                    className="mt-1.5 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                  />
-                  <div className="mt-1.5 flex items-center gap-1">
-                    <input
-                      value={f.productUrl ?? ''}
-                      onChange={(e) => {
-                        const v = e.target.value;
-                        setFurnitureItems((prev) => prev.map((item) => (item.id === f.id ? { ...item, productUrl: v } : item)));
-                      }}
-                      placeholder="商品URL（任意）"
-                      className="flex-1 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
-                    {f.productUrl && /^https?:\/\//i.test(f.productUrl) ? (
-                      <a href={f.productUrl} target="_blank" rel="noopener noreferrer" title="商品ページを開く" className="shrink-0 rounded px-1.5 py-1 text-[11px] text-emerald-400 hover:bg-white/10">↗</a>
-                    ) : null}
-                  </div>
                   {!(f.customPrice && f.customPrice > 0) && (
                     <div className="mt-1 text-[10px] font-black text-amber-300">価格未入力</div>
                   )}
@@ -875,61 +860,50 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                       <span className="text-[9px] font-bold text-neutral-500">選択した商品の画像</span>
                     </div>
                   )}
-                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-12">
-                    <input
-                      value={item.name}
-                      onChange={(e) => handleUpdateAiEstimateItem(item.id, { name: e.target.value })}
-                      placeholder="名称"
-                      className="sm:col-span-4 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
-                    <input
-                      value={item.brand}
-                      onChange={(e) => handleUpdateAiEstimateItem(item.id, { brand: e.target.value })}
-                      placeholder="ブランド/メーカー"
-                      className="sm:col-span-4 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
-                    <input
-                      value={item.price ?? ''}
-                      onChange={(e) => {
-                        const raw = e.target.value.trim();
-                        handleUpdateAiEstimateItem(item.id, { price: raw === '' ? undefined : Math.max(0, Number(raw) || 0) });
-                      }}
-                      placeholder="金額"
-                      className="sm:col-span-3 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
+                  {/* 建材・巾木・家具と同じ統一フォーム（260808 クライアント要望②）。
+                      見出しは他セクションと同じく「表示だけ」にし、入力は下のフォームへ一本化する
+                      （名称の入力欄を外と中の2か所に出すと、同じ項目が二重に見えて分かりにくい）。 */}
+                  <div className="flex items-center gap-2">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[8px] font-black uppercase truncate text-neutral-500">
+                        {item.brand || 'AI追加'}
+                      </div>
+                      <div className={`text-[9px] font-bold leading-tight truncate ${item.name.trim() ? 'text-white' : 'text-neutral-500'}`}>
+                        {item.name.trim() || '名称未入力'}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-xs font-mono font-bold text-white">
+                      ¥{Math.round(item.price ?? 0).toLocaleString()}
+                    </div>
                     <button
                       type="button"
                       onClick={() => handleRemoveAiEstimateItem(item.id)}
-                      className="sm:col-span-1 rounded border border-red-500/30 bg-red-500/10 text-[10px] font-black text-red-300 hover:bg-red-500/20"
+                      className="shrink-0 rounded border border-red-500/30 bg-red-500/10 px-2 py-1 text-[10px] font-black text-red-300 hover:bg-red-500/20"
                     >
                       削除
                     </button>
                   </div>
-                  <input
-                    value={item.memo ?? ''}
-                    onChange={(e) => handleUpdateAiEstimateItem(item.id, { memo: e.target.value })}
-                    placeholder="メモ（任意）"
-                    className="mt-2 w-full rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
+                  <ProductMetaFields
+                    values={{
+                      name: item.name,
+                      brand: item.brand,
+                      modelNumber: item.modelNumber,
+                      unitPrice: item.price,
+                      productUrl: item.productUrl,
+                      memo: item.memo,
+                    }}
+                    priceUnitLabel="円"
+                    onChange={(patch) =>
+                      handleUpdateAiEstimateItem(item.id, {
+                        ...('name' in patch ? { name: patch.name ?? '' } : {}),
+                        ...('brand' in patch ? { brand: patch.brand ?? '' } : {}),
+                        ...('modelNumber' in patch ? { modelNumber: patch.modelNumber } : {}),
+                        ...('unitPrice' in patch ? { price: patch.unitPrice } : {}),
+                        ...('productUrl' in patch ? { productUrl: patch.productUrl } : {}),
+                        ...('memo' in patch ? { memo: patch.memo } : {}),
+                      })
+                    }
                   />
-                  <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
-                    <input
-                      value={item.modelNumber ?? ''}
-                      onChange={(e) => handleUpdateAiEstimateItem(item.id, { modelNumber: e.target.value })}
-                      placeholder="品番（任意）"
-                      className="rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                    />
-                    <div className="flex items-center gap-1">
-                      <input
-                        value={item.productUrl ?? ''}
-                        onChange={(e) => handleUpdateAiEstimateItem(item.id, { productUrl: e.target.value })}
-                        placeholder="商品URL（任意）"
-                        className="flex-1 rounded bg-black/40 px-2 py-1 text-[10px] text-white outline-none ring-1 ring-white/10 focus:ring-emerald-400/60"
-                      />
-                      {item.productUrl && /^https?:\/\//i.test(item.productUrl) ? (
-                        <a href={item.productUrl} target="_blank" rel="noopener noreferrer" title="商品ページを開く" className="shrink-0 rounded px-1.5 py-1 text-[11px] text-emerald-400 hover:bg-white/10">↗</a>
-                      ) : null}
-                    </div>
-                  </div>
                   {missing && <div className="mt-1 text-[10px] font-black text-amber-300">名称・金額の入力で完了になります</div>}
                 </div>
               );
@@ -3162,10 +3136,25 @@ const App: React.FC = () => {
    * 性能: 全メッシュ分を1回で作る。梁ごとに呼ぶと O(n) × O(n^2) になり、2Dの梁ドラッグ（pointermove ごとに
    * 再レンダー）でフレーム落ちする（敵対検証で 16本 22ms / 32本 250ms を実測）。
    */
+  /**
+   * 現在の部屋形状に合わせて位置を確定させた梁。
+   * 壁梁は保存値ではなく壁から作り直すので、面積計算はすべてこれを使う
+   * （梁の露出面積・天井の控除で別々に解決すると、壁を動かしたときにズレる）。
+   */
+  /** 部屋の輪郭(mm)。sketchPoints は SKETCH_BASE_SCALE=0.05 のスケール座標なので mm へ直す。 */
+  const sketchPointsMm = useMemo(
+    () => sketchPoints.map((p) => ({ x: p.x / 0.05, y: p.y / 0.05 })),
+    [sketchPoints],
+  );
+
+  const placedBeams = useMemo(() => {
+    const centerMm = polygonCentroidMm(sketchPointsMm);
+    return beams.map((b) => resolveBeamPlacement(b, sketchPointsMm, centerMm));
+  }, [beams, sketchPointsMm]);
+
   const beamExposedAreaById = useMemo(() => {
-    const pointsMm = sketchPoints.map((p) => ({ x: p.x / 0.05, y: p.y / 0.05 }));
-    const centerMm = polygonCentroidMm(pointsMm);
-    const placed = beams.map((b) => resolveBeamPlacement(b, pointsMm, centerMm));
+    const pointsMm = sketchPointsMm;
+    const placed = placedBeams;
     const solids = [
       ...beamSolidsFromBeams(placed, roomHeight),
       ...roomWallOccluders(pointsMm, roomHeight), // 非課金の遮蔽体
@@ -3175,13 +3164,23 @@ const App: React.FC = () => {
     // （残すと将来マップを走査するコードが壁を梁として計上しかねない）。
     for (const id of [...raw.keys()]) if (isWallOccluderId(id)) raw.delete(id);
     return raw;
-  }, [beams, sketchPoints, roomHeight]);
+  }, [placedBeams, sketchPointsMm, roomHeight]);
 
   // メッシュ名から幾何学的な面積(m²)を返す（素材割当の有無に依存しない）。見積計算と選択パネルで
   // 共有し、未割当（未設定）の面でも面積が0にならないようにする（260612: 未設定壁の面積0バグ修正）。
   const areaForMeshM2 = useCallback((meshName: string): number => {
-    if (meshName === 'Sketch_Floor' || meshName === 'Sketch_Ceiling') {
+    if (meshName === 'Sketch_Floor') {
       return calculateArea(sketchPoints);
+    }
+    /*
+      天井は「梁の裏に隠れている面」を差し引く（260808 クライアント要望③）。
+      壁は 260613 から差し引いていたが、天井はずっと部屋の形そのままの面積で計上しており、
+      梁を置くほど過大計上になっていた（6m×5mの天井に梁5本で 4.16m²）。
+      交差した梁の重なりは1回だけ数える（beamCeilingCoverM2 が和集合を返す）。
+      下がりのある梁は天井との間にすき間があるので差し引かない（クライアント確認済み）。
+    */
+    if (meshName === 'Sketch_Ceiling') {
+      return Math.max(0, calculateArea(sketchPoints) - beamCeilingCoverM2(placedBeams, sketchPointsMm));
     }
     if (meshName.startsWith('Sketch_Wall_')) {
       const parts = meshName.replace('Sketch_Wall_', '').split('_');
@@ -3241,22 +3240,28 @@ const App: React.FC = () => {
       // さらに自由配置(壁非スナップ)の梁も、壁に沿って近接していれば同様に差し引く（3c-iii・260720 クライアント要望）。
       const wp1 = sketchPoints[baseIdx];
       const wp2 = sketchPoints[(baseIdx + 1) % sketchPoints.length];
-      let beamCover = 0;
-      for (const bm of beams) {
+      // 260808 クライアント要望③: 梁ごとに足し算していたため、同じ帯を複数の梁が覆っていると
+      // 同じ面積を2回引いていた（壁が小さく出る）。覆っている帯の和集合を取り、1回だけ引く。
+      const beamStrips: (Rect | null)[] = [];
+      // 壁梁は現在の壁から作り直した位置を使う（保存値の長さは壁を動かすと古くなる）。
+      for (const bm of placedBeams) {
         if (bm.wallIndex === baseIdx) {
-          beamCover += wallBeamWallCoverAreaM2(bm, segBottomMm, segTopMm, roomHeight);
+          beamStrips.push(wallBeamCoverStrip(bm, segBottomMm, segTopMm, roomHeight));
         } else if (bm.wallIndex === undefined && wp1 && wp2) {
           // 壁端点を mm（sketch/0.05）へ変換し、梁 cx/cy と同一座標系で射影・近接判定する。
-          beamCover += freeBeamWallCoverAreaM2(
-            bm,
-            { x: wp1.x / 0.05, y: wp1.y / 0.05 },
-            { x: wp2.x / 0.05, y: wp2.y / 0.05 },
-            segBottomMm,
-            segTopMm,
-            roomHeight,
+          beamStrips.push(
+            freeBeamCoverStrip(
+              bm,
+              { x: wp1.x / 0.05, y: wp1.y / 0.05 },
+              { x: wp2.x / 0.05, y: wp2.y / 0.05 },
+              segBottomMm,
+              segTopMm,
+              roomHeight,
+            ),
           );
         }
       }
+      const beamCover = wallBeamCoverUnionM2(beamStrips);
       return Math.max(0, grossArea - holeSum - beamCover);
     }
     if (meshName === 'Sketch_UpperBand') {
@@ -3279,7 +3284,7 @@ const App: React.FC = () => {
       return Math.max(0, beamExposedAreaById.get(bx.id) ?? 0);
     }
     return 0;
-  }, [sketchPoints, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams, beamExposedAreaById]);
+  }, [sketchPoints, sketchPointsMm, roomHeight, wallDivisions, selections, materialSettings, openings, skeletonCeiling, skeletonUpperWallMm, beams, placedBeams, beamExposedAreaById]);
 
   const costBreakdown = useMemo(() => {
     const results: any[] = [];
@@ -4572,7 +4577,9 @@ const App: React.FC = () => {
 
                                     return (
                                         <div key={`${prodId}-${index}`} className={`${propertyCardBaseClass} px-4 py-3 flex flex-col gap-3 animate-in fade-in slide-in-from-top-4`}>
-                                            {/* 上段・中段はそのまま維持してください（名前、面積、金額、ツヤ、金属感） */}
+                                            {/* 上段は維持（名前・面積・金額）。
+                                                「ツヤ」「金属感」のスライダーは 260808 クライアント要望①で廃止。
+                                                建材の質感は RoomViewer の BUILDING_MATERIAL_ROUGHNESS/METALNESS に固定。 */}
                                             <div className="flex items-center justify-between gap-2 w-full">
                                                 <div className="flex flex-col min-w-0">
                                                     <span className="text-[10px] font-black uppercase text-emerald-400 tracking-widest truncate max-w-[140px]">{g.product?.name || 'ベースカラー (未設定)'}</span>
@@ -4581,50 +4588,6 @@ const App: React.FC = () => {
                                                 <div className="flex items-center gap-2 text-[10px] font-mono font-bold text-white bg-black/30 px-2 py-1 rounded-lg shrink-0">
                                                     <span>{g.area.toFixed(1)}㎡</span>
                                                     <span className="text-emerald-400">¥{Math.round(g.cost).toLocaleString()}</span>
-                                                </div>
-                                            </div>
-                                            <div className="flex flex-col gap-2 w-full pt-2 border-t border-white/10">
-                                                <div className="flex items-center gap-2 w-full min-w-0">
-                                                    <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-9">ツヤ</span>
-                                                    <input
-                                                        type="range"
-                                                        min={0}
-                                                        max={1}
-                                                        step={0.01}
-                                                        value={1 - (settings.roughness ?? 0.5)}
-                                                        onChange={(e) => {
-                                                            const v = Number(e.target.value);
-                                                            setMaterialSettings((prev) => ({
-                                                                ...prev,
-                                                                [prodId]: { ...prev[prodId], roughness: 1 - v },
-                                                            }));
-                                                        }}
-                                                        className="flex-1 min-w-0 accent-emerald-500 h-1.5"
-                                                    />
-                                                    <span className="text-[9px] font-mono text-white/80 w-8 text-right tabular-nums shrink-0">
-                                                        {(1 - (settings.roughness ?? 0.5)).toFixed(2)}
-                                                    </span>
-                                                </div>
-                                                <div className="flex items-center gap-2 w-full min-w-0">
-                                                    <span className="text-[9px] text-neutral-300 font-bold shrink-0 w-9">金属感</span>
-                                                    <input
-                                                        type="range"
-                                                        min={0}
-                                                        max={1}
-                                                        step={0.01}
-                                                        value={settings.metalness ?? 0}
-                                                        onChange={(e) => {
-                                                            const v = Number(e.target.value);
-                                                            setMaterialSettings((prev) => ({
-                                                                ...prev,
-                                                                [prodId]: { ...prev[prodId], metalness: v },
-                                                            }));
-                                                        }}
-                                                        className="flex-1 min-w-0 accent-emerald-500 h-1.5"
-                                                    />
-                                                    <span className="text-[9px] font-mono text-white/80 w-8 text-right tabular-nums shrink-0">
-                                                        {(settings.metalness ?? 0).toFixed(2)}
-                                                    </span>
                                                 </div>
                                             </div>
                                             {g.product?.textureUrl && (() => {
