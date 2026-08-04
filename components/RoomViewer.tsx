@@ -41,6 +41,16 @@ const WALK_WALL_MARGIN = 0.12;
  */
 const BUILDING_MATERIAL_ROUGHNESS = 0.5;
 const BUILDING_MATERIAL_METALNESS = 0;
+
+/**
+ * 壁ローカル +Z が室内を向くか。getWallRotationY が巻き方向(isCCW)に応じて π を足すことで
+ * 常に成り立つ不変条件なので true 固定（260809）。
+ *
+ * 名前付きの定数にしているのは、これが「たまたま true」ではなく
+ * getWallRotationY と対になった約束事だと分かるようにするため。
+ * getWallRotationY を変更するときは utils/wallInwardNormal.test.ts が落ちる。
+ */
+const WALL_LOCAL_PLUS_Z_IS_INDOOR = true;
 /** 部屋ポリゴン（XZ・原点中心メートル）。ウォークの閉じ込めに使う。 */
 type WalkPolygon = { x: number; z: number }[];
 import { MaterialCategory, Product, FurnitureItem, Opening, CameraBlendRequest } from '../types.js';
@@ -2931,15 +2941,25 @@ const SketchRoom = ({
         const rotationY = getWallRotationY(p, next, isCCW);
         const cameraTick = cameraSyncTick;
 
-        // 壁法線（内向き）とカメラ位置の関係で開口表示を制御
+        /*
+          壁の内向き法線（260809 クライアント指摘「一部の面の表示が反転する」の修正）。
+
+          以前は「原点の方を向いている側が室内」として法線を決めていた:
+            toCenter = 原点 − 壁中心 ; 内向きでなければ法線を反転
+          しかし原点は間取りの外接矩形の中心（getRoomTransform）であって部屋の重心ではなく、
+          L字やコの字では欠き込み部分に落ちて室外に出る。さらにT字のように原点が室内にあっても、
+          「ある一点の方向」は凹多角形の内外判定として成立しない（実測: L字2/6・コの字3/8・T字2/8の壁で誤判定）。
+          法線が反転した壁では、カットアウェイ・建具の表示・ドアの開き勝手がすべて裏返る。
+
+          正しい内向き法線は多角形の巻き方向から一意に決まる。getWallRotationY は isCCW のとき π を足しており、
+          その結果として壁ローカル +Z は常に室内を向く（＝ここでの判定は不要だった）。
+          この不変条件は utils/wallInwardNormal.test.ts で全形状・両巻き方向について固定している。
+        */
         const wallCenter = new THREE.Vector3((p.x + next.x) / 2, height / 2, (p.z + next.z) / 2);
-        const roomCenter = new THREE.Vector3(0, height / 2, 0);
-        const toCenter = new THREE.Vector3().subVectors(roomCenter, wallCenter).normalize();
         const toCamera = new THREE.Vector3().subVectors(camera.position, wallCenter).normalize();
         const wallLocalPlusZ = new THREE.Vector3(0, 0, 1).applyAxisAngle(new THREE.Vector3(0, 1, 0), rotationY).normalize();
-        const isLocalPlusZIndoor = wallLocalPlusZ.dot(toCenter) >= 0;
+        const isLocalPlusZIndoor = WALL_LOCAL_PLUS_Z_IS_INDOOR;
         const wallNormal = wallLocalPlusZ.clone();
-        if (!isLocalPlusZIndoor) wallNormal.multiplyScalar(-1);
         // ヒステリシスで境界付近の表示チラつきを抑える
         const openingHideThreshold = -0.02;
         const openingShowThreshold = 0.02;
