@@ -358,7 +358,7 @@ export const ENABLE_AREA_EDIT_FURNITURE_RAW = false;
  * ＋③2K化（printExportSpec.ENABLE_2K_PREVIEW）の“継ぎ目に影響しない”対策で軽減する。部分合成へ切替える場合は false に
  * して「継ぎ目 vs 蓄積」を実機 A/B し、膜合成で継ぎ目が許容範囲か確認してから判断すること。
  */
-export const ENABLE_AREA_EDIT_FULLFRAME_ALL = true;
+export const ENABLE_AREA_EDIT_FULLFRAME_ALL = false;
 
 /**
  * 【Stage4（260722・複数エリアの drift 累積の解消）】複数エリアを“1回の生成”でまとめて処理するモード。
