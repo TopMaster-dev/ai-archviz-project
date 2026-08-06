@@ -335,7 +335,7 @@ export const ENABLE_SEAMLESS_MEMBRANE = true;
  * トレードオフ: 家具の設置感(接地影/大域なじませ)は全体仕上げに頼らず per-region 生成（周辺込みクロップ）に委ねる。
  * 既定 OFF（Stage3 に置換・下記）。Stage3-lite は per-region クロップ合成を残すため境界/見切れが残り不十分だった。
  */
-export const ENABLE_AREA_EDIT_FURNITURE_RAW = false;
+export const ENABLE_AREA_EDIT_FURNITURE_RAW = true;
 
 /**
  * 【Stage3（260722・境界線/見切れの構造的解消）】面仕上げだけでなく家具差し替え・混在“すべての”エリア編集を、
