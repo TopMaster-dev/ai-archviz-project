@@ -178,6 +178,8 @@ export function uploadToProduct(upload: UserUpload): Product {
   const metaName = str(meta.name);
   const metaBrand = str(meta.brand);
   const metaModelNumber = str(meta.modelNumber);
+  // 商品ページURL（260811 要望③）。台帳に入っていれば見積の既定値として使う。
+  const metaProductUrl = str(meta.productUrl);
   // 商品金額（円・整数）。未入力/不正/0 は 0（未設定）。
   const metaPrice =
     typeof meta.price === 'number' && Number.isFinite(meta.price) && meta.price > 0 ? Math.round(meta.price) : 0;
@@ -210,6 +212,7 @@ export function uploadToProduct(upload: UserUpload): Product {
     name: metaName || deriveUploadName(upload.originalName, 'テクスチャ'), // 入力したデータ名称を優先
     brand: metaBrand || USER_UPLOAD_BRAND, // メーカー名未入力時は識別用の既定ブランド
     modelNumber: metaModelNumber || undefined,
+    productUrl: metaProductUrl || undefined,
     category: assigned ?? 'Wall', // 共通時のプレースホルダ（表示は crossCategory が制御）
     crossCategory: assigned === null,
     pricePerUnit: metaPrice,

@@ -46,6 +46,13 @@ export interface BaseboardWallSegment {
   brand: string;
   /** 巾木の m 単価（円/m） */
   unitPricePerM: number;
+  /**
+   * 品番・商品URL（260811 クライアント要望③の穴埋め）。
+   * 共通フォームは巾木でも品番/URLを入力・保存できるのに、行の型が持っていなかったため
+   * 画面にも見積書にも一切出てこない「入れたのに消える」状態だった。ここから通す。
+   */
+  modelNumber?: string;
+  productUrl?: string;
 }
 
 export interface BaseboardEstimateRow {
@@ -57,6 +64,9 @@ export interface BaseboardEstimateRow {
   unitPrice: number;
   /** 金額（円） */
   cost: number;
+  /** 品番・商品URL（未入力なら undefined）。 */
+  modelNumber?: string;
+  productUrl?: string;
 }
 
 /**
@@ -79,6 +89,10 @@ export function buildBaseboardRows(segments: BaseboardWallSegment[]): BaseboardE
         lengthM: s.lengthM,
         unitPrice: Number.isFinite(s.unitPricePerM) ? Math.max(0, s.unitPricePerM) : 0,
         cost: 0,
+        // 同じ製品IDの壁が複数あっても、品番/URLは製品に1つ。最初に現れた値を採る
+        // （名前・メーカー・単価と同じ「先勝ち」で揃える）。
+        ...(s.modelNumber ? { modelNumber: s.modelNumber } : {}),
+        ...(s.productUrl ? { productUrl: s.productUrl } : {}),
       });
     }
   }

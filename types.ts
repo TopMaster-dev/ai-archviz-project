@@ -83,6 +83,12 @@ export interface Product {
   brand: string;
   /** 品番（任意・建材アップロード時に入力）。見積もりに表示する（260630・クライアント要望）。 */
   modelNumber?: string;
+  /**
+   * 商品ページURL（任意）。260811 要望③の穴埋め。
+   * これが無かったため、アップロード時にURLを入れても見積側は台帳を読めず、
+   * 見積で入力し直した上書きしか使えなかった（＝素材に付いて回らない）。
+   */
+  productUrl?: string;
   category: MaterialCategory;
   pricePerUnit: number;
   unit: string;

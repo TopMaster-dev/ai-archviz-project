@@ -324,9 +324,24 @@ export function AiEditWorkspace({
   // 複数候補から選ぶ（Option 1・260717 クライアント要望）。同一入力で candidateCount 回生成し最良の1枚を選ぶ
   // ＝AI生成のばらつきを味方につける（③④の“当たり外れ”対策）。既定 1（従来どおり＝コスト据え置き）。
   const [candidateCount, setCandidateCount] = useState(1);
-  // 生成した複数候補と、採用時に版を作るための親情報。null のときピッカー非表示。
+  /*
+    生成した複数候補と、採用時に版を作るための親情報。null のときピッカー非表示。
+
+    260811 クライアント要望①でコーディネートも候補3枚に対応した。両者で採用後の処理が違うため
+    mode を持たせる:
+      area        … 選んだ1枚に本番確定（applyAreaEditFinish）を通す。ctx が要る。
+      coordinate  … 仕上げ段が無いので ctx は null。版へ残すスタイル参照/メモを持ち回る。
+  */
   const [candidatePick, setCandidatePick] = useState<
-    { parentId: string; baseImageDataUrl: string; candidates: { url: string; ctx: AreaEditFinishCtx }[] } | null
+    {
+      mode: 'area' | 'coordinate';
+      parentId: string;
+      baseImageDataUrl: string;
+      /** 版に残すメタ（コーディネートのみ中身が入る）。 */
+      styleRefDataUrls: string[];
+      styleMemo: string;
+      candidates: { url: string; ctx: AreaEditFinishCtx | null }[];
+    } | null
   >(null);
   // 選んだ候補を本番確定（仕上げ Gemini パス）している最中のローディング（point2・260721）。
   const [finalizingCandidate, setFinalizingCandidate] = useState(false);
@@ -854,7 +869,16 @@ export function AiEditWorkspace({
   // 確定した1枚を版として登録する（単一候補＝即確定／複数候補＝ピッカーで選んだ1枚）。
   // 比較スライダー・暗黙フィードバック・onEditSuccess をまとめて行う（複数候補でも1回だけ版を作る）。
   const commitEditResult = useCallback(
-    (parentId: string, baseImageDataUrl: string, finalUrl: string) => {
+    (
+      parentId: string,
+      baseImageDataUrl: string,
+      finalUrl: string,
+      /**
+       * 版に残すメタ。省略時はエリア編集の値（スタイル参照なし・描いた範囲）。
+       * コーディネートは範囲を持たず、代わりにスタイル参照とメモを残す（260811 要望①）。
+       */
+      meta?: { styleRefDataUrls: string[]; styleMemo: string; objects: AiEditObjectReference[] },
+    ) => {
       setCompareA(baseImageDataUrl);
       setCompareB(finalUrl);
       setCompareSlider(50);
@@ -872,13 +896,15 @@ export function AiEditWorkspace({
         parentId,
         baseImageDataUrl,
         outputImageDataUrl: finalUrl,
-        styleRefDataUrls: [],
-        styleMemo: '',
-        objects: draftObjects.map((o) => ({
-          ...o,
-          placements: o.placements.map((p) => ({ ...p })),
-          placementMemos: [...(o.placementMemos ?? [])],
-        })),
+        styleRefDataUrls: meta?.styleRefDataUrls ?? [],
+        styleMemo: meta?.styleMemo ?? '',
+        objects:
+          meta?.objects ??
+          draftObjects.map((o) => ({
+            ...o,
+            placements: o.placements.map((p) => ({ ...p })),
+            placementMemos: [...(o.placementMemos ?? [])],
+          })),
       });
     },
     [versions, onEditSuccess, draftObjects]
@@ -1472,8 +1498,11 @@ export function AiEditWorkspace({
         } else {
           // 候補ピッカーを開く。採用（選択）時に本番確定（applyAreaEditFinish 全段）を通してから版を1つだけ作る（それまで版は作らない）。
           setCandidatePick({
+            mode: 'area',
             parentId: activeVersion.id,
             baseImageDataUrl: activeVersion.outputImageDataUrl,
+            styleRefDataUrls: [],
+            styleMemo: '',
             candidates: drafts,
           });
         }
@@ -1540,26 +1569,37 @@ export function AiEditWorkspace({
   // 精細化・フリープラン後処理を通してから版を作る。ドラフト画像を土台にするので、選んだ構図・家具の形はそのまま保たれる
   // （元画像から作り直さない＝プレビューと本番のズレが出ない）。失敗時はドラフトを採用（フェイルソフト）。
   const handleSelectCandidate = useCallback(
-    async (draft: { url: string; ctx: AreaEditFinishCtx }) => {
+    async (draft: { url: string; ctx: AreaEditFinishCtx | null }) => {
       if (!candidatePick || finalizingCandidate) return;
-      const { parentId, baseImageDataUrl } = candidatePick;
+      const { mode, parentId, baseImageDataUrl, styleRefDataUrls, styleMemo } = candidatePick;
       setFinalizingCandidate(true);
       let finalUrl = draft.url;
       try {
-        finalUrl = await applyAreaEditFinish(draft.url, draft.url, '', draft.ctx, {
-          runFinishing: true,
-          runOpeningRestore: false, // 1-B 開口復元はドラフト時に実施済み（二重貼り回避）。
-          runEnhance: true,
-          runFreePlan: true,
-        });
+        if (mode === 'area' && draft.ctx) {
+          finalUrl = await applyAreaEditFinish(draft.url, draft.url, '', draft.ctx, {
+            runFinishing: true,
+            runOpeningRestore: false, // 1-B 開口復元はドラフト時に実施済み（二重貼り回避）。
+            runEnhance: true,
+            runFreePlan: true,
+          });
+        } else {
+          // コーディネートは仕上げ段を持たない（全体生成1回で完成）。
+          // ドラフト生成では飛ばしていたフリープラン後処理だけ、採用した1枚に適用する。
+          finalUrl = await maybeApplyFreePlanOutputLimits(draft.url, isFreePlan);
+        }
       } catch {
         /* 本番確定に失敗してもドラフトを採用（生成結果を失わない） */
       }
-      commitEditResult(parentId, baseImageDataUrl, finalUrl);
+      commitEditResult(
+        parentId,
+        baseImageDataUrl,
+        finalUrl,
+        mode === 'coordinate' ? { styleRefDataUrls, styleMemo, objects: [] } : undefined,
+      );
       setFinalizingCandidate(false);
       setCandidatePick(null);
     },
-    [candidatePick, finalizingCandidate, applyAreaEditFinish, commitEditResult]
+    [candidatePick, finalizingCandidate, applyAreaEditFinish, commitEditResult, isFreePlan]
   );
 
   const handleClickExecute = () => {
@@ -1639,49 +1679,84 @@ export function AiEditWorkspace({
             ...(styleMemo ? { styleMemo } : {}),
           }
         : { baseImage: sentBase, coordinate: true, aspectRatio, imageSize: PREVIEW_GEMINI_IMAGE_SIZE, learnedHints };
-      const res = await fetch('/api/ai-edit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json();
-      if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
-      // トークン計測（row 58・無効時は no-op）。
-      void recordAiUsage({ feature: 'ai_coordinate', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
-      let outUrl = data.url as string;
-      // ② アスペクト補正（縦伸び対策・260624）。コーディネートはマスク無しなので全体編集のまま合成しない。
-      const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
-      const aspectMode: 'cover' | 'contain' =
-        coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-      outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, aspectMode);
-      outUrl = await maybeApplyFreePlanOutputLimits(outUrl, isFreePlan);
-      setCompareA(activeVersion.outputImageDataUrl);
-      setCompareB(outUrl);
-      setCompareSlider(50);
-      // 暗黙的フィードバック（row 210/216）: 戻って再コーディネートした場合、直前の生成結果を暗黙 bad に。
-      const priorChildren = versions.filter((v) => v.parentId === activeVersion.id);
-      if (priorChildren.length > 0) {
-        const abandoned = priorChildren.reduce((a, b) => (b.createdAt > a.createdAt ? b : a));
-        void recordImplicitFeedback('regenerate', {
-          verdict: 'bad',
-          imageRef: abandoned.id,
-          styleMemo: abandoned.styleMemo,
-        }).catch((e) => console.warn('[ai feedback] 暗黙的bad評価の記録に失敗', e));
+      /*
+        【複数候補（260811 クライアント要望①）】エリア編集と同じく、同一入力で candidateCount 回生成して
+        利用者に1枚選んでいただく。ここまでの準備（土台の縮小・参照画像の圧縮・送信サイズの確認）は
+        入力が同じなので1回だけ行い、この関数だけを繰り返す。
+        コーディネートは仕上げ段を持たないため、エリア編集のような「ドラフトは安く／採用時に本番確定」
+        の2段構えは不要で、生成回数＝候補数ちょうどになる。
+      */
+      const produceOneCoordinate = async (): Promise<string> => {
+        const res = await fetch('/api/ai-edit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
+          body: JSON.stringify(body),
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
+        // トークン計測（row 58・無効時は no-op）。
+        void recordAiUsage({ feature: 'ai_coordinate', usage: data.usage, model: data.model, imageCount: 1, projectId: projectSession?.projectId ?? null });
+        let outUrl = data.url as string;
+        // ② アスペクト補正（縦伸び対策・260624）。コーディネートはマスク無しなので全体編集のまま合成しない。
+        const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
+        const aspectMode: 'cover' | 'contain' =
+          coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
+        outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, aspectMode);
+        return outUrl;
+      };
+
+      const coordMeta = { styleRefDataUrls: styleImageDataUrls, styleMemo, objects: [] };
+      const count = Math.min(3, Math.max(1, Math.round(candidateCount)));
+      setGenProgress({ total: count, done: [] });
+
+      if (count <= 1) {
+        // 従来どおり即確定（挙動不変）。
+        const only = await maybeApplyFreePlanOutputLimits(await produceOneCoordinate(), isFreePlan);
+        setGenProgress({ total: 1, done: [only] });
+        commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, only, coordMeta);
+      } else {
+        const drafts: string[] = [];
+        let lastErr: unknown = null;
+        for (let i = 0; i < count; i++) {
+          try {
+            const u = await produceOneCoordinate();
+            drafts.push(u);
+            setGenProgress({ total: count, done: [...drafts] });
+          } catch (e) {
+            lastErr = e; // 一部の失敗は許容（他が出れば選べる）。全滅なら下で throw。
+          }
+        }
+        if (drafts.length === 0) throw lastErr instanceof Error ? lastErr : new Error('コーディネートに失敗しました');
+        if (drafts.length === 1) {
+          const only = await maybeApplyFreePlanOutputLimits(drafts[0], isFreePlan);
+          commitEditResult(activeVersion.id, activeVersion.outputImageDataUrl, only, coordMeta);
+        } else {
+          setCandidatePick({
+            mode: 'coordinate',
+            parentId: activeVersion.id,
+            baseImageDataUrl: activeVersion.outputImageDataUrl,
+            styleRefDataUrls: styleImageDataUrls,
+            styleMemo,
+            candidates: drafts.map((u) => ({ url: u, ctx: null })),
+          });
+        }
       }
-      onEditSuccess({
-        parentId: activeVersion.id,
-        baseImageDataUrl: activeVersion.outputImageDataUrl,
-        outputImageDataUrl: outUrl,
-        styleRefDataUrls: styleImageDataUrls,
-        styleMemo,
-        objects: [],
-      });
     } catch (err: unknown) {
       setSubmitError(err instanceof Error ? err.message : 'エラー');
     } finally {
       setIsSubmitting(false);
+      setGenProgress(null);
     }
-  }, [activeVersion, isSubmitting, versions, onEditSuccess, isFreePlan, projectSession, draftStyleMemo, styleImageDataUrls]);
+  }, [
+    activeVersion,
+    isSubmitting,
+    isFreePlan,
+    projectSession,
+    draftStyleMemo,
+    styleImageDataUrls,
+    candidateCount,
+    commitEditResult,
+  ]);
 
   // コーディネートタブの実行（260624/260702）: 常に runCoordinate（全体編集）で実行する。エリア編集(runEdit)とは
   // 完全に独立させ、エリア編集の範囲を読み込まない。プロンプト/添付があれば全体スタイル編集、無ければ完全お任せ。
@@ -2814,8 +2889,9 @@ export function AiEditWorkspace({
                   ✨ 画質を戻す（今の画像を精細化）
                 </button>
               )}
-              {/* 複数候補から選ぶ（Option 1・260717）: 生成枚数を選び、実行後に最良の1枚を選ぶ。既定 1。 */}
-              {activeTool === 'area' && (
+              {/* 複数候補から選ぶ（Option 1・260717）: 生成枚数を選び、実行後に最良の1枚を選ぶ。既定 1。
+                  260811 要望①でコーディネートにも開放（エリア編集と同じ操作感で3枚から選べる）。 */}
+              {(activeTool === 'area' || activeTool === 'coordinate') && (
                 <div className="flex flex-wrap items-center gap-2 rounded-lg border border-white/10 bg-black/30 px-2.5 py-2">
                   <span className="text-[11px] font-bold text-neutral-100">候補数</span>
                   <div className="flex gap-1">
@@ -2890,7 +2966,7 @@ export function AiEditWorkspace({
               <div className="flex items-center gap-3">
                 <div>
                   <h3 className="text-sm font-bold text-neutral-100">
-                    高画質化する画像を1つ選択してください（{candidatePick.candidates.length}案）
+                    {candidatePick.mode === 'area' ? '高画質化する画像を1つ選択してください' : '採用する画像を1つ選択してください'}（{candidatePick.candidates.length}案）
                   </h3>
                   <p className="mt-0.5 text-[11px] text-neutral-500">
                     画像をクリックすると拡大表示できます（拡大では確定しません）。よく確認のうえ「この案を採用」で1枚だけを高画質に仕上げます（構図・家具の形は保たれます）。
@@ -3007,7 +3083,7 @@ export function AiEditWorkspace({
               }}
               className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
             >
-              この案を高画質で採用 →
+              {candidatePick?.mode === 'area' ? 'この案を高画質で採用 →' : 'この案を採用 →'}
             </button>
             <button
               type="button"

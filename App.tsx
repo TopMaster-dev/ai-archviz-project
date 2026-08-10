@@ -33,12 +33,13 @@ import { computeGltfFootprintBaseMm } from './utils/furnitureModelFootprint.js';
 import { MODEL_UNIT_OPTIONS, unitGeometryScale, type ModelUnit } from './utils/modelUnit.js';
 import { normalizeUprightXDeg, normalizeYawDeg } from './utils/modelOrientation.js';
 import type { CostBreakdownEntry } from './utils/estimateExport.js';
-import { buildEstimateExportPayload, downloadEstimateCsv } from './utils/estimateExport.js';
+import { buildEstimateExportPayload } from './utils/estimateExport.js';
+import { downloadEstimateXlsx } from './utils/estimateXlsx.js';
 import { downloadEstimatePdf } from './utils/estimatePdf.js';
 import { openingHoleAreaM2OnWallSegment } from './utils/openingArea.js';
 import { beamCeilingCoverM2, wallBeamCoverStrip, freeBeamCoverStrip, wallBeamCoverUnionM2 } from './utils/beamSurfaceCover.js';
 import type { Rect } from './utils/rectUnion.js';
-import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow } from './utils/baseboardEstimate.js';
+import { buildBaseboardRows, baseboardTotalCost, baseboardSegmentLengthM, type BaseboardEstimateRow, type BaseboardWallSegment } from './utils/baseboardEstimate.js';
 import { toggleBeamSelection } from './utils/beamSelection.js';
 import { THUMBNAIL_CAMERA, thumbnailFitScale } from './utils/thumbnailFraming.js';
 import { getThumbnailImageUrlFromGlbUrl, getThumbnailPublicIdFromGlbUrl, isOfficialCatalogModelUrl } from './utils/furnitureThumbnailUrl.js';
@@ -694,6 +695,7 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                       brand: item.brand,
                       modelNumber: item.modelNumber,
                       unitPrice: item.unitPrice,
+                      productUrl: item.productUrl,
                     }}
                     priceUnitLabel="円/㎡"
                     onChange={(patch) => setEstimateOverride(`material:${item.productId}`, patch)}
@@ -723,6 +725,10 @@ const EstimatePanelDetailScroll = memo(function EstimatePanelDetailScroll({
                 <div className="text-[9px] text-white font-bold leading-tight truncate">
                   {r.productName && r.productName !== '巾木' ? `${r.productName} の巾木` : '巾木'}
                 </div>
+                {/* 品番は建材ラインと同じ位置に出す（入力しても見えない状態だった・260811 要望③）。 */}
+                {r.modelNumber && (
+                  <div className="text-[8px] text-neutral-400 leading-tight truncate">品番: {r.modelNumber}</div>
+                )}
                 <div className="flex justify-between items-end border-t border-white/5 pt-1.5 mt-1.5">
                   <div className="text-[9px] font-mono text-neutral-500">
                     {r.lengthM.toFixed(2)}m × ¥{Math.round(r.unitPrice).toLocaleString()}/m
@@ -1168,7 +1174,7 @@ const App: React.FC = () => {
   const materialOverrideKey = (productId: string) => `material:${productId}`;
   const baseboardOverrideKey = (productId: string) => `baseboard:${productId}`;
   const [estimateGuardOpen, setEstimateGuardOpen] = useState(false);
-  const [pendingExportKind, setPendingExportKind] = useState<'pdf' | 'csv' | null>(null);
+  const [pendingExportKind, setPendingExportKind] = useState<'pdf' | 'xlsx' | null>(null);
   const [showDebugModal, setShowDebugModal] = useState(false);
   // 列数は 5 - この値。スライダー位置との対応は CATALOG_SLIDER_TO_GRID / CATALOG_GRID_TO_SLIDER。
   // 建材カタログと3Dモデルカタログで共有する（見た目を揃えるため・260730 要望②）。
@@ -2959,6 +2965,26 @@ const App: React.FC = () => {
         productUrl: ov.productUrl,
         price: ov.unitPrice,
       });
+      /*
+        メモリ上のカタログにも即反映する（260811 要望③）。
+        家具側は台帳保存後に setFurnitureCatalog で反映しているのに、建材側は入れていなかったため、
+        見積で名前を直しても素材パネルのチップは再読込まで古い名前のままだった。
+        上書きが入っている項目だけを差し替える（未入力の項目は台帳の値を残す）。
+      */
+      setProducts((prev) =>
+        prev.map((p) =>
+          p.id === productId
+            ? {
+                ...p,
+                ...(ov.name?.trim() ? { name: ov.name.trim() } : {}),
+                ...(ov.brand?.trim() ? { brand: ov.brand.trim() } : {}),
+                ...(ov.modelNumber?.trim() ? { modelNumber: ov.modelNumber.trim() } : {}),
+                ...(ov.productUrl?.trim() ? { productUrl: ov.productUrl.trim() } : {}),
+                ...(ov.unitPrice != null && ov.unitPrice > 0 ? { pricePerUnit: ov.unitPrice } : {}),
+              }
+            : p,
+        ),
+      );
     } catch (e) {
       console.warn('アップロード建材メタの台帳保存に失敗（プロジェクトには保存済み）:', e);
     }
@@ -3320,7 +3346,8 @@ const App: React.FC = () => {
                 modelNumber: ov?.modelNumber ?? prod.modelNumber,
                 textureUrl: prod.textureUrl,
                 productId: prod.id,
-                productUrl: ov?.productUrl,
+                // 台帳（アップロード時に入力したURL）を既定にし、見積での上書きがあればそちらを優先（260811 要望③）。
+                productUrl: ov?.productUrl ?? prod.productUrl,
             });
         }
     });
@@ -3350,7 +3377,7 @@ const App: React.FC = () => {
   // 巾木ライン: 巾木が有効な壁の延長(m)を製品ごとに集計し、m単価を掛ける（260613: 壁延長距離からの巾木計算）。
   const baseboardBreakdown = useMemo<BaseboardEstimateRow[]>(() => {
     if (sketchPoints.length < 2) return [];
-    const segs: { lengthM: number; productId: string; productName: string; brand: string; unitPricePerM: number }[] = [];
+    const segs: BaseboardWallSegment[] = [];
     for (let i = 0; i < sketchPoints.length; i++) {
       const a = sketchPoints[i];
       const b = sketchPoints[(i + 1) % sketchPoints.length];
@@ -3377,6 +3404,10 @@ const App: React.FC = () => {
         productName: bOv?.name ?? (prod ? prod.name : '巾木'),
         brand: bOv?.brand ?? (prod ? (prod.brand ?? '') : ''),
         unitPricePerM: bOv?.unitPrice ?? settings.baseboardUnitPrice ?? 0,
+        // 品番/URL は巾木そのものの値。壁材の品番を流用すると「壁紙の品番が巾木の品番として
+        // 見積書に出る」ことになるため、上書きが無ければ空のままにする（260811 要望③）。
+        modelNumber: bOv?.modelNumber,
+        productUrl: bOv?.productUrl,
       });
     }
     return buildBaseboardRows(segs);
@@ -3511,7 +3542,7 @@ const App: React.FC = () => {
     }
   }, [aiEditVersions, aiEditActiveVersionId]);
 
-  const executeEstimateExport = useCallback(async (kind: 'pdf' | 'csv') => {
+  const executeEstimateExport = useCallback(async (kind: 'pdf' | 'xlsx') => {
     if (!canExportEstimate || estimateExportBusy) return;
     setEstimateExportBusy(true);
     try {
@@ -3519,21 +3550,23 @@ const App: React.FC = () => {
         const roomImageDataUrl = await captureEstimateHeroImage();
         await downloadEstimatePdf({ ...estimatePayload, roomImageDataUrl });
       } else {
-        downloadEstimateCsv(estimatePayload);
+        // Excel も PDF と同じ画像を載せる（AI生成画像があるときだけ・260811 要望④）。
+        const roomImageDataUrl = await captureEstimateHeroImage();
+        await downloadEstimateXlsx({ ...estimatePayload, roomImageDataUrl });
       }
     } finally {
       setEstimateExportBusy(false);
     }
   }, [canExportEstimate, estimateExportBusy, estimatePayload, captureEstimateHeroImage]);
 
-  const handleExportEstimateCsv = useCallback(() => {
+  const handleExportEstimateXlsx = useCallback(() => {
     if (!canExportEstimate) return;
     if (missingInputCount > 0) {
-      setPendingExportKind('csv');
+      setPendingExportKind('xlsx');
       setEstimateGuardOpen(true);
       return;
     }
-    void executeEstimateExport('csv');
+    void executeEstimateExport('xlsx');
   }, [canExportEstimate, executeEstimateExport, missingInputCount]);
 
   const handleExportEstimatePdf = useCallback(async () => {
@@ -3546,14 +3579,14 @@ const App: React.FC = () => {
     await executeEstimateExport('pdf');
   }, [canExportEstimate, executeEstimateExport, missingInputCount]);
 
-  const handleEstimateExportSelect = useCallback((kind: 'pdf' | 'csv') => {
+  const handleEstimateExportSelect = useCallback((kind: 'pdf' | 'xlsx') => {
     setEstimateDownloadMenuOpen(false);
     if (kind === 'pdf') {
       void handleExportEstimatePdf();
       return;
     }
-    handleExportEstimateCsv();
-  }, [handleExportEstimateCsv, handleExportEstimatePdf]);
+    handleExportEstimateXlsx();
+  }, [handleExportEstimateXlsx, handleExportEstimatePdf]);
 
   /**
    * 右レール下部「使用中」一覧（260730 要望②→260731 要望①③で改訂）。
@@ -3725,10 +3758,10 @@ const App: React.FC = () => {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleEstimateExportSelect('csv')}
+                      onClick={() => handleEstimateExportSelect('xlsx')}
                       className="mt-1 w-full rounded-lg px-3 py-2 text-left text-[11px] font-black tracking-wide text-neutral-100 transition-colors hover:bg-white/10"
                     >
-                      CSVでダウンロード
+                      Excelでダウンロード
                     </button>
                   </div>
                 )}

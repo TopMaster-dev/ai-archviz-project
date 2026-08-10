@@ -120,9 +120,26 @@ function baseboardOverride(options: BuildEstimateOptions, productId: string): Es
   return options.overridesByKey?.[`baseboard:${productId}`];
 }
 
-/** メモとURLを備考文字列へ（家具/AI項目と同じ体裁）。 */
-function remarkFrom(memo: string | undefined, productUrl: string | undefined): string {
-  return [memo, productUrl ? `URL:${productUrl}` : ''].filter((s) => s && String(s).trim()).join(' / ');
+/**
+ * 備考欄の文字列を組み立てる（全区分で共通）。
+ *
+ * 以前は建材・巾木・家具・AI追加でそれぞれ別々に組み立てており、巾木だけ品番が抜けていた
+ * （入力・保存はされるのに見積書に出ない・260811 要望③）。並び順も区分ごとに違ったため、
+ * ここに一本化して「メモ / 品番 / URL」で揃える。
+ */
+export function buildRemark(parts: {
+  memo?: string;
+  modelNumber?: string;
+  productUrl?: string;
+}): string {
+  return [
+    parts.memo,
+    parts.modelNumber ? `品番:${parts.modelNumber}` : '',
+    parts.productUrl ? `URL:${parts.productUrl}` : '',
+  ]
+    .map((s) => (s ?? '').trim())
+    .filter(Boolean)
+    .join(' / ');
 }
 
 function roundYen(n: number): number {
@@ -215,6 +232,8 @@ type AggRow = {
   modelNumber?: string;
   productId: string;
   memo?: string;
+  /** 商品URL。備考の組み立ては buildRemark に一本化する（260811）。 */
+  productUrl?: string;
 };
 
 function buildSectionRows(
@@ -234,10 +253,7 @@ function buildSectionRows(
       unitPrice: roundYen(row.unitPrice),
       amount: roundYen(row.cost),
       // 品番（任意入力）を備考へ。家具/AI項目の備考表記（品番:…）と統一（260630）。
-      remark: [row.memo, row.modelNumber ? `品番:${row.modelNumber}` : '']
-        .map((s) => (s ?? '').trim())
-        .filter(Boolean)
-        .join(' / '),
+      remark: buildRemark({ memo: row.memo, modelNumber: row.modelNumber, productUrl: row.productUrl }),
       sectionType: '3D確定',
       inputStatus: '完了',
     });
@@ -279,7 +295,8 @@ export function buildEstimateExportPayload(
         prodName: item.prodName,
         modelNumber: item.modelNumber,
         productId: item.productId,
-        memo: remarkFrom(materialOverride(options, item.productId)?.memo, materialOverride(options, item.productId)?.productUrl),
+        memo: materialOverride(options, item.productId)?.memo,
+        productUrl: materialOverride(options, item.productId)?.productUrl ?? item.productUrl,
       });
     }
   }
@@ -333,7 +350,11 @@ export function buildEstimateExportPayload(
     unit: 'm',
     unitPrice: roundYen(r.unitPrice),
     amount: roundYen(r.cost),
-    remark: remarkFrom(baseboardOverride(options, r.productId)?.memo, baseboardOverride(options, r.productId)?.productUrl),
+    remark: buildRemark({
+      memo: baseboardOverride(options, r.productId)?.memo,
+      modelNumber: r.modelNumber,
+      productUrl: r.productUrl ?? baseboardOverride(options, r.productId)?.productUrl,
+    }),
     sectionType: '3D確定',
     inputStatus: r.unitPrice > 0 ? '完了' : '未入力',
   }));
@@ -400,10 +421,7 @@ export function buildEstimateExportPayload(
       quantity: 1,
       unitPrice: roundYen(price),
       amount: roundYen(price),
-      remark: [f.customMemo, f.modelNumber ? `品番:${f.modelNumber}` : '', f.productUrl ? `URL:${f.productUrl}` : '']
-        .map((s) => (s ?? '').trim())
-        .filter(Boolean)
-        .join(' / '),
+      remark: buildRemark({ memo: f.customMemo, modelNumber: f.modelNumber, productUrl: f.productUrl }),
       sectionType: '3D確定',
       inputStatus: price > 0 ? '完了' : '未入力',
     });
@@ -422,10 +440,7 @@ export function buildEstimateExportPayload(
       quantity: 1,
       unitPrice: roundYen(price),
       amount: roundYen(price),
-      remark: [item.memo, item.modelNumber ? `品番:${item.modelNumber}` : '', item.productUrl ? `URL:${item.productUrl}` : '']
-        .map((s) => (s ?? '').trim())
-        .filter(Boolean)
-        .join(' / '),
+      remark: buildRemark({ memo: item.memo, modelNumber: item.modelNumber, productUrl: item.productUrl }),
       sectionType: 'AI追加',
       inputStatus: complete ? '完了' : '未入力',
     });
@@ -449,7 +464,7 @@ export function buildEstimateExportPayload(
   };
 }
 
-export function estimateExportFilename(ext: 'pdf' | 'csv'): string {
+export function estimateExportFilename(ext: 'pdf' | 'xlsx'): string {
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -457,62 +472,7 @@ export function estimateExportFilename(ext: 'pdf' | 'csv'): string {
   return `概算見積_${y}${m}${day}.${ext}`;
 }
 
-function escapeCsvField(s: string): string {
-  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
-  return s;
-}
-
-export function buildEstimateCsv(payload: EstimateExportPayload): string {
-  const lines: string[] = [];
-  const pushRow = (cells: (string | number)[]) => {
-    lines.push(cells.map((c) => escapeCsvField(String(c))).join(','));
-  };
-
-  pushRow([`概算見積もり（出力 ${payload.generatedAtIso}）`]);
-  lines.push('');
-
-  const sectionTitles: Record<SurfaceKey, string> = {
-    floor: '【床】',
-    ceiling: '【天井】',
-    wall: '【壁】',
-    beam: '【梁】',
-    baseboard: '【巾木】',
-  };
-
-  // 「区分」「入力状態」列はクライアント要望で削除（260720・3f）。
-  for (const sec of payload.materialSections) {
-    pushRow([sectionTitles[sec.key]]);
-    pushRow(['No.', '明細名称', '仕様', '数量', '単位', '単価', '金額', '備考']);
-    for (const r of sec.rows) {
-      pushRow([r.no, r.detailName, r.spec, r.quantity, r.unit, r.unitPrice, r.amount, r.remark]);
-    }
-    pushRow([`${sec.title} 小計`, '', '', '', '', '', sec.subtotal, '']);
-    lines.push('');
-  }
-
-  pushRow(['【家具リスト】']);
-  pushRow(['No.', '品名', 'ブランド', '数量', '単価', '金額', '備考']);
-  for (const r of payload.furniture) {
-    pushRow([r.no, r.itemName, r.brand, r.quantity, r.unitPrice, r.amount, r.remark]);
-  }
-  lines.push('');
-  pushRow(['【AI追加アイテム】']);
-  pushRow(['No.', '品名', 'ブランド', '数量', '単価', '金額', '備考']);
-  for (const r of payload.aiItems) {
-    pushRow([r.no, r.itemName, r.brand, r.quantity, r.unitPrice, r.amount, r.remark]);
-  }
-  pushRow(['', '', '', '', '税込合計', payload.grandTotal, '']);
-  lines.push('');
-
-  pushRow(['【マテリアルボード】']);
-  pushRow(['品番', '表示名', '使用箇所', 'テクスチャURL']);
-  for (const b of payload.materialBoard) {
-    pushRow([b.modelNumber || b.partCode, b.displayName, b.usages.join(' / '), b.textureUrl]);
-  }
-
-  return '\uFEFF' + lines.join('\r\n');
-}
-
+/** Blob をダウンロードさせる（PDF/Excel 共通）。 */
 export function triggerBlobDownload(blob: Blob, filename: string): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -522,8 +482,8 @@ export function triggerBlobDownload(blob: Blob, filename: string): void {
   URL.revokeObjectURL(url);
 }
 
-export function downloadEstimateCsv(payload: EstimateExportPayload): void {
-  const csv = buildEstimateCsv(payload);
-  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-  triggerBlobDownload(blob, estimateExportFilename('csv'));
-}
+/*
+ * CSV 書き出しは 260811 クライアント指示により廃止し、Excel（.xlsx）へ差し替えた。
+ * 理由: CSVは列幅・書式・画像を保持できず、「PDFのように正確に」というご要望を満たせないため。
+ * 実装は utils/estimateXlsx.ts（downloadEstimateXlsx）。
+ */

@@ -25,27 +25,46 @@ function tdStyle(align: 'left' | 'right', extra = ''): string {
  * AI生成画像だけの1ページ（260728 クライアント #12「画像だけで1ページにして」）。
  * 見積本文には画像を入れない。3Dビューのスクリーンショットはそもそも渡ってこない（App 側で AI画像のみに限定）。
  */
-function buildHeroImagePage(dataUrl: string, projectName?: string): HTMLElement {
+function buildHeroImagePage(
+  dataUrl: string,
+  projectName: string | undefined,
+  dateLabel: string,
+  authorName?: string,
+): HTMLElement {
+  // 【260811 クライアント要望④】マテリアルボードと同じ A3横（1188×840px）で組む。
+  // 室内のパースは横長が大半で、A4縦だと左右に大きな余白が出て小さく見えていた。
+  // 見出し・日付・会社名の帯もボードに合わせ、2枚を並べたときに同じ体裁に見えるようにする。
   const root = document.createElement('div');
-  root.style.cssText = `box-sizing:border-box;width:720px;padding:18px 22px;background:#fff;color:#111;font-family:${FONT_STACK};font-size:10px;line-height:1.35;`;
+  root.style.cssText = `box-sizing:border-box;width:1188px;height:840px;background:#fff;color:#111;font-family:${FONT_STACK};display:flex;flex-direction:column;`;
 
-  if (projectName) {
-    const t = document.createElement('div');
-    t.textContent = projectName;
-    t.style.cssText = 'font-size:14px;font-weight:700;margin-bottom:10px;';
-    root.appendChild(t);
-  }
+  const header = document.createElement('div');
+  header.style.cssText =
+    'display:flex;justify-content:space-between;align-items:center;background:#3a3a3a;color:#fff;padding:10px 18px;font-size:15px;font-weight:700;';
+  const pn = document.createElement('span');
+  pn.textContent = projectName || 'プロジェクト名';
+  const dt = document.createElement('span');
+  dt.textContent = `日付：${dateLabel}`;
+  header.appendChild(pn);
+  header.appendChild(dt);
+  root.appendChild(header);
 
-  const imgWrap = document.createElement('div');
-  imgWrap.style.cssText = 'width:100%;border:1px solid #ccc;background:#f4f4f4;text-align:center;line-height:0;';
+  // 画像は「切らずに収める」。cover にすると利用者が生成した絵の端が落ちるため contain 相当にする。
+  const body = document.createElement('div');
+  body.style.cssText = 'flex:1;padding:16px 18px;display:flex;align-items:center;justify-content:center;min-height:0;';
   const img = document.createElement('img');
   img.crossOrigin = 'anonymous';
   img.src = dataUrl;
-  // ページを1枚占有するので高さ上限は設けず、幅いっぱいに載せる（縮小は renderNodeToPdfPage 側が行う）。
-  img.style.cssText = 'max-width:100%;display:inline-block;vertical-align:middle;';
+  img.style.cssText = 'max-width:100%;max-height:100%;object-fit:contain;display:block;';
   img.alt = '';
-  imgWrap.appendChild(img);
-  root.appendChild(imgWrap);
+  body.appendChild(img);
+  root.appendChild(body);
+
+  const footer = document.createElement('div');
+  footer.style.cssText =
+    'background:#3a3a3a;color:#fff;padding:8px 18px;font-size:13px;font-weight:700;text-align:right;';
+  footer.textContent = authorName || '';
+  root.appendChild(footer);
+
   return root;
 }
 
@@ -411,6 +430,13 @@ function preloadTextureUrls(urls: string[]): Promise<void> {
   ).then(() => undefined);
 }
 
+/**
+ * A4縦ページへ描画する。
+ *
+ * 【重要・260811】jsPDF は用紙サイズと向きを「直前の addPage の指定」として持ち回る。
+ * 画像ページを A3横にしたことで、引数なしの addPage() を使うと見積本文が A3横を引き継いで
+ * 拡大され、レイアウトが崩れる。必ず 'a4','portrait' を明示すること。
+ */
 async function renderNodeToPdfPage(
   pdf: jsPDF,
   node: HTMLElement,
@@ -439,7 +465,7 @@ async function renderNodeToPdfPage(
       w *= r;
       h = maxH;
     }
-    if (!isFirst) pdf.addPage();
+    if (!isFirst) pdf.addPage('a4', 'portrait');
     // 縦長で maxH に収めるため幅を縮めたぶん、x を margin 固定にすると縮小分が全部「右の余白」になり
     // 内容が左に寄って見える（260728 クライアント #12）。A3ボード側（renderBoardToA3Page）と同じく水平中央へ。
     pdf.addImage(img, 'PNG', (pageW - w) / 2, margin, w, h);
@@ -481,8 +507,18 @@ export async function downloadEstimatePdf(payload: EstimateExportPayload): Promi
   const heroUrl = payload.roomImageDataUrl;
   if (heroUrl) {
     await preloadTextureUrls([heroUrl]);
-    // 画像だけで1ページ（先頭）。以降の見積本文は addPage されるので isFirst=false。
-    await renderNodeToPdfPage(pdf, buildHeroImagePage(heroUrl, payload.projectName), true);
+    /*
+      画像だけで1ページ（先頭）。260811 要望④で A3横へ変更（マテリアルボードと同じ用紙）。
+      1ページ目を A3横にするため、jsPDF は portrait/a4 で作ったあと A3横を addPage して
+      最初の空ページを消す。以降の見積本文は 'a4','portrait' を明示して追加する
+      （明示しないと直前の A3横を引き継いでレイアウトが崩れる）。
+    */
+    const heroDate = new Date(payload.generatedAtIso).toLocaleDateString('ja-JP');
+    await renderBoardToA3Page(
+      pdf,
+      buildHeroImagePage(heroUrl, payload.projectName, heroDate, payload.authorName),
+    );
+    pdf.deletePage(1); // 生成時に作られた空の A4縦ページを除去（画像ページを1ページ目にする）
   }
   const estimateEl = buildEstimatePage(payload);
   await renderNodeToPdfPage(pdf, estimateEl, !heroUrl);

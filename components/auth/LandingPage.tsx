@@ -53,7 +53,7 @@ const FEATURES = [
   { icon: PencilRuler, title: '2D作図 → 3D自動生成', desc: ['平面を描くだけで', '床・壁・天井・建具を', '3D空間へ自動で立ち上げ。'] },
   { icon: Sparkles, title: 'AIフォトリアル レンダリング', desc: ['3Dビューをキャプチャし、', '写実的な建築パースを', 'ワンクリックで生成。'] },
   { icon: Ruler, title: '実寸テクスチャ投影', desc: ['建材の実寸メタデータから、', '壁・床に正しい寸法で', 'リピート投影。'] },
-  { icon: Calculator, title: '概算見積もり', desc: ['建材・家具・巾木・梁を自動集計し、', 'PDF / CSV で書き出し。'] },
+  { icon: Calculator, title: '概算見積もり', desc: ['建材・家具・巾木・梁を自動集計し、', 'PDF / Excel で書き出し。'] },
   { icon: LayoutGrid, title: 'マテリアルボード', desc: ['A3レイアウトで素材一覧を出力。', '提案資料がそのまま整う。'] },
   { icon: Share2, title: 'クラウド保存・共有', desc: ['プロジェクトを安全に保存し、', '閲覧用URLでクライアントへ共有。'] },
 ] as const;
@@ -521,7 +521,7 @@ export function LandingPage({
                 { k: '2D→3D', v: '自動生成' },
                 { k: 'AI', v: 'フォトリアル' },
                 { k: '実寸', v: 'テクスチャ投影' },
-                { k: 'PDF/CSV', v: '見積出力' },
+                { k: 'PDF/Excel', v: '見積出力' },
               ].map((s) => (
                 <div key={s.k} className="text-center">
                   <div className="bg-gradient-to-r from-emerald-400 to-sky-400 bg-clip-text text-xl font-black text-transparent sm:text-2xl">
