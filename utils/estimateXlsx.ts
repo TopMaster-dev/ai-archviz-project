@@ -1,5 +1,5 @@
 import type { EstimateExportPayload, SurfaceKey } from './estimateExport.js';
-import { estimateExportFilename, formatPartCodeForDisplay } from './estimateExport.js';
+import { estimateExportFilename, formatPartCodeForDisplay, triggerBlobDownload } from './estimateExport.js';
 
 /**
  * 概算見積の Excel（.xlsx）書き出し（260811 クライアント要望④）。
@@ -12,10 +12,13 @@ import { estimateExportFilename, formatPartCodeForDisplay } from './estimateExpo
  * さらに「メモの先頭が = だと Excel が数式として解釈する」CSV固有の危険も無くなる
  * （xlsx は文字列セルとして書くため）。
  *
- * 【シート構成】
- *  1. 概算見積     … 全区分を同じ8列の表に統一（家具/AIも同じ列に載せる）。区分ごとに小計、最後に総合計。
- *  2. マテリアルボード … 1行1スワッチ。テクスチャ画像をセルに埋め込む。
- *  3. AI画像       … AI生成画像がある場合のみ。PDFの画像ページに相当。
+ * 【シート構成】PDF のページ順に合わせる（260812 クライアント指摘「1ページ目の画像が3ページ目に出る」）。
+ *  1. AI画像       … AI生成画像がある場合のみ。PDF の1ページ目に相当。
+ *  2. 概算見積     … 全区分を同じ8列の表に統一（家具/AIも同じ列に載せる）。区分ごとに小計、最後に総合計。
+ *  3. マテリアルボード … 1行1スワッチ。テクスチャ画像をセルに埋め込む。
+ *
+ * 【体裁】PDF と同じ見え方に揃える（260812）: 全セル罫線・列見出しは灰色地・数量〜金額は右寄せ・
+ * 税込合計は本文先頭に大きく表示・表題と区分見出しは表幅いっぱいに結合（隣列へはみ出させない）。
  *
  * exceljs はサイズが大きい（ブラウザ版で約900KB）ため、必ず動的 import で読み込む
  * （書き出しボタンを押したときだけ取得され、初期表示のバンドルには含まれない）。
@@ -148,41 +151,113 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
   wb.creator = payload.authorName || 'Arise';
   wb.created = new Date(payload.generatedAtIso);
 
-  // ---------------------------------------------------------------- 概算見積
+  const dateLabel = new Date(payload.generatedAtIso).toLocaleString('ja-JP');
+  const COLS = COLUMNS.length;
+
+  /** PDFの表と同じ罫線（全セル1px）。 */
+  const BORDER = {
+    top: { style: 'thin' as const, color: { argb: 'FF333333' } },
+    left: { style: 'thin' as const, color: { argb: 'FF333333' } },
+    bottom: { style: 'thin' as const, color: { argb: 'FF333333' } },
+    right: { style: 'thin' as const, color: { argb: 'FF333333' } },
+  };
+  /** 数量〜金額の列（PDFと同じく右寄せにする範囲）。 */
+  const isNumericCol = (col: number) => col >= 4 && col <= 7;
+
+  /*
+    ---------------------------------------------------------------- シート1: AI画像
+
+    【260812 クライアント指摘】PDFでは1ページ目が画像なのに、Excelでは3枚目のシートに出ていた。
+    Excel の「シート」は PDF の「ページ」に相当するため、PDF と同じ順序
+    （画像 → 見積本文 → マテリアルボード）でシートを追加する。
+    画像の取得は非同期なので、先に取得を済ませてからシートを作る（順序を崩さないため）。
+  */
+  const heroUrl = payload.roomImageDataUrl;
+  const heroImg = heroUrl ? await toImagePayload(heroUrl) : null;
+  if (heroImg && heroUrl) {
+    const is = wb.addWorksheet('AI画像', {
+      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
+    });
+    // PDF の画像ページと同じく、上にプロジェクト名と日付を置く。
+    is.getColumn(1).width = 120;
+    const t = is.addRow([payload.projectName || 'プロジェクト名']);
+    t.font = { bold: true, size: 14 };
+    is.addRow([`日付：${dateLabel}`]).font = { size: 10, color: { argb: 'FF666666' } };
+    is.addRow([]);
+
+    const natural = await imageSize(heroUrl);
+    const MAX_W = 900;
+    const ratio = natural && natural.h > 0 ? natural.w / natural.h : 16 / 9;
+    const h = Math.round(MAX_W / ratio);
+    const imgRow = is.addRow([]);
+    // Excel の行高は最大 409pt。縦長画像で超えると Excel が開くときに警告を出す。
+    imgRow.height = Math.min(409, h * 0.75 + 6);
+    const heroId = wb.addImage({ base64: heroImg.base64, extension: heroImg.extension });
+    is.addImage(heroId, {
+      tl: { col: 0.1, row: imgRow.number - 1 + 0.1 },
+      ext: { width: MAX_W, height: h },
+      editAs: 'oneCell',
+    });
+  }
+
+  // ------------------------------------------------------------- シート2: 概算見積
   const ws = wb.addWorksheet('概算見積', {
-    views: [{ state: 'frozen', ySplit: 0 }],
     pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
   });
   ws.columns = COLUMNS.map((c) => ({ key: c.key, width: c.width }));
 
-  const dateLabel = new Date(payload.generatedAtIso).toLocaleString('ja-JP');
-  const titleRow = ws.addRow(['概算見積もり']);
-  titleRow.font = { bold: true, size: 16 };
-  ws.addRow([payload.projectName || '']).font = { bold: true, size: 12 };
-  ws.addRow([`作成者：${payload.authorName || '—'}`]);
-  ws.addRow([`出力日時：${dateLabel}`]);
-  ws.addRow([]);
-
-  /** 見出し行（区分名）。 */
-  const addSectionHeader = (title: string) => {
-    const r = ws.addRow([title]);
-    r.font = { bold: true, size: 12 };
-    r.getCell(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEFEFEF' } };
-    ws.mergeCells(r.number, 1, r.number, COLUMNS.length);
+  /** 表題ブロック。表の幅いっぱいに結合し、隣の列へ文字がはみ出さないようにする。 */
+  const addBannerRow = (text: string, opts: { size?: number; bold?: boolean; color?: string } = {}) => {
+    const r = ws.addRow([text]);
+    r.font = {
+      bold: opts.bold ?? false,
+      size: opts.size ?? 11,
+      ...(opts.color ? { color: { argb: opts.color } } : {}),
+    };
+    ws.mergeCells(r.number, 1, r.number, COLS);
+    return r;
   };
 
-  /** 列見出し行。 */
+  addBannerRow('概算見積もり', { size: 16, bold: true });
+  addBannerRow(`出力: ${dateLabel}`, { size: 9, color: 'FF666666' });
+  if (payload.projectName) addBannerRow(payload.projectName, { size: 11, bold: true });
+  if (payload.authorName) addBannerRow(`作成者: ${payload.authorName}`, { size: 9, color: 'FF666666' });
+  ws.addRow([]);
+
+  /*
+    税込合計は PDF と同じく本文の先頭へ置く（PDF は太い下線付きの帯）。
+    Excel では結合＋下罫線で同じ見え方にする。
+  */
+  addBannerRow('税込合計金額', { size: 9, color: 'FF555555' });
+  const totalValueRow = ws.addRow([payload.grandTotal]);
+  ws.mergeCells(totalValueRow.number, 1, totalValueRow.number, COLS);
+  totalValueRow.font = { bold: true, size: 20 };
+  totalValueRow.height = 28;
+  totalValueRow.getCell(1).numFmt = '"¥"#,##0';
+  totalValueRow.getCell(1).alignment = { vertical: 'middle' };
+  totalValueRow.getCell(1).border = { bottom: { style: 'medium', color: { argb: 'FF111111' } } };
+  ws.addRow([]);
+
+  /** 区分見出し（PDF の「【床】」等。下線付き）。 */
+  const addSectionHeader = (title: string) => {
+    const r = ws.addRow([title]);
+    r.font = { bold: true, size: 11 };
+    ws.mergeCells(r.number, 1, r.number, COLS);
+    r.getCell(1).border = { bottom: { style: 'thin', color: { argb: 'FFCCCCCC' } } };
+  };
+
+  /** 列見出し（PDF の thead と同じく灰色地・罫線・太字）。 */
   const addColumnHeader = () => {
     const r = ws.addRow(COLUMNS.map((c) => c.header));
-    r.font = { bold: true };
-    r.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F7F7' } };
-      cell.border = { bottom: { style: 'thin', color: { argb: 'FF999999' } } };
-      cell.alignment = { vertical: 'middle' };
+    r.font = { bold: true, size: 9 };
+    r.eachCell((cell, col) => {
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
+      cell.border = BORDER;
+      cell.alignment = { vertical: 'middle', horizontal: isNumericCol(col) ? 'right' : 'left' };
     });
   };
 
-  /** 明細1行。数値セルには書式を当て、備考は折り返す。 */
+  /** 明細1行。PDF と同じく全セルに罫線、数値は右寄せ。 */
   const addDetailRow = (cells: {
     no: number;
     name: string;
@@ -203,33 +278,72 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
       cells.amount,
       cells.remark,
     ]);
+    r.font = { size: 9 };
+    /*
+      順序が重要。exceljs の Row.alignment は指定値を行内の全セルへ複製するため、
+      行 → セルの順で当てること（逆にするとセル側の折り返し指定が消える）。
+    */
+    r.alignment = { vertical: 'middle' };
+    r.eachCell((cell, col) => {
+      cell.border = BORDER;
+      cell.alignment = { vertical: 'middle', horizontal: isNumericCol(col) ? 'right' : 'left' };
+    });
     r.getCell(4).numFmt = QTY_FORMAT;
     r.getCell(6).numFmt = YEN_FORMAT;
     r.getCell(7).numFmt = YEN_FORMAT;
-    /*
-      順序が重要。exceljs の Row.alignment はその値を行内の全セルへ複製するため、
-      先にセル単位で wrapText を付けても行単位の指定で上書きされて消える。
-      行 → セルの順で当てること（逆にすると備考が折り返されず、列外へはみ出す）。
-    */
-    r.alignment = { vertical: 'top' };
-    r.getCell(8).alignment = { wrapText: true, vertical: 'top' };
-    return r;
+    // 備考は長くなるので折り返す（列外へはみ出させない）。
+    r.getCell(8).alignment = { wrapText: true, vertical: 'middle', horizontal: 'left' };
   };
 
-  /** 小計行（金額列に入れる＝区分をまたいで同じ列に揃う）。 */
+  /** 「（該当なし）」行（PDF と同じ体裁）。 */
+  const addEmptyRow = (text: string) => {
+    const r = ws.addRow([text]);
+    ws.mergeCells(r.number, 1, r.number, COLS);
+    r.font = { size: 9, italic: true, color: { argb: 'FF999999' } };
+    r.getCell(1).border = BORDER;
+  };
+
+  /** 小計行。金額は必ず「金額」列へ入れ、区分をまたいで同じ列に揃える。 */
   const addSubtotal = (label: string, value: number) => {
     const r = ws.addRow(['', '', '', '', '', label, value, '']);
-    r.font = { bold: true };
+    r.font = { bold: true, size: 9 };
+    r.eachCell((cell) => {
+      cell.border = BORDER;
+    });
+    r.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
     r.getCell(7).numFmt = YEN_FORMAT;
-    r.getCell(7).border = { top: { style: 'thin', color: { argb: 'FF999999' } } };
+    r.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };
     ws.addRow([]);
   };
 
-  for (const sec of payload.materialSections) {
-    addSectionHeader(`【${SECTION_TITLES[sec.key] ?? sec.title}】`);
+  /** 1区分ぶんの表（見出し → 列見出し → 明細 → 小計）。 */
+  const addSection = (
+    title: string,
+    rows: {
+      no: number;
+      name: string;
+      spec: string;
+      qty: number;
+      unit: string;
+      unitPrice: number;
+      amount: number;
+      remark: string;
+    }[],
+    subtotalLabel: string,
+    subtotal: number,
+    emptyText: string,
+  ) => {
+    addSectionHeader(title);
     addColumnHeader();
-    for (const r of sec.rows) {
-      addDetailRow({
+    if (rows.length === 0) addEmptyRow(emptyText);
+    for (const row of rows) addDetailRow(row);
+    addSubtotal(subtotalLabel, subtotal);
+  };
+
+  for (const sec of payload.materialSections) {
+    addSection(
+      `【${SECTION_TITLES[sec.key] ?? sec.title}】`,
+      sec.rows.map((r) => ({
         no: r.no,
         name: r.detailName,
         spec: r.spec,
@@ -238,58 +352,62 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
         unitPrice: r.unitPrice,
         amount: r.amount,
         remark: r.remark,
-      });
-    }
-    addSubtotal(`${sec.title} 小計`, sec.subtotal);
+      })),
+      `${sec.title} 小計`,
+      sec.subtotal,
+      '（該当なし）',
+    );
   }
 
-  // 家具・AI追加も同じ8列へ載せる（CSVで列がずれていた原因を構造的に断つ）。
-  // ブランドは「仕様」列、数量は「個」。
-  if (payload.furniture.length > 0) {
-    addSectionHeader('【家具リスト】');
-    addColumnHeader();
-    for (const r of payload.furniture) {
-      addDetailRow({
-        no: r.no,
-        name: r.itemName,
-        spec: r.brand,
-        qty: r.quantity,
-        unit: '個',
-        unitPrice: r.unitPrice,
-        amount: r.amount,
-        remark: r.remark,
-      });
-    }
-    addSubtotal('家具 小計', payload.furnitureTotal);
-  }
+  // 家具・AI追加も同じ8列へ載せる（列がずれない＝Excelで崩れて見える原因を断つ）。
+  // ブランドは「仕様」列、単位は「個」。
+  addSection(
+    '【家具】',
+    payload.furniture.map((r) => ({
+      no: r.no,
+      name: r.itemName,
+      spec: r.brand,
+      qty: r.quantity,
+      unit: '個',
+      unitPrice: r.unitPrice,
+      amount: r.amount,
+      remark: r.remark,
+    })),
+    '家具 小計',
+    payload.furnitureTotal,
+    '（家具なし）',
+  );
 
-  if (payload.aiItems.length > 0) {
-    addSectionHeader('【AI追加アイテム】');
-    addColumnHeader();
-    for (const r of payload.aiItems) {
-      addDetailRow({
-        no: r.no,
-        name: r.itemName,
-        spec: r.brand,
-        qty: r.quantity,
-        unit: '個',
-        unitPrice: r.unitPrice,
-        amount: r.amount,
-        remark: r.remark,
-      });
-    }
-    addSubtotal('AI追加アイテム 小計', payload.aiItemsTotal);
-  }
+  addSection(
+    '【AI追加アイテム】',
+    payload.aiItems.map((r) => ({
+      no: r.no,
+      name: r.itemName,
+      spec: r.brand,
+      qty: r.quantity,
+      unit: '個',
+      unitPrice: r.unitPrice,
+      amount: r.amount,
+      remark: r.remark,
+    })),
+    'AI追加アイテム 小計',
+    payload.aiItemsTotal,
+    '（AI追加アイテムなし）',
+  );
 
   const totalRow = ws.addRow(['', '', '', '', '', '税込合計', payload.grandTotal, '']);
-  totalRow.font = { bold: true, size: 12 };
+  totalRow.font = { bold: true, size: 11 };
+  totalRow.eachCell((cell) => {
+    cell.border = { ...BORDER, top: { style: 'double', color: { argb: 'FF111111' } } };
+  });
+  totalRow.getCell(6).alignment = { horizontal: 'right', vertical: 'middle' };
   totalRow.getCell(7).numFmt = YEN_FORMAT;
-  totalRow.getCell(7).border = { top: { style: 'double', color: { argb: 'FF333333' } } };
+  totalRow.getCell(7).alignment = { horizontal: 'right', vertical: 'middle' };
 
   ws.addRow([]);
-  ws.addRow(['※建材はロス率込みの数量です。']).font = { size: 9, color: { argb: 'FF777777' } };
+  addBannerRow('※建材はロス率込みの数量です。', { size: 8, color: 'FF777777' });
 
-  // -------------------------------------------------------- マテリアルボード
+  // -------------------------------------------------- シート3: マテリアルボード
   if (payload.materialBoard.length > 0) {
     const bs = wb.addWorksheet('マテリアルボード', {
       pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
@@ -301,11 +419,18 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
       { key: 'brand', width: 22 },
       { key: 'usage', width: 30 },
     ];
+    const bTitle = bs.addRow([payload.projectName || 'マテリアルボード']);
+    bTitle.font = { bold: true, size: 14 };
+    bs.mergeCells(bTitle.number, 1, bTitle.number, 5);
+    bs.addRow([`日付：${dateLabel}`]).font = { size: 9, color: { argb: 'FF666666' } };
+    bs.addRow([]);
+
     const bh = bs.addRow(['画像', '品番', '表示名', 'メーカー', '使用箇所']);
-    bh.font = { bold: true };
+    bh.font = { bold: true, size: 9 };
     bh.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF7F7F7' } };
-      cell.border = { bottom: { style: 'thin', color: { argb: 'FF999999' } } };
+      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
+      cell.border = BORDER;
+      cell.alignment = { vertical: 'middle' };
     });
 
     // 画像セルの基準サイズ（px）。行の高さはポイント指定なので約 0.75 を掛ける。
@@ -321,16 +446,21 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
         b.usages.join(' / '),
       ]);
       row.height = CELL_IMG_H * 0.75 + 6;
+      row.font = { size: 9 };
       row.alignment = { vertical: 'middle', wrapText: true };
+      row.eachCell((cell) => {
+        cell.border = BORDER;
+      });
 
-      const payloadImg = await toImagePayload(b.textureUrl);
-      if (!payloadImg) continue; // 取得できない画像は空欄のまま（行と文字情報は残す）
+      const swatch = await toImagePayload(b.textureUrl);
+      if (!swatch) continue; // 取得できない画像は空欄のまま（行と文字情報は残す）
       const natural = await imageSize(b.textureUrl);
       // 縦横比を保ったままセルへ収める。
-      const ratio = natural ? natural.w / natural.h : 1;
-      const w = ratio >= CELL_IMG_W / CELL_IMG_H ? CELL_IMG_W : CELL_IMG_H * ratio;
-      const h = ratio >= CELL_IMG_W / CELL_IMG_H ? CELL_IMG_W / ratio : CELL_IMG_H;
-      const id = wb.addImage({ base64: payloadImg.base64, extension: payloadImg.extension });
+      const ratio = natural && natural.h > 0 ? natural.w / natural.h : 1;
+      const wide = ratio >= CELL_IMG_W / CELL_IMG_H;
+      const w = wide ? CELL_IMG_W : CELL_IMG_H * ratio;
+      const h = wide ? CELL_IMG_W / ratio : CELL_IMG_H;
+      const id = wb.addImage({ base64: swatch.base64, extension: swatch.extension });
       bs.addImage(id, {
         tl: { col: 0.1, row: row.number - 1 + 0.1 },
         ext: { width: w, height: h },
@@ -339,36 +469,9 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
     }
   }
 
-  // ------------------------------------------------------------------ AI画像
-  if (payload.roomImageDataUrl) {
-    const img = await toImagePayload(payload.roomImageDataUrl);
-    if (img) {
-      const is = wb.addWorksheet('AI画像', {
-        pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
-      });
-      is.getColumn(1).width = 120;
-      const natural = await imageSize(payload.roomImageDataUrl);
-      const MAX_W = 900;
-      const ratio = natural ? natural.w / natural.h : 16 / 9;
-      const w = MAX_W;
-      const h = Math.round(MAX_W / ratio);
-      // Excel の行高は最大 409pt。縦長画像だと超えるので丸める（超えると Excel が開くとき警告を出す）。
-      is.getRow(1).height = Math.min(409, h * 0.75 + 6);
-      const id = wb.addImage({ base64: img.base64, extension: img.extension });
-      is.addImage(id, { tl: { col: 0.1, row: 0.1 }, ext: { width: w, height: h }, editAs: 'oneCell' });
-    }
-  }
-
   const buffer = await wb.xlsx.writeBuffer();
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = estimateExportFilename('xlsx');
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  triggerBlobDownload(blob, estimateExportFilename('xlsx'));
 }
