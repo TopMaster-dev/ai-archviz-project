@@ -70,6 +70,16 @@ export const ENABLE_2K_PREVIEW = true;
 export const PREVIEW_GEMINI_IMAGE_SIZE = ENABLE_2K_PREVIEW ? '2K' : '1K';
 
 /**
+ * Gemini がその imageSize で返す画像の長辺（16:9 実測）。
+ *
+ * AIレンダリングは生成結果をそのまま1つ目の版にするため、「図面からパース作成」は
+ * 常にこの長辺で始まる。「AIで写真編集」の取り込み写真も同じ長辺へ揃えることで、
+ * 両プロジェクトの出力サイズを一致させる（260812 クライアント要望）。
+ * ENABLE_2K_PREVIEW を切り替えたら、こちらも自動で追従する。
+ */
+export const PREVIEW_GEMINI_LONG_EDGE = ENABLE_2K_PREVIEW ? 2688 : 1344;
+
+/**
  * エリア編集/コーディネートの「土台画像」を縮小する長辺上限（260722・クライアント要望「出力サイズをレンダーと揃え最大2Kに」）。
  * これらの経路は最終出力を土台(base)の寸法へ fit する（fitDataUrlToSize）ため、土台の長辺が最終サイズを決める。
  * 従来は既定 2048 で頭打ちだったが、AIレンダリングは Gemini の 2K ネイティブ出力（16:9 で長辺≒2688px）をそのまま保存する

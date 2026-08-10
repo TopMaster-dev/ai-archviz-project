@@ -47,7 +47,8 @@ import {
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
-import { PREVIEW_GEMINI_IMAGE_SIZE, AREA_EDIT_BASE_MAX_SIDE } from '../utils/printExportSpec.js';
+import { PREVIEW_GEMINI_IMAGE_SIZE, PREVIEW_GEMINI_LONG_EDGE, AREA_EDIT_BASE_MAX_SIDE } from '../utils/printExportSpec.js';
+import { resizeDataUrlToLongEdge } from '../utils/normalizeAiEditBase.js';
 import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
 import { matchOverallColorToReference } from '../utils/colorMatch.js';
 import {
@@ -790,12 +791,16 @@ export function AiEditWorkspace({
     setCropSrc(null);
     try {
       /*
-       * 写真取込の上限を 1536 → 編集経路と同じ上限へ（260731）。
-       * 1536 に落とすと、この版がその後のすべての編集の基準寸法になるため、
-       * 4000px の写真を入れても以後ずっと 1536px 上で編集が回り続けていた
-       * （生成は 2K なので、毎回 2688→1536 の縮小が入る＝ぼやけの蓄積）。
+       * 取り込んだ写真を、AIレンダリングの1つ目の版と同じ長辺へ揃える
+       * （260812 クライアント要望「図面からパース作成とAIで写真編集を同じ出力サイズに」）。
+       *
+       * 1つ目の版の寸法が、そのプロジェクトの出力サイズを最後まで決める
+       * （以後のAI編集は生成結果をこの寸法へ合わせ直して保存するため）。
+       * レンダリング側は生成結果そのものが1つ目の版なので常に 2K ネイティブ。
+       * 写真側もここで同じ長辺に揃えることで、両者の仕様が一致する。
+       * 上限で頭打ちにするだけだった従来（260731）は、小さい写真だと小さいまま残っていた。
        */
-      const sized = await downscaleDataUrlIfNeeded(cropped, AREA_EDIT_BASE_MAX_SIDE);
+      const sized = await resizeDataUrlToLongEdge(cropped, PREVIEW_GEMINI_LONG_EDGE);
       onUploadBaseImage?.(sized);
     } catch {
       /* ignore */
