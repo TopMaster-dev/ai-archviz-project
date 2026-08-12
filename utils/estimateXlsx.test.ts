@@ -4,6 +4,7 @@ import {
   pxToColWidth,
   splitRowHeights,
   pageSetupFor,
+  coverCropRect,
   ESTIMATE_COLUMN_WIDTHS,
   BOARD_COLUMN_WIDTHS,
 } from './estimateXlsx.js';
@@ -171,6 +172,77 @@ describe('行の高さは Excel の上限（409pt）を超えない', () => {
       const heights = splitRowHeights(bad as number);
       expect(heights.length).toBeGreaterThanOrEqual(1);
       expect(heights[0]).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('マテリアルボードのスワッチは全部同じ大きさ（中央切り抜き）', () => {
+  /*
+    260813 クライアント指摘「素材画像の大きさがバラバラ」。
+    枠に収める方式（contain）だと元写真の縦横比がそのまま表示寸法になり、
+    実ファイルでは 140x47 / 140x81 / 54x105 / 52x105 とバラバラになっていた。
+    PDF 側は object-fit: cover の固定枠なので、中央切り抜きで寸法を揃える。
+  */
+  const BOX_W = 200;
+  const BOX_H = 150;
+
+  // 実ファイルに入っていた素材画像の実解像度
+  const REAL = [
+    [1024, 342], // 横長 2.99
+    [920, 535], // 横長 1.72
+    [984, 1929], // 縦長 0.51
+    [920, 1840], // 縦長 0.50
+  ] as const;
+
+  it('切り抜き後は枠と同じ縦横比になる（＝全部同じ表示寸法になる）', () => {
+    for (const [w, h] of REAL) {
+      const { sw, sh } = coverCropRect(w, h, BOX_W, BOX_H);
+      expect(sw / sh, `${w}x${h}`).toBeCloseTo(BOX_W / BOX_H, 5);
+    }
+  });
+
+  it('切り抜き範囲は元画像の中に収まる（はみ出して黒帯にならない）', () => {
+    for (const [w, h] of REAL) {
+      const { sx, sy, sw, sh } = coverCropRect(w, h, BOX_W, BOX_H);
+      expect(sx, `${w}x${h}`).toBeGreaterThanOrEqual(0);
+      expect(sy, `${w}x${h}`).toBeGreaterThanOrEqual(0);
+      expect(sx + sw, `${w}x${h}`).toBeLessThanOrEqual(w + 1e-6);
+      expect(sy + sh, `${w}x${h}`).toBeLessThanOrEqual(h + 1e-6);
+    }
+  });
+
+  it('中央から切り抜く（端に寄らない）', () => {
+    // 横長 3:1 を 4:3 の枠へ → 左右を均等に捨てる
+    const { sx, sy, sw, sh } = coverCropRect(900, 300, 200, 150);
+    expect(sh).toBe(300); // 高さは使い切る
+    expect(sw).toBe(400); // 300 * (200/150)
+    expect(sx).toBe(250); // (900-400)/2
+    expect(sy).toBe(0);
+  });
+
+  it('縦長は上下を均等に捨てる', () => {
+    const { sx, sy, sw, sh } = coverCropRect(300, 900, 200, 150);
+    expect(sw).toBe(300); // 幅は使い切る
+    expect(sh).toBe(225); // 300 / (200/150)
+    expect(sx).toBe(0);
+    expect(sy).toBe(337.5); // (900-225)/2
+  });
+
+  it('枠と同じ比なら何も捨てない', () => {
+    const { sx, sy, sw, sh } = coverCropRect(400, 300, 200, 150);
+    expect({ sx, sy, sw, sh }).toEqual({ sx: 0, sy: 0, sw: 400, sh: 300 });
+  });
+
+  it('壊れた寸法でも落ちず、正の矩形を返す', () => {
+    for (const [w, h] of [
+      [0, 0],
+      [NaN, 100],
+      [100, NaN],
+      [-5, -5],
+    ] as const) {
+      const r = coverCropRect(w as number, h as number, BOX_W, BOX_H);
+      expect(r.sw).toBeGreaterThan(0);
+      expect(r.sh).toBeGreaterThan(0);
     }
   });
 });

@@ -173,6 +173,79 @@ const YEN_FORMAT = '#,##0';
 /** 数量は小数3位まで（m² / m）。 */
 const QTY_FORMAT = '#,##0.###';
 
+/**
+ * マテリアルボードのスワッチ寸法（px）。全材料を必ずこの寸法で並べる。
+ * 画像列は30単位＝210px なので 200px 幅が収まる。
+ * 行高は 150×0.75+6 = 118.5pt となり、A3横（印刷可能高さ785pt）に6行入る。
+ */
+const SWATCH_W = 200;
+const SWATCH_H = 150;
+
+/** 縦横比を保ったまま枠を埋める中央切り抜きの矩形（純関数・テスト用）。 */
+export function coverCropRect(
+  srcW: number,
+  srcH: number,
+  boxW: number,
+  boxH: number,
+): { sx: number; sy: number; sw: number; sh: number } {
+  const w = Number.isFinite(srcW) && srcW > 0 ? srcW : 1;
+  const h = Number.isFinite(srcH) && srcH > 0 ? srcH : 1;
+  const target = boxW / boxH;
+  const src = w / h;
+  // 元が枠より横長なら左右を、縦長なら上下を捨てる。
+  const sw = src > target ? h * target : w;
+  const sh = src > target ? h : w / target;
+  return {
+    sx: Math.max(0, (w - sw) / 2),
+    sy: Math.max(0, (h - sh) / 2),
+    sw: Math.min(w, sw),
+    sh: Math.min(h, sh),
+  };
+}
+
+/**
+ * 画像を boxW×boxH ちょうどの大きさへ中央切り抜きして base64 化する（CSS の object-fit: cover 相当）。
+ * 取得・描画に失敗したら null（呼び出し側で元画像へフォールバックする）。
+ */
+function coverCropToBase64(
+  url: string,
+  boxW: number,
+  boxH: number,
+): Promise<{ base64: string; extension: 'png' | 'jpeg' | 'gif' } | null> {
+  return new Promise((resolve) => {
+    if (!url) {
+      resolve(null);
+      return;
+    }
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const c = document.createElement('canvas');
+        c.width = boxW;
+        c.height = boxH;
+        const ctx = c.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        const { sx, sy, sw, sh } = coverCropRect(img.naturalWidth, img.naturalHeight, boxW, boxH);
+        ctx.imageSmoothingEnabled = true;
+        ctx.imageSmoothingQuality = 'high';
+        ctx.drawImage(img, sx, sy, sw, sh, 0, 0, boxW, boxH);
+        const dataUrl = c.toDataURL('image/png');
+        const idx = dataUrl.indexOf(',');
+        resolve(idx >= 0 ? { base64: dataUrl.slice(idx + 1), extension: 'png' } : null);
+      } catch {
+        // 別オリジンの画像で canvas が汚染された場合など。
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
+
 /** Excel が扱えない形式（WebP 等）を PNG の base64 へ変換する。失敗したら null。 */
 function reencodeToPngBase64(objectUrl: string): Promise<string | null> {
   return new Promise((resolve) => {
@@ -593,9 +666,6 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
     });
 
     // 画像セルの基準サイズ（px）。行の高さはポイント指定なので約 0.75 を掛ける。
-    const CELL_IMG_W = 140;
-    const CELL_IMG_H = 105;
-
     for (const b of payload.materialBoard) {
       const row = bs.addRow([
         '',
@@ -604,26 +674,28 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
         b.brand,
         b.usages.join(' / '),
       ]);
-      row.height = CELL_IMG_H * 0.75 + 6;
+      row.height = SWATCH_H * 0.75 + 6;
       row.font = { size: 9 };
       row.alignment = { vertical: 'middle', wrapText: true };
       row.eachCell((cell) => {
         cell.border = BORDER;
       });
 
-      const swatch = await toImagePayload(b.textureUrl);
+      /*
+        スワッチは全材料を同じ寸法で並べる（260813 クライアント指摘「素材画像の大きさがバラバラ」）。
+        枠に収める方式（contain）だと、元写真の縦横比のぶんだけ表示寸法が変わってしまい、
+        実際に 140x47 / 140x81 / 54x105 / 52x105 とバラバラになっていた。
+        PDF のマテリアルボードは object-fit: cover の固定枠なので、こちらも中央切り抜きで揃える。
+      */
+      const cropped = await coverCropToBase64(b.textureUrl, SWATCH_W, SWATCH_H);
+      // 切り抜きに失敗したときは元画像をそのまま枠いっぱいに入れる（画像を失わない）。
+      const swatch = cropped ?? (await toImagePayload(b.textureUrl));
       if (!swatch) continue; // 取得できない画像は空欄のまま（行と文字情報は残す）
-      const natural = await imageSize(b.textureUrl);
-      // 縦横比を保ったままセルへ収める。
-      const ratio = natural && natural.h > 0 ? natural.w / natural.h : 1;
-      const wide = ratio >= CELL_IMG_W / CELL_IMG_H;
-      const w = wide ? CELL_IMG_W : CELL_IMG_H * ratio;
-      const h = wide ? CELL_IMG_W / ratio : CELL_IMG_H;
       const id = wb.addImage({ base64: swatch.base64, extension: swatch.extension });
       bs.addImage(id, {
         // 小数アンカーを使わない理由は AI画像シート側のコメント参照。
         tl: { col: 0, row: row.number - 1 },
-        ext: { width: w, height: h },
+        ext: { width: SWATCH_W, height: SWATCH_H },
         editAs: 'oneCell',
       });
     }
