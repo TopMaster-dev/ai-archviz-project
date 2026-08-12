@@ -1,3 +1,4 @@
+import type { PaperSize } from 'exceljs';
 import type { EstimateExportPayload, SurfaceKey } from './estimateExport.js';
 import { estimateExportFilename, formatPartCodeForDisplay, triggerBlobDownload } from './estimateExport.js';
 
@@ -24,17 +25,95 @@ import { estimateExportFilename, formatPartCodeForDisplay, triggerBlobDownload }
  * （書き出しボタンを押したときだけ取得され、初期表示のバンドルには含まれない）。
  */
 
-/** 見積表の列定義（全区分で共通・列がずれない唯一の理由）。 */
+/**
+ * 見積表の列定義（全区分で共通・列がずれない唯一の理由）。
+ *
+ * 【幅の決め方（260813 クライアント指摘「ExcelからPDFにすると表が小さくなる」）】
+ * Excel の列幅は「既定フォントの 0 が何文字入るか」で、px ≒ 幅×7+5。
+ * A4縦・余白10mm の印刷可能幅は約718px なので、合計がこれを超えると
+ * Excel が「1ページ幅に収める」設定に従って全体を縮小し、文字が潰れる。
+ * 旧値（合計152）は 1104px＝縮小率0.65 まで潰れていた。
+ * 合計94（≒698px）に収め、縮小なし（等倍）で Arise のPDFと同じ大きさで刷れるようにする。
+ */
 const COLUMNS = [
-  { header: 'No.', key: 'no', width: 6 },
-  { header: '明細名称', key: 'name', width: 34 },
-  { header: '仕様', key: 'spec', width: 22 },
-  { header: '数量', key: 'qty', width: 10 },
-  { header: '単位', key: 'unit', width: 7 },
-  { header: '単価', key: 'unitPrice', width: 13 },
-  { header: '金額', key: 'amount', width: 14 },
-  { header: '備考', key: 'remark', width: 46 },
+  { header: 'No.', key: 'no', width: 5 },
+  { header: '明細名称', key: 'name', width: 24 },
+  { header: '仕様', key: 'spec', width: 12 },
+  { header: '数量', key: 'qty', width: 8 },
+  { header: '単位', key: 'unit', width: 5 },
+  { header: '単価', key: 'unitPrice', width: 11 },
+  { header: '金額', key: 'amount', width: 12 },
+  { header: '備考', key: 'remark', width: 17 },
 ] as const;
+
+/** 見積表の列幅（テスト用・用紙に収まっているかを数値で担保する）。 */
+export const ESTIMATE_COLUMN_WIDTHS: readonly number[] = COLUMNS.map((c) => c.width);
+
+/** マテリアルボードの列幅。A3横の印刷可能幅（約1512px）を使い切る合計203。 */
+export const BOARD_COLUMN_WIDTHS = [30, 34, 52, 34, 53] as const;
+
+/**
+ * 印刷余白（インチ）。Arise のPDF（余白10mm）に合わせる。
+ * Excel の既定は左右19mm と広く、そのぶん表がさらに縮小されてしまう。
+ */
+const PRINT_MARGINS = {
+  left: 0.4,
+  right: 0.4,
+  top: 0.4,
+  bottom: 0.4,
+  header: 0.2,
+  footer: 0.2,
+} as const;
+
+/**
+ * A3（OOXML の paperSize=8）。exceljs の PaperSize 列挙は A3 を持っていないため
+ * 型を通すためにキャストする。値そのものは OOXML 標準で Excel は正しく解釈する。
+ * Arise のPDFは 画像＝A3横 / 見積本文＝A4縦 / マテリアルボード＝A3横 なので、
+ * Excel のシートも同じ用紙・向きに揃える（260813 クライアント指摘）。
+ */
+const PAPER_A3 = 8 as unknown as PaperSize;
+const PAPER_A4 = 9 as unknown as PaperSize;
+
+/** 印刷可能領域（px・96dpi）。A3横＝420×297mm、余白は上下左右10mm。 */
+const A3_LAND_W = Math.round(((420 - 20) / 25.4) * 96); // ≒1512
+const A3_LAND_H = Math.round(((297 - 20) / 25.4) * 96); // ≒1047
+
+/**
+ * 画像ページに置ける最大の大きさ（px）。A3横の印刷可能領域から
+ * 見出し（プロジェクト名・日付・空行）のぶんを引いた実寸。
+ */
+const IMAGE_BOX_W = A3_LAND_W - 60;
+const IMAGE_BOX_H = A3_LAND_H - 90;
+
+/** 縦横比を保ったまま (boxW × boxH) に収まる寸法（純関数・テスト用）。 */
+export function fitImageBox(ratio: number, boxW = IMAGE_BOX_W, boxH = IMAGE_BOX_H): { w: number; h: number } {
+  const r = Number.isFinite(ratio) && ratio > 0 ? ratio : 16 / 9;
+  let w = boxW;
+  let h = Math.round(boxW / r);
+  if (h > boxH) {
+    h = boxH;
+    w = Math.round(boxH * r);
+  }
+  return { w: Math.max(1, Math.round(w)), h: Math.max(1, h) };
+}
+
+/** px 幅 → Excel の列幅単位（px ≒ 幅×7+5 の逆算）。 */
+export function pxToColWidth(px: number): number {
+  const v = Number.isFinite(px) ? px : 0;
+  // Excel の列幅上限は 255。
+  return Math.max(1, Math.min(255, Math.round((v - 5) / 7)));
+}
+
+/**
+ * 画像の高さを複数行へ割り振る（Excel の行高上限は 409pt）。
+ * 1行に押し込むと上限で頭打ちになり、印刷範囲が画像より短くなって
+ * 「1ページに収める」設定でページ全体が縮小されてしまう。
+ */
+export function splitRowHeights(imageHeightPx: number, maxPt = 400): number[] {
+  const totalPt = (Number.isFinite(imageHeightPx) && imageHeightPx > 0 ? imageHeightPx : 1) * 0.75 + 6;
+  const rows = Math.max(1, Math.ceil(totalPt / maxPt));
+  return Array.from({ length: rows }, () => totalPt / rows);
+}
 
 const SECTION_TITLES: Record<SurfaceKey, string> = {
   floor: '床',
@@ -176,33 +255,57 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
   const heroImg = heroUrl ? await toImagePayload(heroUrl) : null;
   if (heroImg && heroUrl) {
     const is = wb.addWorksheet('AI画像', {
-      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 1 },
+      pageSetup: {
+        paperSize: PAPER_A3,
+        orientation: 'landscape',
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 1,
+        margins: { ...PRINT_MARGINS },
+      },
     });
+    /*
+      【260813 クライアント指摘】画像ページだけ極端に小さく刷られていた。
+      原因は幅だけを 900px に固定し、高さを縦横比なりに伸ばしていたこと。
+      縦長画像だと高さが1,200px超になり、印刷可能領域（A4横で約718px）を大きく越える。
+      fitToHeight:1（1ページに収める）が効いてページ全体が縮小され、
+      見出しも画像も小さくなっていた。幅と高さの両方を用紙内に収める。
+    */
+    const natural = await imageSize(heroUrl);
+    const ratio = natural && natural.h > 0 ? natural.w / natural.h : 16 / 9;
+    const { w, h } = fitImageBox(ratio);
+
     // PDF の画像ページと同じく、上にプロジェクト名と日付を置く。
-    is.getColumn(1).width = 120;
+    // 列幅は画像の幅に合わせる（広すぎると空白ぶんまで1ページに収めようとして縮む）。
+    is.getColumn(1).width = pxToColWidth(w);
     const t = is.addRow([payload.projectName || 'プロジェクト名']);
     t.font = { bold: true, size: 14 };
     is.addRow([`日付：${dateLabel}`]).font = { size: 10, color: { argb: 'FF666666' } };
     is.addRow([]);
 
-    const natural = await imageSize(heroUrl);
-    const MAX_W = 900;
-    const ratio = natural && natural.h > 0 ? natural.w / natural.h : 16 / 9;
-    const h = Math.round(MAX_W / ratio);
-    const imgRow = is.addRow([]);
-    // Excel の行高は最大 409pt。縦長画像で超えると Excel が開くときに警告を出す。
-    imgRow.height = Math.min(409, h * 0.75 + 6);
+    // 行高はポイント（1px = 0.75pt）で上限 409pt。画像の高さを複数行へ割り振る。
+    const heights = splitRowHeights(h);
+    const firstImgRow = is.addRow([]);
+    firstImgRow.height = heights[0]!;
+    for (const ht of heights.slice(1)) is.addRow([]).height = ht;
     const heroId = wb.addImage({ base64: heroImg.base64, extension: heroImg.extension });
     is.addImage(heroId, {
-      tl: { col: 0.1, row: imgRow.number - 1 + 0.1 },
-      ext: { width: MAX_W, height: h },
+      tl: { col: 0.1, row: firstImgRow.number - 1 + 0.1 },
+      ext: { width: w, height: h },
       editAs: 'oneCell',
     });
   }
 
   // ------------------------------------------------------------- シート2: 概算見積
   const ws = wb.addWorksheet('概算見積', {
-    pageSetup: { paperSize: 9, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+    pageSetup: {
+      paperSize: PAPER_A4,
+      orientation: 'portrait',
+      fitToPage: true,
+      fitToWidth: 1,
+      fitToHeight: 0,
+      margins: { ...PRINT_MARGINS },
+    },
   });
   ws.columns = COLUMNS.map((c) => ({ key: c.key, width: c.width }));
 
@@ -410,15 +513,24 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
   // -------------------------------------------------- シート3: マテリアルボード
   if (payload.materialBoard.length > 0) {
     const bs = wb.addWorksheet('マテリアルボード', {
-      pageSetup: { orientation: 'landscape', fitToPage: true, fitToWidth: 1, fitToHeight: 0 },
+      pageSetup: {
+        paperSize: PAPER_A3,
+        orientation: 'landscape',
+        fitToPage: true,
+        fitToWidth: 1,
+        fitToHeight: 0,
+        margins: { ...PRINT_MARGINS },
+      },
     });
-    bs.columns = [
-      { key: 'img', width: 22 },
-      { key: 'part', width: 26 },
-      { key: 'name', width: 34 },
-      { key: 'brand', width: 22 },
-      { key: 'usage', width: 30 },
-    ];
+    /*
+      合計203（≒1426px）。A3横・余白10mm の印刷可能幅は約1512px なので等倍で刷れる。
+      旧値（合計134＝963px）は A3横の64%しか使わず、右側に大きな余白が残っていた。
+      各列も狭いぶん日本語の折り返しが増え、1セルが何行にもなっていた。
+    */
+    bs.columns = (['img', 'part', 'name', 'brand', 'usage'] as const).map((key, i) => ({
+      key,
+      width: BOARD_COLUMN_WIDTHS[i]!,
+    }));
     const bTitle = bs.addRow([payload.projectName || 'マテリアルボード']);
     bTitle.font = { bold: true, size: 14 };
     bs.mergeCells(bTitle.number, 1, bTitle.number, 5);
