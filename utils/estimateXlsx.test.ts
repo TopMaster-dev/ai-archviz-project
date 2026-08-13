@@ -7,6 +7,11 @@ import {
   coverCropRect,
   ESTIMATE_COLUMN_WIDTHS,
   BOARD_COLUMN_WIDTHS,
+  BOARD_CARD_COLS,
+  BOARD_CARD_COL_WIDTH,
+  BOARD_ROWS_PER_PAGE,
+  SWATCH_W,
+  SWATCH_H,
 } from './estimateXlsx.js';
 
 /**
@@ -59,6 +64,43 @@ describe('列幅が用紙に収まっている（縮小されずに刷れる）'
     // 旧値は938px＝A3横の62%しか使わず、右側に大きな余白が残っていた。
     const px = colsToPx(BOARD_COLUMN_WIDTHS);
     expect(px / A3_LANDSCAPE_W).toBeGreaterThan(0.9);
+  });
+});
+
+describe('マテリアルボードは PDF と同じカード並びになっている', () => {
+  /*
+    260813 クライアント指摘「PDFは横4枚のカード、Excelは1行1材料の表で別物」。
+    PDF（buildMaterialBoardPage）は 横4×縦2＝1ページ8枚。ここを数値で固定する。
+  */
+  it('横4枚・1ページ8枚（PDF の PER_PAGE=8 と一致）', () => {
+    expect(BOARD_CARD_COLS).toBe(4);
+    expect(BOARD_CARD_COLS * BOARD_ROWS_PER_PAGE).toBe(8);
+  });
+
+  it('カード1枚の幅が PDF のカード（約100mm）とほぼ同じ', () => {
+    const mm = ((BOARD_CARD_COL_WIDTH * 7) / 96) * 25.4;
+    expect(mm).toBeGreaterThan(90);
+    expect(mm).toBeLessThan(105);
+  });
+
+  it('カード4枚が A3横の印刷可能幅に収まる（縮小されない）', () => {
+    const px = BOARD_CARD_COLS * BOARD_CARD_COL_WIDTH * 7;
+    expect(px).toBeLessThanOrEqual(A3_LANDSCAPE_W);
+  });
+
+  it('スワッチの縦横比が PDF のカード（283:264）と一致する', () => {
+    expect(SWATCH_W / SWATCH_H).toBeCloseTo(283 / 264, 2);
+  });
+
+  it('スワッチはカード列の幅に収まる', () => {
+    expect(SWATCH_W).toBeLessThanOrEqual(BOARD_CARD_COL_WIDTH * 7);
+  });
+
+  it('2段ぶんが A3横の印刷可能高さ（785pt）に収まる', () => {
+    // 見出し16 + 画像 + キャプション28 + すき間10、これに帯28とフッタ18。
+    const segment = 16 + SWATCH_H * 0.75 + 28 + 10;
+    const total = segment * BOARD_ROWS_PER_PAGE + 28 + 18;
+    expect(total).toBeLessThanOrEqual(785);
   });
 });
 
@@ -183,8 +225,8 @@ describe('マテリアルボードのスワッチは全部同じ大きさ（中�
     実ファイルでは 140x47 / 140x81 / 54x105 / 52x105 とバラバラになっていた。
     PDF 側は object-fit: cover の固定枠なので、中央切り抜きで寸法を揃える。
   */
-  const BOX_W = 200;
-  const BOX_H = 150;
+  const BOX_W = SWATCH_W;
+  const BOX_H = SWATCH_H;
 
   // 実ファイルに入っていた素材画像の実解像度
   const REAL = [

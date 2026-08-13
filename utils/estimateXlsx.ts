@@ -63,8 +63,25 @@ const COLUMNS = [
 /** 見積表の列幅（テスト用・用紙に収まっているかを数値で担保する）。 */
 export const ESTIMATE_COLUMN_WIDTHS: readonly number[] = COLUMNS.map((c) => c.width);
 
-/** マテリアルボードの列幅。合計203 = 1421px = 376.0mm（A3横の印刷可能幅 399.7mm 内）。 */
-export const BOARD_COLUMN_WIDTHS = [30, 34, 52, 34, 53] as const;
+/**
+ * マテリアルボードは PDF と同じ「横4枚×縦2段＝1ページ8枚」のカード並び
+ * （260813 クライアント指摘「PDFと見た目が別物・素材画像の大きさがバラバラ」）。
+ *
+ * 1列＝カード1枚。53単位 = 371px = 98.1mm で、PDF のカード幅（1188px中283px ≒ 100mm）とほぼ同じ。
+ * 4列で 1484px = 392.6mm。A3横・余白10mm の印刷可能幅 399.7mm に収まるので縮小されない。
+ */
+export const BOARD_CARD_COLS = 4;
+export const BOARD_CARD_COL_WIDTH = 53;
+/** 1ページに入れるカードの段数（4枚×2段＝8枚。PDF の PER_PAGE と一致）。 */
+export const BOARD_ROWS_PER_PAGE = 2;
+/** ヘッダ／フッタ帯の色（PDF の #3a3a3a）。 */
+const BOARD_BAND_BG = 'FF3A3A3A';
+
+/** テスト用: カード列の合計幅（px）。 */
+export const BOARD_COLUMN_WIDTHS: readonly number[] = Array.from(
+  { length: BOARD_CARD_COLS },
+  () => BOARD_CARD_COL_WIDTH,
+);
 
 /**
  * 印刷余白（インチ）。Arise のPDF（余白10mm）に合わせる。
@@ -174,12 +191,14 @@ const YEN_FORMAT = '#,##0';
 const QTY_FORMAT = '#,##0.###';
 
 /**
- * マテリアルボードのスワッチ寸法（px）。全材料を必ずこの寸法で並べる。
- * 画像列は30単位＝210px なので 200px 幅が収まる。
- * 行高は 150×0.75+6 = 118.5pt となり、A3横（印刷可能高さ785pt）に6行入る。
+ * スワッチ寸法（px）。全材料を必ずこの寸法で並べる（＝大きさが揃う）。
+ * カード列は53単位＝371px なので、枠線ぶんを残して 366px。
+ * 高さは PDF のカード（283x264px）と同じ比率 1.072 に合わせる。
+ * 行高 = 341×0.75 ≒ 256pt。見出し16 + 256 + キャプション28 + すき間10 = 310pt/段。
+ * A3横の印刷可能高さ785pt に対し、帯を除いて2段（＝8枚）入る。
  */
-const SWATCH_W = 200;
-const SWATCH_H = 150;
+export const SWATCH_W = 366;
+export const SWATCH_H = 341;
 
 /** 縦横比を保ったまま枠を埋める中央切り抜きの矩形（純関数・テスト用）。 */
 export function coverCropRect(
@@ -643,62 +662,125 @@ export async function downloadEstimateXlsx(payload: EstimateExportPayload): Prom
       pageSetup: pageSetupFor('board'),
     });
     /*
-      合計203 = 1421px = 376.0mm。A3横・余白10mm の印刷可能幅 399.7mm に収まり等倍で刷れる。
-      旧値（合計134 = 938px = 248mm）は A3横の62%しか使わず、右側に大きな余白が残っていた。
-      各列も狭いぶん日本語の折り返しが増え、1セルが何行にもなっていた。
+      【260813 クライアント指摘】PDF は横4枚のカード並びなのに Excel は1行1材料の表で、
+      見た目がまったく別物だった。素材画像の大きさもバラバラだった。
+      PDF（buildMaterialBoardPage）と同じ「横4枚×縦2段＝1ページ8枚」のカード構成にする。
+        ・濃色の帯（プロジェクト名／日付）
+        ・面の見出し（■床）はその面の初出カードにだけ出す
+        ・スワッチは全枚数とも同寸法（中央切り抜き＝PDF の object-fit: cover と同じ）
+        ・キャプション帯（■床1：品番【メーカー】）
+        ・濃色のフッタ帯（作成者名）
     */
-    bs.columns = (['img', 'part', 'name', 'brand', 'usage'] as const).map((key, i) => ({
-      key,
-      width: BOARD_COLUMN_WIDTHS[i]!,
+    bs.columns = Array.from({ length: BOARD_CARD_COLS }, (_, i) => ({
+      key: `card${i}`,
+      width: BOARD_CARD_COL_WIDTH,
     }));
-    const bTitle = bs.addRow([payload.projectName || 'マテリアルボード']);
-    bTitle.font = { bold: true, size: 14 };
-    bs.mergeCells(bTitle.number, 1, bTitle.number, 5);
-    bs.addRow([`日付：${dateLabel}`]).font = { size: 9, color: { argb: 'FF666666' } };
-    bs.addRow([]);
 
-    const bh = bs.addRow(['画像', '品番', '表示名', 'メーカー', '使用箇所']);
-    bh.font = { bold: true, size: 9 };
-    bh.eachCell((cell) => {
-      cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF0F0F0' } };
-      cell.border = BORDER;
-      cell.alignment = { vertical: 'middle' };
+    /** 濃色帯（ヘッダ／フッタ）。 */
+    const addBandRow = (
+      cells: string[],
+      opts: { height: number; size: number },
+    ) => {
+      const r = bs.addRow(cells);
+      r.height = opts.height;
+      for (let c = 1; c <= BOARD_CARD_COLS; c += 1) {
+        const cell = r.getCell(c);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: BOARD_BAND_BG } };
+        cell.font = { bold: true, size: opts.size, color: { argb: 'FFFFFFFF' } };
+      }
+      return r;
+    };
+
+    // ヘッダ帯: 左にプロジェクト名、右に日付（PDF と同じ）。
+    const bandRow = addBandRow(
+      [payload.projectName || 'プロジェクト名', '', `日付：${dateLabel}`, ''],
+      { height: 22, size: 12 },
+    );
+    const half = Math.max(1, Math.floor(BOARD_CARD_COLS / 2));
+    bs.mergeCells(bandRow.number, 1, bandRow.number, half);
+    bs.mergeCells(bandRow.number, half + 1, bandRow.number, BOARD_CARD_COLS);
+    bandRow.getCell(1).alignment = { horizontal: 'left', vertical: 'middle' };
+    bandRow.getCell(half + 1).alignment = { horizontal: 'right', vertical: 'middle' };
+    bs.addRow([]).height = 6;
+
+    // 面ごとの通し番号（床1/床2/壁1…）。materialBoard は面順にソート済み（PDF と同じ規則）。
+    const counters: Record<string, number> = {};
+    const entries = payload.materialBoard.map((it) => {
+      const n = (counters[it.surface] = (counters[it.surface] ?? 0) + 1);
+      return { it, label: `${SECTION_TITLES[it.surface] ?? ''}${n}` };
     });
 
-    // 画像セルの基準サイズ（px）。行の高さはポイント指定なので約 0.75 を掛ける。
-    for (const b of payload.materialBoard) {
-      const row = bs.addRow([
-        '',
-        formatPartCodeForDisplay(b.modelNumber, b.partCode),
-        b.displayName,
-        b.brand,
-        b.usages.join(' / '),
-      ]);
-      row.height = SWATCH_H * 0.75 + 6;
-      row.font = { size: 9 };
-      row.alignment = { vertical: 'middle', wrapText: true };
-      row.eachCell((cell) => {
-        cell.border = BORDER;
-      });
+    // 面見出しは「その面の初出カード」にだけ出す（PDF と同じ）。
+    const seenSurface = new Set<string>();
+    const rowsPerPage = BOARD_ROWS_PER_PAGE;
 
-      /*
-        スワッチは全材料を同じ寸法で並べる（260813 クライアント指摘「素材画像の大きさがバラバラ」）。
-        枠に収める方式（contain）だと、元写真の縦横比のぶんだけ表示寸法が変わってしまい、
-        実際に 140x47 / 140x81 / 54x105 / 52x105 とバラバラになっていた。
-        PDF のマテリアルボードは object-fit: cover の固定枠なので、こちらも中央切り抜きで揃える。
-      */
-      const cropped = await coverCropToBase64(b.textureUrl, SWATCH_W, SWATCH_H);
-      // 切り抜きに失敗したときは元画像をそのまま枠いっぱいに入れる（画像を失わない）。
-      const swatch = cropped ?? (await toImagePayload(b.textureUrl));
-      if (!swatch) continue; // 取得できない画像は空欄のまま（行と文字情報は残す）
-      const id = wb.addImage({ base64: swatch.base64, extension: swatch.extension });
-      bs.addImage(id, {
-        // 小数アンカーを使わない理由は AI画像シート側のコメント参照。
-        tl: { col: 0, row: row.number - 1 },
-        ext: { width: SWATCH_W, height: SWATCH_H },
-        editAs: 'oneCell',
-      });
+    for (let start = 0, band = 0; start < entries.length; start += BOARD_CARD_COLS, band += 1) {
+      const chunk = entries.slice(start, start + BOARD_CARD_COLS);
+
+      // 1) 面見出しの行
+      const catRow = bs.addRow(
+        chunk.map(({ it }) => {
+          if (seenSurface.has(it.surface)) return '';
+          seenSurface.add(it.surface);
+          return `■${SECTION_TITLES[it.surface] ?? ''}`;
+        }),
+      );
+      catRow.height = 16;
+      catRow.font = { bold: true, size: 11 };
+      catRow.alignment = { vertical: 'bottom' };
+
+      // 2) スワッチの行
+      const imgRow = bs.addRow([]);
+      imgRow.height = SWATCH_H * 0.75;
+      for (let c = 1; c <= chunk.length; c += 1) {
+        imgRow.getCell(c).border = BORDER;
+      }
+
+      // 3) キャプションの帯
+      const capRow = bs.addRow(
+        chunk.map(
+          ({ it, label }) =>
+            `■${label}：${formatPartCodeForDisplay(it.modelNumber, it.partCode)}【${it.brand || 'メーカー名'}】`,
+        ),
+      );
+      capRow.height = 28;
+      capRow.font = { bold: true, size: 9 };
+      for (let c = 1; c <= chunk.length; c += 1) {
+        const cell = capRow.getCell(c);
+        cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFEDEDED' } };
+        cell.border = BORDER;
+        cell.alignment = { vertical: 'middle', wrapText: true };
+      }
+
+      // 4) カード間のすき間
+      bs.addRow([]).height = 10;
+
+      // スワッチを貼る（全枚数とも同寸法・中央切り抜き）。
+      for (let i = 0; i < chunk.length; i += 1) {
+        const cropped = await coverCropToBase64(chunk[i]!.it.textureUrl, SWATCH_W, SWATCH_H);
+        // 切り抜きに失敗したときは元画像で代替する（画像を失わない）。
+        const swatch = cropped ?? (await toImagePayload(chunk[i]!.it.textureUrl));
+        if (!swatch) continue; // 取得できない画像は枠だけ残す
+        const id = wb.addImage({ base64: swatch.base64, extension: swatch.extension });
+        bs.addImage(id, {
+          // 小数アンカーを使わない理由は AI画像シート側のコメント参照。
+          tl: { col: i, row: imgRow.number - 1 },
+          ext: { width: SWATCH_W, height: SWATCH_H },
+          editAs: 'oneCell',
+        });
+      }
+
+      // PDF と同じく1ページ8枚（横4×縦2）で改ページする。
+      const isLast = start + BOARD_CARD_COLS >= entries.length;
+      if (!isLast && (band + 1) % rowsPerPage === 0) {
+        bs.getRow(bs.rowCount).addPageBreak();
+      }
     }
+
+    // フッタ帯: 作成者名（PDF と同じ）。
+    const footRow = addBandRow([payload.authorName || '—', '', '', ''], { height: 18, size: 10 });
+    bs.mergeCells(footRow.number, 1, footRow.number, BOARD_CARD_COLS);
+    footRow.getCell(1).alignment = { horizontal: 'center', vertical: 'middle' };
   }
 
   const buffer = await wb.xlsx.writeBuffer();
