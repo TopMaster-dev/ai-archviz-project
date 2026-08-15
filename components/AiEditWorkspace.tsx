@@ -47,7 +47,12 @@ import {
   type CropPx,
 } from '../utils/maskCropRemap.js';
 import { cropDataUrl, pasteCropIntoBase } from '../utils/cropPasteCanvas.js';
-import { PREVIEW_GEMINI_IMAGE_SIZE, PREVIEW_GEMINI_LONG_EDGE, AREA_EDIT_BASE_MAX_SIDE } from '../utils/printExportSpec.js';
+import {
+  PREVIEW_GEMINI_IMAGE_SIZE,
+  PREVIEW_GEMINI_LONG_EDGE,
+  AREA_EDIT_BASE_MAX_SIDE,
+  ENABLE_KEEP_GENERATED_SIZE,
+} from '../utils/printExportSpec.js';
 import { resizeDataUrlToLongEdge } from '../utils/normalizeAiEditBase.js';
 import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
 import { matchOverallColorToReference } from '../utils/colorMatch.js';
@@ -1254,23 +1259,39 @@ export function AiEditWorkspace({
               composited: true,
             };
           }
-          // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）: base 寸法へ整える。
+          // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）。
           const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
           const isBounded = !objIsGlobal;
           // 複数範囲では cover 固定でレターボックスを避ける（座標整合）。
           const mode: 'cover' | 'contain' =
             !multiRegion && !isBounded && coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-          const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
-          // 【1-B（260720 クライアント要望）】面仕上げのみの編集は、ここでポリゴン合成せず全画面をそのまま採用する
-          // ＝囲みのすぐ外側に境界線（継ぎ目）を構造的に作らない。モデルは画像“全体”を coherent に再生成しており、
-          // 対象面以外（家具・床・他壁）は strictConfine＋プロンプトで保持指示済み。窓・ドアの原画復元は最終段でまとめて
-          // 行う（開口だけの復元＝ポリゴン境界の継ぎ目が出ない）。contain の黒帯は避けて cover で返す。
-          // Stage3（260722）: 面仕上げのみ(1-B)に加え、家具/混在も全画面採用（useFullFrame）＝合成境界・見切れを作らない。
+
+          /*
+            【手段1・260814 クライアント承認】全画面採用（合成しない）経路は、生成結果を
+            base 寸法へリサイズせず、モデルが返した寸法のまま採用する。
+            マスク座標系に依存しない経路なので寸法を変えても前提が崩れない
+            （合成経路は baseW/baseH が座標の基準なので、下の `fitted` 以降は一切変更しない）。
+            keepGeneratedSize は縦横比だけ base に合わせ、拡大は決してしない。
+            contain の分岐に入れないこと: 複数範囲では mode が cover 固定になるため効かなくなる。
+          */
           if (useFullFrame) {
-            const fullFrame =
-              mode === 'contain' ? await fitDataUrlToSize(data.url as string, baseW, baseH, 'cover') : fitted;
-            return { url: fullFrame, composited: false };
+            const t = ENABLE_KEEP_GENERATED_SIZE
+              ? keepGeneratedSize({ w: baseW, h: baseH }, { w: gemW, h: gemH })
+              : { w: baseW, h: baseH };
+            // contain の黒帯は最終出力に残せないので cover で返す（従来と同方針）。
+            return { url: await fitDataUrlToSize(data.url as string, t.w, t.h, 'cover'), composited: false };
           }
+
+          // ここから下は合成経路専用（base 座標系が前提）。寸法は base のまま。
+          const fitted = await fitDataUrlToSize(data.url as string, baseW, baseH, mode);
+          /*
+            【1-B（260720 クライアント要望）】面仕上げのみの編集は、ポリゴン合成せず全画面をそのまま採用する
+            ＝囲みのすぐ外側に境界線（継ぎ目）を構造的に作らない。モデルは画像“全体”を coherent に再生成しており、
+            対象面以外（家具・床・他壁）は strictConfine＋プロンプトで保持指示済み。
+            Stage3（260722）: 面仕上げのみ(1-B)に加え、家具/混在も全画面採用（useFullFrame）。
+            ※その分岐は手段1（260814）で `fitted` の**上**へ移した。生成寸法をそのまま採用するため、
+              base 寸法へ丸める `fitted` より前で返す必要があるため。
+          */
           // 【面仕上げで検出開口があるときは必ず合成する（case B・260718）】被覆率が高い（囲みがほぼ全画面）と
           // shouldCompositeAreaEdit は false（＝全画面直で継ぎ目なし）を返す。しかし面仕上げで窓・ドアの開口を検出して
           // いる場合、合成を飛ばすと開口をマスクから除外できず窓・ドアが仕上げで塗り潰されたまま残る（③の窓・ドア回帰）。
@@ -1706,7 +1727,14 @@ export function AiEditWorkspace({
         const { w: gemW, h: gemH } = await loadImageNaturalSize(outUrl);
         const aspectMode: 'cover' | 'contain' =
           coverCropLossFraction(gemW / gemH, baseW / baseH) > 0.1 ? 'contain' : 'cover';
-        outUrl = await fitDataUrlToSize(outUrl, baseW, baseH, aspectMode);
+        /*
+          【手段1・260814】コーディネートも合成を通らない（objects: [] 固定でマスク座標系が無い）ため、
+          生成寸法をそのまま採用する。縦横比の補正だけ従来どおり行う。
+        */
+        const cTarget = ENABLE_KEEP_GENERATED_SIZE
+          ? keepGeneratedSize({ w: baseW, h: baseH }, { w: gemW, h: gemH })
+          : { w: baseW, h: baseH };
+        outUrl = await fitDataUrlToSize(outUrl, cTarget.w, cTarget.h, aspectMode);
         return outUrl;
       };
 
