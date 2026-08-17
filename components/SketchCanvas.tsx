@@ -542,6 +542,49 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
     };
   }, []);
 
+  /*
+    ツールバーがモード切替（ホーム/2D/3D/AI/?）と横並びになる幅（min-[1400px]）かどうか。
+    横並びのときだけ、モード切替の実測右端を避けた幅にツールバーを制限する。
+    下段（ヘッダーの下）に落ちているときはヘッダーと縦に重ならないので制限は不要
+    （制限すると無駄に折り返して背が高くなるだけ）。
+  */
+  const modeToggleRight = useRenderOverlayStore((s) => s.modeToggleRight);
+  const [toolbarInline, setToolbarInline] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+    const mq = window.matchMedia('(min-width: 1400px)');
+    const apply = () => setToolbarInline(mq.matches);
+    apply();
+    mq.addEventListener('change', apply);
+    return () => mq.removeEventListener('change', apply);
+  }, []);
+
+  const [viewportWidth, setViewportWidth] = useState(() =>
+    typeof window === 'undefined' ? 0 : window.innerWidth,
+  );
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onResize = () => setViewportWidth(window.innerWidth);
+    onResize();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  /** 横並び時のツールバー最大幅（px）。未計測・下段のときは null＝従来のクラス指定に任せる。 */
+  const inlineToolbarMaxWidth =
+    toolbarInline && modeToggleRight > 0 && viewportWidth > 0
+      ? // 右端の余白(lg:right-6=24px)と、モード切替との間隔(16px)を差し引く。
+        Math.max(320, viewportWidth - modeToggleRight - 16 - 24)
+      : null;
+
+  /*
+    左パネルの上端。ツールバーが折り返して背が高くなっても掛からないよう実測下端へ追従させる。
+    sketchToolbarBottom はツールバーが最上段にあるときだけ >0（下段のときは 0）。
+    従来値 112px（top-28）を下限にして、上へは詰めない。
+  */
+  const sketchToolbarBottom = useRenderOverlayStore((s) => s.sketchToolbarBottom);
+  const panelTopPx = Math.max(112, sketchToolbarBottom > 0 ? sketchToolbarBottom + 12 : 0);
+
   const { centerMm } = getRoomTransform(pointsMm.map((p) => ({ x: mmToScaled(p.x), y: mmToScaled(p.y) })));
 
   const screenToWorld = useCallback((px: Point) => ({
@@ -3009,9 +3052,16 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       {panelOpen && (
         <div className="lg:hidden absolute inset-0 z-[54] bg-black/60" onClick={() => setPanelOpen(false)} aria-hidden />
       )}
+      {/*
+        左パネルの上端は、上部ツールバーの実測下端より下へ置く（260817 クライアント要望「左のサイドバーを少し下げる」）。
+        ツールバーは幅が足りないと内部が折り返して背が高くなるため、固定の top-28(112px) のままだと
+        ツールバーの下端がパネルに掛かる。実測に追従させれば、ボタンが増えても掛からない。
+        未計測（下段配置・3D/AI ビュー）のときは従来どおり 112px。
+      */}
       <div
-        className={`absolute top-28 left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 max-h-[calc(100vh-9rem)] overflow-y-auto scroll-dark pr-1 transition-transform duration-300 lg:translate-x-0 ${panelOpen ? 'translate-x-0' : '-translate-x-[150%] lg:translate-x-0'
+        className={`absolute left-6 z-[55] lg:z-40 flex w-[320px] max-w-[86vw] flex-col gap-2 overflow-y-auto scroll-dark pr-1 transition-transform duration-300 lg:translate-x-0 ${panelOpen ? 'translate-x-0' : '-translate-x-[150%] lg:translate-x-0'
           }`}
+        style={{ top: panelTopPx, maxHeight: `calc(100vh - ${panelTopPx + 32}px)` }}
       >
         {/* 平面図 / 天伏図 切替（独立・最上段）(3b) */}
         <div className="glass rounded-2xl border border-white/10 bg-[#111]/80 p-1.5 text-[11px] text-neutral-200 shadow-xl backdrop-blur-xl">
@@ -3719,9 +3769,17 @@ export const SketchCanvas: React.FC<SketchCanvasProps> = ({
       <div
         ref={toolbarRef}
         // ツールバーは幅に余裕がある時だけ上部（モード切替＝ホーム/2D/3D/AI/? の行）に横並びで置く。
-        // ツールバー(約790px)＋モード切替(約490px)は ~1346px 未満では収まらず「?」付近で重なるため（260727 クライアント指摘・1280pxで重なり）、
         // 1400px 未満では従来のモバイル位置（ヘッダーの下・top-[136px]）へ落として重なりを避ける（1400px 以上は横並び）。
         className={`absolute top-[136px] right-3 z-50 max-w-[calc(100vw_-_7rem)] md:max-w-[calc(100vw_-_20rem)] lg:right-6 lg:max-w-[calc(100vw_-_24rem)] min-[1400px]:top-6 pointer-events-auto ${readOnly ? 'hidden' : ''}`}
+        /*
+          横並び（min-[1400px]）のときは、モード切替の実測右端までを避けた幅に制限する（260817 クライアント指摘）。
+          従来は左に空ける量を 24rem(384px) の固定値で見積もっていたが、モード切替は実測約490pxあり、
+          さらに「選択した家具を削除」が出るとツールバー側も広がるため、
+          1650/1550/1440px でツールバーがモード切替の下へ潜り込んで重なっていた。
+          収まらない場合は max-width によって内部が折り返す＝重なる代わりに背が高くなる。
+          その分は左パネルを下げて逃がす（下の panelTop）。
+        */
+        style={inlineToolbarMaxWidth != null ? { maxWidth: inlineToolbarMaxWidth } : undefined}
       >
         <div className="relative glass p-2 lg:p-3 rounded-[24px] border border-white/10 flex flex-wrap items-center justify-end gap-2 lg:gap-3 2xl:gap-6 shadow-2xl backdrop-blur-xl bg-[#111]/80">
 

@@ -20,6 +20,18 @@ interface RenderOverlayState {
    */
   sketchToolbarBottom: number;
   setSketchToolbarBottom: (value: number) => void;
+  /**
+   * モード切替（ホーム/2D/3D/AI＋「?」）の実測右端 X（px, ビューポート基準）。0 = 未計測。
+   *
+   * 2Dの作図ツールバーは右寄せの絶対配置で、左側にどれだけ空けるかを
+   * `max-w-[calc(100vw-24rem)]`（=384px）という固定値で見積もっていた。
+   * 実際のモード切替は約490pxあり、さらに「選択した家具を削除」が出ると
+   * ツールバー自体が広がるため、ツールバーがモード切替の下へ潜り込んで重なっていた
+   * （260817 クライアント指摘・1650/1550/1440px で発生）。
+   * 固定値の見積もりはボタンが増えるたびに破綻するので、実測値を共有して確実に避ける。
+   */
+  modeToggleRight: number;
+  setModeToggleRight: (value: number) => void;
   /** 3Dビューのヘッダー内にインラインの undo/redo を表示中なら true（フローティングの UndoRedoBar を隠す・260623）。 */
   undoRedoInline: boolean;
   setUndoRedoInline: (value: boolean) => void;
@@ -34,6 +46,9 @@ export const useRenderOverlayStore = create<RenderOverlayState>((set) => ({
   sketchToolbarBottom: 0,
   setSketchToolbarBottom: (value) =>
     set((state) => (state.sketchToolbarBottom === value ? state : { sketchToolbarBottom: value })),
+  modeToggleRight: 0,
+  setModeToggleRight: (value) =>
+    set((state) => (state.modeToggleRight === value ? state : { modeToggleRight: value })),
   undoRedoInline: false,
   setUndoRedoInline: (value) =>
     set((state) => (state.undoRedoInline === value ? state : { undoRedoInline: value })),

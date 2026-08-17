@@ -1593,6 +1593,41 @@ const App: React.FC = () => {
     headerBarObserverRef.current = ro;
   }, []);
   useEffect(() => () => { headerBarObserverRef.current?.disconnect(); }, []);
+
+  /*
+    モード切替（ホーム/2D/3D/AI＋「?」）の実測右端を共有ストアへ。
+    2Dの作図ツールバーは右寄せの絶対配置で、左に空ける量を固定値(24rem=384px)で見積もっていたが、
+    実際のモード切替は約490pxあり、「選択した家具を削除」が出るとツールバー側も広がるため、
+    ツールバーがモード切替の下へ潜り込んで重なっていた（260817 クライアント指摘）。
+    固定値ではボタンが増えるたびに破綻するので、実測値を渡して確実に避ける。
+  */
+  const modeToggleObserverRef = useRef<ResizeObserver | null>(null);
+  const setModeToggleNode = useCallback((node: HTMLDivElement | null) => {
+    modeToggleObserverRef.current?.disconnect();
+    modeToggleObserverRef.current = null;
+    if (!node) {
+      useRenderOverlayStore.getState().setModeToggleRight(0);
+      return;
+    }
+    const update = () => {
+      useRenderOverlayStore.getState().setModeToggleRight(Math.round(node.getBoundingClientRect().right));
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(node);
+    modeToggleObserverRef.current = ro;
+    // 折り返しでヘッダー自体の位置が変わる場合にも追従させる。
+    window.addEventListener('resize', update);
+    modeToggleCleanupRef.current = () => window.removeEventListener('resize', update);
+  }, []);
+  const modeToggleCleanupRef = useRef<(() => void) | null>(null);
+  useEffect(
+    () => () => {
+      modeToggleObserverRef.current?.disconnect();
+      modeToggleCleanupRef.current?.();
+    },
+    [],
+  );
   // 3Dビューのキャンバス上端インセット = top-6(24) + ツールバー高 + Undo/Redoバー(上余白10 + 高さ40) + 下余白15。
   // → キャンバスは常に Undo/Redo アイコンの約15px下から始まり、ツールバー領域に食い込まない。未計測時は132で代替。
   const canvasTopInset = headerHeight > 0 ? headerHeight + 89 : 132;
@@ -3104,7 +3139,8 @@ const App: React.FC = () => {
   // 「?」はトグルから独立した別ボタンとして、トグルの「隣」に常設する（260630・クライアント要望/ホームと共通仕様）。
   // toggle と ? を1つの div にまとめる＝親が justify-between でも分離せず常に隣り合う（AIビューでの右寄り誤配置を防ぐ）。
   const renderGlobalModeToggle = (active: 'sketch' | '3D' | 'ai') => (
-    <div className="flex items-center gap-2">
+    // ref は 2D の作図ツールバーが「左にどれだけ空けるか」を実測するために使う（重なり防止）。
+    <div ref={setModeToggleNode} className="flex items-center gap-2">
       <ModeToggleBar
         activeMode={active}
         onSwitchToSketch={navigateToSketch}
