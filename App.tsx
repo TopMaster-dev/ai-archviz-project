@@ -1632,6 +1632,22 @@ const App: React.FC = () => {
   // → キャンバスは常に Undo/Redo アイコンの約15px下から始まり、ツールバー領域に食い込まない。未計測時は132で代替。
   const canvasTopInset = headerHeight > 0 ? headerHeight + 89 : 132;
 
+  /*
+    右レール（見積＋カタログ）が「ドロワー」から「固定カラム」へ変わる幅。
+    2Dビューのみ 1780px、3Dビューは従来どおり 1280px(xl)。理由はレール描画箇所のコメント参照。
+    3つの値は必ず同じ境界で揃えること（片方だけずれるとドロワーと固定カラムが二重に出る）。
+    Tailwind に拾わせるためクラス名は文字列リテラルのまま持つ（組み立てない）。
+  */
+  const railWideOnly2D = viewMode === 'sketch';
+  /** その幅未満だけ表示するもの（ドロワーを開くタブ・背景） */
+  const railDrawerOnlyCls = railWideOnly2D ? 'min-[1780px]:hidden' : 'xl:hidden';
+  /** その幅以上で固定カラム化する aside */
+  const railColumnCls = railWideOnly2D
+    ? 'min-[1780px]:static min-[1780px]:z-20 min-[1780px]:w-[min(34vw,440px)]'
+    : 'xl:static xl:z-20 xl:w-[min(34vw,440px)]';
+  /** その幅以上ではドロワーのスライドアウトを解除する */
+  const railUntranslateCls = railWideOnly2D ? 'min-[1780px]:translate-x-0' : 'xl:translate-x-0';
+
   // 視点操作パネル（MovablePanel）の画面上矩形。選択操作バーが「パネルが下部中央バンドに被るときだけ」上へ
   // 逃げるための位置依存判定に使う（260703 検証B: 高さのみだとパネルを動かした後に空中へ浮く不具合を回避）。
   const [cameraPanelRect, setCameraPanelRect] = useState<{ top: number; bottom: number; left: number; right: number } | null>(null);
@@ -5585,6 +5601,17 @@ const App: React.FC = () => {
       {/* --- RIGHT SIDEBAR (Catalog + Cost) --- xl未満はドロワー、xl以上は固定カラム --- */}
       {/* 3Dビューに加えて2Dビューでも出す（260730 クライアント要望③）。
           レイアウトは flex なので、出すだけで描画エリアと上部UIが自動的に左へ寄る。 */}
+      {/*
+        右レールが固定カラムになる幅（260817 クライアント要望）。
+        2Dビューだけ 1780px、3Dビューは従来どおり 1280px(xl)。
+        2Dは左にも作図パネル(320px)が常駐するため、1280pxで右にも440px取ると
+        中央の作図エリアが両側から挟まれて狭くなりすぎる。3Dに左パネルは無いので据え置き。
+
+        ※Tailwind のクラス名は文字列リテラルで書くこと。
+          `${bp}:hidden` のような組み立てはビルド時のスキャンで拾えない
+          （本番は index.html の Play CDN が実行時 JIT なので動きはするが、
+           ビルド時スキャンへ切り替えた瞬間に無言で壊れる）。
+      */}
       {(viewMode === '3D' || viewMode === 'sketch') && (
         <>
           {/* 狭幅: ドロワーを開くタブ（閉じている間だけ表示） */}
@@ -5592,7 +5619,7 @@ const App: React.FC = () => {
             <button
               type="button"
               onClick={() => setSidebarOpen(true)}
-              className="xl:hidden fixed right-0 top-1/2 z-[60] -translate-y-1/2 flex items-center gap-1.5 rounded-l-2xl border border-r-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-3 pr-2 text-[11px] font-black tracking-widest text-emerald-200 shadow-e3 backdrop-blur-md tap focus-ring safe-r"
+              className={`${railDrawerOnlyCls} fixed right-0 top-1/2 z-[60] -translate-y-1/2 flex items-center gap-1.5 rounded-l-2xl border border-r-0 border-white/15 bg-[#0d0d0d]/95 py-3 pl-3 pr-2 text-[11px] font-black tracking-widest text-emerald-200 shadow-e3 backdrop-blur-md tap focus-ring safe-r`}
               aria-label="見積・カタログを開く"
             >
               <ChevronLeft className="h-4 w-4 shrink-0" />
@@ -5601,12 +5628,12 @@ const App: React.FC = () => {
           )}
           {/* 狭幅: ドロワー背景（タップで閉じる） */}
           {sidebarOpen && (
-            <div className="xl:hidden fixed inset-0 z-[60] bg-black/60" onClick={() => setSidebarOpen(false)} aria-hidden />
+            <div className={`${railDrawerOnlyCls} fixed inset-0 z-[60] bg-black/60`} onClick={() => setSidebarOpen(false)} aria-hidden />
           )}
           <aside
-            className={`fixed inset-y-0 right-0 z-[61] w-[min(92vw,380px)] xl:static xl:z-20 xl:w-[min(34vw,440px)] h-full flex flex-col shrink-0 shadow-2xl bg-[#050505] border-l border-white/5 transition-transform duration-300 ${
+            className={`fixed inset-y-0 right-0 z-[61] w-[min(92vw,380px)] ${railColumnCls} h-full flex flex-col shrink-0 shadow-2xl bg-[#050505] border-l border-white/5 transition-transform duration-300 ${
               sidebarOpen ? 'translate-x-0' : 'translate-x-full'
-            } xl:translate-x-0`}
+            } ${railUntranslateCls}`}
           >
           {/* 1. ESTIMATED COST (Top) */}
           {renderEstimatePanel(false)}
