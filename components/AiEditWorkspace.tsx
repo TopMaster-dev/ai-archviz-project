@@ -55,6 +55,13 @@ import {
 } from '../utils/printExportSpec.js';
 import { resizeDataUrlToLongEdge } from '../utils/normalizeAiEditBase.js';
 import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
+import {
+  ENABLE_GENERATION_SEED,
+  AI_EDIT_BASE_SEED,
+  SEED_OFFSET_COORDINATE,
+  SEED_OFFSET_FINISH,
+  SEED_OFFSET_ENHANCE,
+} from '../lib/aiEditPrompt.js';
 import { matchOverallColorToReference } from '../utils/colorMatch.js';
 import {
   ENABLE_HARMONIZE_FLATTEN,
@@ -101,6 +108,8 @@ type AreaEditFinishCtx = {
   /** 1-B/Stage3 の開口復元(原画を窓へ貼り戻す)専用。窓手前の家具を消さないよう、家具範囲に重なる開口を除いたもの。 */
   openingsForRestore: NormalizedRect[];
   keepQuality: boolean;
+  /** 【案2・260818】仕上げ・精細化パスの seed。生成本体とは別オフセットで衝突を避ける。 */
+  seed?: number;
   isFreePlan: boolean;
 };
 
@@ -933,7 +942,7 @@ export function AiEditWorkspace({
       ctx: AreaEditFinishCtx,
       flags: { runFinishing: boolean; runOpeningRestore: boolean; runEnhance: boolean; runFreePlan: boolean }
     ): Promise<string> => {
-      const { baseW, baseH, imageSize, editedHasReplacement, skipFinishFor1B, anyComposited, allPlacements, surfaceOnly, openings, openingsForRestore } = ctx;
+      const { baseW, baseH, imageSize, editedHasReplacement, skipFinishFor1B, anyComposited, allPlacements, surfaceOnly, openings, openingsForRestore, seed: ctxSeed } = ctx;
       let outUrl = input;
       // 【Stage3-lite・260722】家具/混在の“ソフトなハロー”対策(A/B)。ON のとき、家具/混在では全体仕上げと union 再閉じ込めを
       // 回さず、membrane 済みの per-region 合成結果を直採用＝パッチ（領域だけ別トーン）の発生源を断つ。既定 OFF。
@@ -946,7 +955,7 @@ export function AiEditWorkspace({
           const hres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: finishBase, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+            body: JSON.stringify({ baseImage: finishBase, ...finalPassBody, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize, ...(ctxSeed !== undefined ? { seed: ctxSeed + SEED_OFFSET_FINISH } : {}) }),
           });
           const hdata = await hres.json();
           if (hdata.success && hdata.url) {
@@ -1002,7 +1011,7 @@ export function AiEditWorkspace({
           const eres = await fetch('/api/ai-edit', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-            body: JSON.stringify({ baseImage: enhanceBase, enhanceDetail: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize }),
+            body: JSON.stringify({ baseImage: enhanceBase, enhanceDetail: true, aspectRatio: pickClosestAspectRatio(baseW, baseH), imageSize, ...(ctxSeed !== undefined ? { seed: ctxSeed + SEED_OFFSET_ENHANCE } : {}) }),
           });
           const edata = await eres.json();
           if (edata.success && edata.url) {
@@ -1084,7 +1093,15 @@ export function AiEditWorkspace({
       // 生成結果を1つ作る内部関数（同一入力で複数回呼べば別候補になる・Option 1 複数候補・260717）。
       // draftMode=true のときは高コストな仕上げ段を回さず“ドラフト”を返す（複数候補を安く提示・point2）。返り値は
       // 画像URLと、本番確定（applyAreaEditFinish）で再利用する仕上げコンテキスト。
-      const produceOne = async (draftMode = false): Promise<{ url: string; ctx: AreaEditFinishCtx }> => {
+      /*
+        【案2・260818】candidateIndex は seed のオフセット。
+        AI_EDIT_BASE_SEED + candidateIndex とすることで、
+         ・1回の操作の中では候補ごとに違う絵（3枚から選ぶ意味は保たれる）
+         ・同じ操作を繰り返せば同じ3枚が返る（再現性）
+        の両立になる。ENABLE_GENERATION_SEED=false のときは seed を送らず従来挙動。
+      */
+      const produceOne = async (draftMode = false, candidateIndex = 0): Promise<{ url: string; ctx: AreaEditFinishCtx }> => {
+      const seed = ENABLE_GENERATION_SEED ? AI_EDIT_BASE_SEED + candidateIndex : undefined;
       // 生成結果（エリア編集は Gemini のみ・範囲ごとにクロップ＋範囲外の閉じ込め）。
       let outUrl: string | null = null;
       // 仕上げ段のコンテキストと戻し先（Gemini 経路の内側で確定するため外側に控える・point2）。
@@ -1229,6 +1246,7 @@ export function AiEditWorkspace({
             // 1-B（面仕上げのみを全画面採用）では合成でポリゴン外を保護しない分、モデル側の「この範囲だけ触る」指示を
             // 常に強制して家具・床・他壁の描き替え（drift）を最大限抑止する（260720）。
             strictConfine: useFullFrame || !!cropPx || !objIsGlobal || multiRegion,
+            ...(seed !== undefined ? { seed } : {}),
             ...(narratives[o.id] ? { placementNarratives: { [o.id]: narratives[o.id] } } : {}),
           };
           const res = await fetch('/api/ai-edit', {
@@ -1460,6 +1478,7 @@ export function AiEditWorkspace({
         openingsForRestore,
         keepQuality,
         isFreePlan,
+        ...(seed !== undefined ? { seed } : {}),
       };
       } // === Gemini 経路ここまで（if (outUrl == null)）===
 
@@ -1495,7 +1514,7 @@ export function AiEditWorkspace({
         let lastErr: unknown = null;
         for (let i = 0; i < count; i++) {
           try {
-            const r = await produceOne(true);
+            const r = await produceOne(true, i);
             drafts.push(r);
             // 完了した候補を即オーバーレイへ反映（届いた順にサムネ表示＝進捗が見える・point3）。
             setGenProgress({ total: count, done: drafts.map((d) => d.url) });
@@ -1712,11 +1731,13 @@ export function AiEditWorkspace({
         コーディネートは仕上げ段を持たないため、エリア編集のような「ドラフトは安く／採用時に本番確定」
         の2段構えは不要で、生成回数＝候補数ちょうどになる。
       */
-      const produceOneCoordinate = async (): Promise<string> => {
+      // 【案2・260818】エリア編集と同じく候補ごとに seed をずらす（衝突しないよう +500 帯を使う）。
+      const produceOneCoordinate = async (candidateIndex = 0): Promise<string> => {
+        const seed = ENABLE_GENERATION_SEED ? AI_EDIT_BASE_SEED + SEED_OFFSET_COORDINATE + candidateIndex : undefined;
         const res = await fetch('/api/ai-edit', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...geminiAuthHeaders() },
-          body: JSON.stringify(body),
+          body: JSON.stringify(seed !== undefined ? { ...body, seed } : body),
         });
         const data = await res.json();
         if (!data.success) throw new Error(data.error || 'コーディネートに失敗しました');
@@ -1752,7 +1773,7 @@ export function AiEditWorkspace({
         let lastErr: unknown = null;
         for (let i = 0; i < count; i++) {
           try {
-            const u = await produceOneCoordinate();
+            const u = await produceOneCoordinate(i);
             drafts.push(u);
             setGenProgress({ total: count, done: [...drafts] });
           } catch (e) {

@@ -1,5 +1,5 @@
 import type { AiEditObjectReference, AgentCatalogEntry, AgentRecommendation } from '../types.js';
-import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildNaturalizePrompt, buildEnhanceDetailPrompt, describeObjectPlacements } from './aiEditPrompt.js';
+import { buildAiEditReferenceGuide, buildHarmonizePrompt, buildNaturalizePrompt, buildEnhanceDetailPrompt, describeObjectPlacements, AI_EDIT_TEMPERATURE, ENABLE_GENERATION_SEED, AI_EDIT_BASE_SEED } from './aiEditPrompt.js';
 import { resolveAgentRecommendations } from './agentCatalog.js';
 import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './agentAttachments.js';
 
@@ -754,6 +754,8 @@ export async function generateGeminiImageEdit(
     enhanceDetail?: boolean;
     /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
     strictConfine?: boolean;
+    /** 【案2・260818】生成の再現性用 seed。未指定なら seed を送らない（従来挙動）。 */
+    seed?: number;
     /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
     qualityRefImageDataUrl?: string | null;
   }
@@ -828,7 +830,11 @@ export async function generateGeminiImageEdit(
   const aspectRatio = params.aspectRatio || '16:9';
   const imageSize = params.imageSize || '2K';
 
-  const payload = {
+  /*
+    【案2・260818】seed は画像モデルでの対応が未確認のため、payload を関数で組み立てる。
+    seed 付きで送って拒否された場合に、seed 抜きで1回だけ再送できるようにする（未対応でも編集を失敗させない）。
+  */
+  const buildPayload = (withSeed: boolean) => ({
     contents: [
       {
         role: 'user',
@@ -837,9 +843,10 @@ export async function generateGeminiImageEdit(
     ],
     generationConfig: {
       // 均一化・精細化は最小変更＝低温度で（構図/内容を動かさない）。
-      // 通常編集は 0.25→0.18 に低下（260722 クライアント報告: 候補2・3が指示と大きく外れる件）。温度が高いほど指示から
-      // 逸脱した“外れ”候補が出やすい。0.18 は候補間に多少の差は残しつつ、指示外の暴れを抑えるバランス。
-      temperature: params.harmonize ? 0.1 : params.naturalize ? 0.15 : params.enhanceDetail ? 0.12 : 0.18,
+      // 通常編集は 0.25→0.18（260722 候補が指示から外れる件）→ AI_EDIT_TEMPERATURE=0.05（260818 構図/画角が変わる件）。
+      // 温度が高いほど入力から逸脱しやすく、全画面採用では逸脱がそのまま構図の変化になる。
+      temperature: params.harmonize ? 0.1 : params.naturalize ? 0.15 : params.enhanceDetail ? 0.12 : AI_EDIT_TEMPERATURE,
+      ...(withSeed && ENABLE_GENERATION_SEED && typeof params.seed === 'number' ? { seed: params.seed } : {}),
       // 高解像度（2K/4K）では TEXT+IMAGE 同時要求時に生成が途中劣化し「白ぼやけ」する事象があったため、
       // 実績のあるレンダー/書き出し経路（generateGeminiImage）と同じ画像のみ（['IMAGE']）へ切替える。
       // 1K は従来どおり ['TEXT','IMAGE']（クライアント承認済みの現行挙動を不変に保つ）。TEXT 出力は元々使っていない。
@@ -849,18 +856,33 @@ export async function generateGeminiImageEdit(
         imageSize,
       },
     },
-  };
+  });
 
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_IMAGE_MODEL}:generateContent`;
 
-  const response = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-goog-api-key': apiKey,
-    },
-    body: JSON.stringify(payload),
-  });
+  const send = (withSeed: boolean) =>
+    fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': apiKey,
+      },
+      body: JSON.stringify(buildPayload(withSeed)),
+    });
+
+  const wantSeed = ENABLE_GENERATION_SEED && typeof params.seed === 'number';
+  let response = await send(wantSeed);
+
+  /*
+    【案2・260818】画像モデルが generationConfig.seed を受け付けるかは実機未確認。
+    未対応なら 400 が返るはずなので、そのときだけ seed 抜きで1回だけ再送する。
+    ＝seed 非対応の環境でも編集は失敗しない（再現性だけが失われる）。
+    seed と無関係な 400（画像が大きすぎる等）でも1回余計に送ることになるが、
+    どのみち同じエラーで失敗するため実害は無い（呼び出し1回ぶんの増加のみ）。
+  */
+  if (wantSeed && !response.ok && response.status === 400) {
+    response = await send(false);
+  }
 
   if (!response.ok) {
     const errText = await response.text();

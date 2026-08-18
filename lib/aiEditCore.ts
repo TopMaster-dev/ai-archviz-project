@@ -27,6 +27,8 @@ export interface AiEditRequestBody {
   learnedHints?: unknown;
   /** 「範囲外を変えない（はみ出し防止）」トグル（260708）。true=厳密に閉じ込め、false（既定）=自然な統合を優先。 */
   strictConfine?: boolean;
+  /** 【案2・260818】生成の再現性用 seed。同じ操作を繰り返しても同じ絵が返るようにする。 */
+  seed?: number;
   /** 画質を保つハイブリッド（260708）: 最初のレンダー画像を「画質・素材の見本」として渡す（形・位置・変更には使わない）。 */
   qualityRefImage?: string;
   /** クライアントが先に /api/ai-edit(analyze:true) で得た事前解析（objectId→説明）。あれば再解析せず使う（260709・二重解析回避）。 */
@@ -116,6 +118,14 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
     typeof body.aspectRatio === 'string' && body.aspectRatio.trim() ? body.aspectRatio.trim() : undefined;
   const imageSize =
     typeof body.imageSize === 'string' && body.imageSize.trim() ? body.imageSize.trim() : undefined;
+  /*
+    【案2・260818】seed。有限の整数だけを通す（NaN/Infinity/小数はモデルが拒否しうるため落とす）。
+    未指定なら undefined のままで、従来どおり seed を送らない。
+  */
+  const seed =
+    typeof body.seed === 'number' && Number.isFinite(body.seed)
+      ? Math.trunc(body.seed)
+      : undefined;
 
   // 事前解析（generatePlacementNarratives）: 範囲ごとに対象・位置・向き・前後・維持対象を読み取り、生成の参考に
   // 添える（あくまで助言。座標が最優先）。失敗時は解析なしで生成を続行する（ベストエフォート）。
@@ -156,6 +166,7 @@ export async function runAiEdit(apiKey: string, body: AiEditRequestBody): Promis
       enhanceDetail,
       learnedHints,
       strictConfine: body.strictConfine === true,
+      ...(seed !== undefined ? { seed } : {}),
       qualityRefImageDataUrl,
     });
     return { success: true, url, usage, model: GEMINI_IMAGE_MODEL };
