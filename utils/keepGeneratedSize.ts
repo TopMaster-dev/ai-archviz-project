@@ -1,3 +1,5 @@
+import { ENABLE_KEEP_GENERATED_SIZE } from './printExportSpec.js';
+
 /**
  * 生成結果を「リサイズせずに」採用するための寸法計算
  * （260731 クライアント指摘「編集を重ねるとぼやける」／260814 手段1・2 として実装）。
@@ -39,7 +41,16 @@ export interface Size {
  * @param base   いまの版の実寸（**アスペクト比の基準にのみ使う**。寸法の下限ではない）。
  * @param output 生成結果の実寸。
  */
-export function keepGeneratedSize(base: Size, output: Size): Size {
+export function keepGeneratedSize(
+  base: Size,
+  output: Size,
+  /**
+   * true = 手段1（生成寸法をそのまま採用。生成がベースより小さくても拡大しない）。
+   * false = 手段1 導入前の挙動（生成がベースより小さければベース寸法へ拡大する）。
+   * 既定はフラグに従う。テストが両モードを直接検証できるよう引数にしてある。
+   */
+  adoptGenerated: boolean = ENABLE_KEEP_GENERATED_SIZE,
+): Size {
   // Math.max(1, Math.round(NaN)) は NaN になるため、先に有限判定でふるい落とす
   // （寸法に NaN が混ざるとキャンバスの生成ごと失敗する）。
   const px = (v: number) => (Number.isFinite(v) && v > 0 ? Math.max(1, Math.round(v)) : 1);
@@ -51,6 +62,14 @@ export function keepGeneratedSize(base: Size, output: Size): Size {
   const scale = Math.min(ow / bw, oh / bh);
   // 寸法が壊れている場合のみベースへ退避（0除算・NaN 対策）。
   if (!Number.isFinite(scale) || scale <= 0) return { w: bw, h: bh };
+
+  /*
+    【260818 フェーズ0】手段1 が無効のときは、導入前のクランプを復元する。
+    このクランプの有無が手段1の実体であり、共有関数なので
+    精細化(enhance)・画質を戻す の2経路もここを通る。
+    呼び出し側のフラグ分岐だけでは、その2経路が巻き戻らず A/B の結果が濁る。
+  */
+  if (!adoptGenerated && scale <= 1) return { w: bw, h: bh };
 
   // ベースのアスペクト比のまま、生成結果に収まる最大の寸法。
   // 比が一致していれば scale = ow/bw となり、生成寸法がそのまま返る＝リサイズが起きない。
