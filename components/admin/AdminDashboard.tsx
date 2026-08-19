@@ -950,6 +950,12 @@ export function AdminDashboard() {
   const [state, setState] = useState<'loading' | 'forbidden' | 'ready' | 'error'>('loading');
   const [email, setEmail] = useState<string | null>(null);
   const [keys, setKeys] = useState<KeyItem[]>([]);
+  // 【案1・260818】画像モデルの固定状況。preview 版のままだと提供元の更新で挙動が変わりうる。
+  const [imageModel, setImageModel] = useState<{
+    current: { resolved: string; source: 'env' | 'default'; unstable: boolean; envVar: string };
+    available: Array<{ id: string; displayName: string; unstable: boolean }>;
+    note?: string;
+  } | null>(null);
   const [summary, setSummary] = useState<Summary | null>(null);
   const [infra, setInfra] = useState<InfraStatus | null>(null);
   const [tests, setTests] = useState<Record<string, KeyTest | 'testing'>>({});
@@ -1050,14 +1056,16 @@ export function AdminDashboard() {
           return;
         }
         setEmail(who.email ?? null);
-        const [kh, us, inf] = await Promise.all([
+        const [kh, us, inf, im] = await Promise.all([
           adminFetch('keyhealth').then((r) => r.json()),
           adminFetch('usage').then((r) => r.json()),
           adminFetch('infra').then((r) => r.json()),
+          adminFetch('image-models').then((r) => r.json()).catch(() => null),
         ]);
         setKeys(Array.isArray(kh?.keys) ? kh.keys : []);
         setSummary(us?.summary ?? null);
         setInfra(inf?.infra ?? null);
+        setImageModel(im?.current ? { current: im.current, available: im.available ?? [], note: im.note } : null);
         setState('ready');
       } catch {
         setState('error');
@@ -1119,6 +1127,53 @@ export function AdminDashboard() {
           </div>
           <span className="text-xs text-neutral-400">{email}</span>
         </header>
+
+        {/* 【案1・260818】画像モデルの固定状況。 */}
+        {imageModel && (
+          <section className="space-y-2">
+            <h2 className="text-sm font-bold text-neutral-200">画像生成モデル</h2>
+            <Card>
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-mono text-sm">{imageModel.current.resolved}</span>
+                <span
+                  className={`rounded px-2 py-0.5 text-[11px] font-bold ${
+                    imageModel.current.unstable ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/15 text-emerald-300'
+                  }`}
+                >
+                  {imageModel.current.unstable ? 'preview版（提供元都合で挙動が変わりうる）' : '安定版'}
+                </span>
+                <span className="rounded bg-neutral-700/50 px-2 py-0.5 text-[11px] text-neutral-300">
+                  {imageModel.current.source === 'env' ? 'env で固定済み' : 'コード既定（未固定）'}
+                </span>
+              </div>
+              {imageModel.current.unstable && (
+                <div className="mt-2 text-[11px] text-amber-200/80">
+                  preview 版はコードを変更しなくても生成結果の傾向が変わることがあります。
+                  下の一覧から安定版を選び、環境変数 <span className="font-mono">{imageModel.current.envVar}</span> に設定して固定してください（再デプロイのみ・コード変更不要）。
+                </div>
+              )}
+              {imageModel.note && <div className="mt-2 text-[11px] text-neutral-500">{imageModel.note}</div>}
+              {imageModel.available.length > 0 && (
+                <div className="mt-3">
+                  <div className="text-[11px] text-neutral-400">このキーで使える画像モデル</div>
+                  <ul className="mt-1 space-y-1">
+                    {imageModel.available.map((m) => (
+                      <li key={m.id} className="flex items-center gap-2 text-[11px]">
+                        <span className="font-mono text-neutral-200">{m.id}</span>
+                        {m.unstable ? (
+                          <span className="text-amber-300/80">preview</span>
+                        ) : (
+                          <span className="text-emerald-300/80">安定</span>
+                        )}
+                        {m.id === imageModel.current.resolved && <span className="text-neutral-400">← 使用中</span>}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </Card>
+          </section>
+        )}
 
         {/* AIキーの状態（プランA: 値は表示しない） */}
         <section className="space-y-2">

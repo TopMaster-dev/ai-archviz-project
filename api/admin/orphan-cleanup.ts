@@ -1,3 +1,4 @@
+import { getImageModelStatus, listAvailableImageModels } from '../../lib/gemini.js';
 import { runOrphanCleanup } from '../../lib/server/orphanCleanup.js';
 import {
   verifyAdmin,
@@ -60,7 +61,7 @@ export default async function handler(req: any, res: any) {
   // --- 管理ダッシュボード（メール許可リスト認証）---
   // READ: 状態の取得（GET）。WRITE: 猶予期間の設定（#4・必ず POST）。いずれも verifyAdmin 必須。
   const action = getAction(req);
-  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests', 'furniture-categories'];
+  const DASHBOARD_ACTIONS = ['whoami', 'keyhealth', 'usage', 'user-usage', 'testkey', 'infra', 'user-status', 'list-requests', 'furniture-categories', 'image-models'];
   const WRITE_ACTIONS = ['set-grace', 'approve-request', 'reject-request', 'share-project', 'sign-3d-upload', 'set-3d-meta', 'rename-3d-category', 'delete-3d-category'];
   if (DASHBOARD_ACTIONS.includes(action) || WRITE_ACTIONS.includes(action)) {
     const authHeader = (req.headers['authorization'] || req.headers['Authorization']) as string | undefined;
@@ -72,6 +73,38 @@ export default async function handler(req: any, res: any) {
     }
     if (!admin.ok) return res.status(admin.status).json({ error: admin.error });
     if (action === 'keyhealth') return res.status(200).json({ success: true, keys: getKeyHealth() });
+    /*
+      【案1・260818】画像モデルの固定を支援する読み取り専用アクション。
+      既定が preview 版のため、提供元の更新でコード無変更のまま挙動が変わりうる
+      （260817「構図が若干拡大される」の調査で最後まで候補に残った）。
+      ・current: いま実際に使われている ID と、preview かどうか
+      ・available: この API キーで使える画像モデル一覧（安定版を先頭に）
+      推測で ID を定数へ埋め込まず、実際のキーで問い合わせて選べるようにする。
+      一覧の取得はサービスキーが無い環境では失敗しうるので、current だけは必ず返す。
+    */
+    if (action === 'image-models') {
+      const current = getImageModelStatus();
+      const apiKey = process.env.GEMINI_API_KEY || '';
+      if (!apiKey) {
+        return res.status(200).json({
+          success: true,
+          current,
+          available: [],
+          note: 'GEMINI_API_KEY が未設定のため一覧を取得できません（current のみ表示）。',
+        });
+      }
+      try {
+        const available = await listAvailableImageModels(apiKey);
+        return res.status(200).json({ success: true, current, available });
+      } catch (e: any) {
+        return res.status(200).json({
+          success: true,
+          current,
+          available: [],
+          note: `一覧の取得に失敗しました: ${e?.message || e}`,
+        });
+      }
+    }
     if (action === 'usage') {
       const from = getQueryParam(req, 'from') || null; // 任意の期間フィルタ（ISO・空=全期間）
       const to = getQueryParam(req, 'to') || null;

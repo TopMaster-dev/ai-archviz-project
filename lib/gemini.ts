@@ -17,8 +17,75 @@ import { resolveAttachmentMime, isGeminiInlineSupported, parseDataUrl } from './
 const resolveEnvModel = (name: string): string | undefined =>
   (typeof process !== 'undefined' ? process.env?.[name]?.trim() : undefined) || undefined;
 
+/**
+ * 画像モデルの既定値。**preview 版**である点に注意（260818 案1）。
+ *
+ * preview 版は提供元（Google）が予告なく挙動を更新する前提の版で、こちらがコードを
+ * 1行も変えなくても、ある日から構図の動き方や作風が変わりうる。実際 260817 に
+ * 「構図が若干拡大される」というご指摘があり、原因調査で最後まで候補に残った。
+ *
+ * 本番では env GEMINI_IMAGE_MODEL に安定版を設定して固定すること（コード変更不要）。
+ * 設定できる ID は管理画面の `action=image-models` で、実際の API キーから取得できる。
+ */
+export const GEMINI_IMAGE_MODEL_DEFAULT = 'gemini-3-pro-image-preview';
+
 /** 画像生成・編集モデル（AIレンダリング / AI画像編集）。品質重視。env GEMINI_IMAGE_MODEL で上書き可。 */
-export const GEMINI_IMAGE_MODEL = resolveEnvModel('GEMINI_IMAGE_MODEL') || 'gemini-3-pro-image-preview';
+export const GEMINI_IMAGE_MODEL = resolveEnvModel('GEMINI_IMAGE_MODEL') || GEMINI_IMAGE_MODEL_DEFAULT;
+
+/**
+ * preview / experimental 版かどうか（案1）。
+ * true の間は提供元都合で挙動が変わりうるため、管理画面で警告を出す。
+ */
+export function isUnstableModelId(id: string): boolean {
+  const v = id.toLowerCase();
+  // preview / experimental / -exp を含む ID は提供元都合で挙動が変わりうる。
+  return v.includes('preview') || v.includes('experimental') || v.includes('-exp');
+}
+
+/** 画像モデルの現在の状態（管理画面表示用・実キーは含めない）。 */
+export function getImageModelStatus(): {
+  resolved: string;
+  source: 'env' | 'default';
+  unstable: boolean;
+  envVar: string;
+} {
+  const fromEnv = resolveEnvModel('GEMINI_IMAGE_MODEL');
+  return {
+    resolved: GEMINI_IMAGE_MODEL,
+    source: fromEnv ? 'env' : 'default',
+    unstable: isUnstableModelId(GEMINI_IMAGE_MODEL),
+    envVar: 'GEMINI_IMAGE_MODEL',
+  };
+}
+
+/**
+ * この API キーで使える画像生成対応モデルの一覧（案1・安定版の ID を調べるため）。
+ * どの ID が有効かは提供元の更新で変わるため、推測で定数に埋め込まず実際に問い合わせる。
+ */
+export async function listAvailableImageModels(apiKey: string): Promise<
+  Array<{ id: string; displayName: string; unstable: boolean }>
+> {
+  const res = await fetch('https://generativelanguage.googleapis.com/v1beta/models?pageSize=200', {
+    headers: { 'x-goog-api-key': apiKey },
+  });
+  if (!res.ok) throw new Error(`モデル一覧の取得に失敗しました: ${res.status}`);
+  const json = (await res.json()) as {
+    models?: Array<{ name?: string; displayName?: string; supportedGenerationMethods?: string[] }>;
+  };
+  const out: Array<{ id: string; displayName: string; unstable: boolean }> = [];
+  for (const m of json.models || []) {
+    const raw = m.name || '';
+    const id = raw.startsWith('models/') ? raw.slice('models/'.length) : raw;
+    if (!id) continue;
+    // 画像生成に使えるものだけ（generateContent 対応かつ ID に image を含む）。
+    if (!(m.supportedGenerationMethods || []).includes('generateContent')) continue;
+    if (!id.toLowerCase().includes('image')) continue;
+    out.push({ id, displayName: m.displayName || id, unstable: isUnstableModelId(id) });
+  }
+  // 安定版を先に、次に ID 順（選びやすさ優先）。
+  out.sort((a, b) => (a.unstable === b.unstable ? a.id.localeCompare(b.id) : a.unstable ? 1 : -1));
+  return out;
+}
 
 // トークン計測（管理表 row 58）。Gemini generateContent 応答の usageMetadata からトークン数を取り出す。
 export interface TokenUsage {
