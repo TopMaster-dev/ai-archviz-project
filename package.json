@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "measure:gemini-sizes": "node scripts/measureGeminiSizes.mjs"
   },
   "dependencies": {
     "@google/genai": "^1.40.0",

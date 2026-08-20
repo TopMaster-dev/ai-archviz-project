@@ -53,7 +53,7 @@ import {
   AREA_EDIT_BASE_MAX_SIDE,
   ENABLE_KEEP_GENERATED_SIZE,
 } from '../utils/printExportSpec.js';
-import { resizeDataUrlToLongEdge } from '../utils/normalizeAiEditBase.js';
+import { resizeDataUrlToLongEdge, measuredGeneratedSize, FALLBACK_LONG_EDGE } from '../utils/normalizeAiEditBase.js';
 import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
 import {
   ENABLE_GENERATION_SEED,
@@ -814,7 +814,20 @@ export function AiEditWorkspace({
        * 写真側もここで同じ長辺に揃えることで、両者の仕様が一致する。
        * 上限で頭打ちにするだけだった従来（260731）は、小さい写真だと小さいまま残っていた。
        */
-      const sized = await resizeDataUrlToLongEdge(cropped, PREVIEW_GEMINI_LONG_EDGE);
+      /*
+        【260820 クライアント指摘】写真PJでも構図が拡大される件。
+        原因は版1の幾何が生成結果と一致していないこと。従来は長辺を 2688 に揃えていたが、
+        実際の生成は 2752x1536 で、(1) 入力2688 と 要求出力2752 が食い違い、
+        (2) 生成結果を版寸法へ cover で戻すたび中央クロップが入り蓄積していた
+        （16:9 で 0.8%/回・10回で画角92.6%）。
+        実測がある比率は生成結果と同じ寸法ちょうどに合わせる＝図面PJと同条件にする。
+        未実測の比率は長辺だけ実測値に合わせる（少なくとも解像度の食い違いは消える）。
+      */
+      const nat = await loadImageNaturalSize(cropped);
+      const exact = measuredGeneratedSize(nat.w, nat.h);
+      const sized = exact
+        ? await fitDataUrlToSize(cropped, exact.w, exact.h, 'cover')
+        : await resizeDataUrlToLongEdge(cropped, FALLBACK_LONG_EDGE);
       onUploadBaseImage?.(sized);
     } catch {
       /* ignore */

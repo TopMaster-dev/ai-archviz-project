@@ -1,3 +1,28 @@
+import { MEASURED_GEMINI_2K_SIZES, MEASURED_GEMINI_2K_LONG_EDGE } from './printExportSpec.js';
+import { pickClosestAspectRatio } from './pickClosestAspectRatio.js';
+
+/**
+ * 取り込んだ写真を、生成結果と同じ幾何へ合わせるための目標寸法（260820）。
+ *
+ * 版1と生成結果の幾何が一致していれば、
+ *  ・モデルへの入力と要求出力の解像度が一致する（描き直しの誘発を避ける）
+ *  ・生成結果を版寸法へ合わせる際のクロップがゼロになる（編集ごとの蓄積が消える）
+ * ＝図面PJ（版1が生成画像そのもの）と同じ条件になる。
+ *
+ * 比率の判定には、生成リクエストで使うのと同じ pickClosestAspectRatio を用いる。
+ * 別の関数で判定すると、土台の比と要求する比がずれて本末転倒になる。
+ *
+ * 未実測の比率は null を返す（呼び出し側は長辺のみを合わせる暫定動作へ落とす）。
+ * 推測値でテーブルを埋めないこと。推測が今回の一連の不具合の原因だった。
+ */
+export function measuredGeneratedSize(width: number, height: number): { w: number; h: number } | null {
+  if (!(width > 0) || !(height > 0)) return null;
+  const key = pickClosestAspectRatio(width, height);
+  return MEASURED_GEMINI_2K_SIZES[key] ?? null;
+}
+
+/** 未実測の比率で使う暫定の長辺（実測済みの 2K 長辺に合わせる）。 */
+export const FALLBACK_LONG_EDGE = MEASURED_GEMINI_2K_LONG_EDGE;
 /**
  * 「AIで写真編集」の土台画像を、「図面からパース作成」と同じ出力サイズへ揃える
  * （260812 クライアント要望「どちらも同じ仕様（出力サイズ）にしてほしい」）。
