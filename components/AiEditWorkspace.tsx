@@ -54,6 +54,7 @@ import {
   ENABLE_KEEP_GENERATED_SIZE,
 } from '../utils/printExportSpec.js';
 import { resizeDataUrlToLongEdge, measuredGeneratedSize, FALLBACK_LONG_EDGE } from '../utils/normalizeAiEditBase.js';
+import { generatedSizeKey, recallGeneratedSize, rememberGeneratedSize } from '../utils/generatedSizeMemory.js';
 import { keepGeneratedSize } from '../utils/keepGeneratedSize.js';
 import {
   ENABLE_GENERATION_SEED,
@@ -1057,12 +1058,37 @@ export function AiEditWorkspace({
       const baseScaled = await downscaleDataUrlIfNeeded(await ensureDataUrl(activeVersion.outputImageDataUrl), AREA_EDIT_BASE_MAX_SIDE);
       // 「画質を高める」は 2枚目の見本画像を渡す旧方式を廃止（ゴースト原因・260710）。生成後に現在の1枚だけを
       // 精細化する後処理パス（enhanceDetail）に置換したため、ここでは見本画像を一切用意しない。
-      const { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
+      let baseScaledNormalized = baseScaled;
+      let { w: baseW, h: baseH } = await loadImageNaturalSize(baseScaled);
       const aspectRatio = pickClosestAspectRatio(baseW, baseH);
+
       // 生成サイズは AIレンダリングと共有の PREVIEW_GEMINI_IMAGE_SIZE（既定1K）。2K は過去に編集経路で白ぼやけ報告が
       // あったが、その一因（['TEXT','IMAGE'] 同時要求）は 2K/4K 時に画像のみへ切替える対策を入れた（lib/gemini.ts）。
       // 2K 検証は utils/printExportSpec.ts の ENABLE_2K_PREVIEW を true にして実機確認する（既定1Kのまま挙動不変）。
       const imageSize = PREVIEW_GEMINI_IMAGE_SIZE;
+
+      /*
+        【260821 クライアント指摘】写真PJのエリア編集で拡大が残る件。
+
+        版1の幾何が生成結果と一致していないと、(1)モデルへの入力と要求出力の解像度が
+        食い違って描き直しを誘発し、(2)生成結果を版寸法へ戻す際の中央クロップが毎回蓄積する。
+        260820 の修正は「取り込み時」にしか効かないため、既にある写真プロジェクトは
+        版1が古い寸法のまま残り、症状が続いていた。
+
+        ここで土台を「その条件で実際に返ってくる寸法」へ揃える＝既存プロジェクトも
+        次の編集で収束する。図面PJは版1が生成画像そのものなので既に一致しており、
+        この処理は何もしない（no-op）。
+
+        一度だけ 0.8% 程度のクロップが入るが、放置すると毎回同じだけ削られて
+        蓄積する（16:9 で10回編集すると画角92.6%）。一度で止めるほうが損失は小さい。
+      */
+      const sizeKey = generatedSizeKey(imageSize, aspectRatio);
+      const expected = recallGeneratedSize(sizeKey, aspectRatio);
+      if (expected && (expected.w !== baseW || expected.h !== baseH)) {
+        baseScaledNormalized = await fitDataUrlToSize(baseScaled, expected.w, expected.h, 'cover');
+        baseW = expected.w;
+        baseH = expected.h;
+      }
 
       // 参照画像は「寸法を2048へ丸め」たうえで「送信サイズ（バイト）予算」まで圧縮する（260718）。
       // 旧実装は downscaleDataUrlIfNeeded で寸法しか丸めず（PNG はロスレスで実バイトが減らない）、2MB級の参照＋base を
@@ -1086,7 +1112,7 @@ export function AiEditWorkspace({
       // 各範囲は base+参照1枚を1つの JSON body で送るため、最悪ケース（送信用に圧縮した base＋最大の参照1枚）で概算し、
       // 圧縮後もなお上限を超える場合は、原因不明の失敗ではなく明確なメッセージで止める（コーディネート欄と同じ考え方）。
       // ※通常は上の圧縮で収まるため、これは圧縮しきれない特殊ケースの保険。
-      const sentBaseForCheck = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
+      const sentBaseForCheck = await compressDataUrlToBudget(baseScaledNormalized, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
       const maxRefBytes = objectsScaled.reduce(
         (m, o) => Math.max(m, o.imageDataUrl ? dataUrlTransmitBytes(o.imageDataUrl) : 0),
         0
@@ -1292,6 +1318,8 @@ export function AiEditWorkspace({
           }
           // 全画面生成（大領域／範囲がバラけて全範囲クロップが効かない）。
           const { w: gemW, h: gemH } = await loadImageNaturalSize(data.url as string);
+          // 次回以降このモデル・比率で土台を揃えるために、実際に返ってきた寸法を覚える。
+          rememberGeneratedSize(generatedSizeKey(imageSize, postAspect), gemW, gemH, data.model);
           const isBounded = !objIsGlobal;
           // 複数範囲では cover 固定でレターボックスを避ける（座標整合）。
           const mode: 'cover' | 'contain' =
@@ -1371,7 +1399,7 @@ export function AiEditWorkspace({
       const processOrder = [...objectsScaled].sort(
         (a, b) => (occludedMap[a.id] ? 0 : 1) - (occludedMap[b.id] ? 0 : 1)
       );
-      let workingBase = baseScaled;
+      let workingBase = baseScaledNormalized;
       let editedCount = 0;
       let editedRegions = 0; // 編集に成功した“範囲（placement）”の総数。最終仕上げの発火判定に使う（オブジェクト数ではなく範囲数）。
       let editedHasReplacement = false; // 実際に成功した編集の中に「差し替え（参照画像あり）」が含まれるか＝最終パスの種類選択に使う。
@@ -1384,7 +1412,7 @@ export function AiEditWorkspace({
       let oneShotDone = false;
       if (ENABLE_AREA_EDIT_ONESHOT && useFullFrame && objectsScaled.length >= 2) {
         try {
-          const sentBase = await compressDataUrlToBudget(baseScaled, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
+          const sentBase = await compressDataUrlToBudget(baseScaledNormalized, { maxBytes: SEND_BASE_MAX_BYTES, maxSide: AREA_EDIT_BASE_MAX_SIDE });
           // 複数参照を1 body に載せるため、参照画像は「(body上限−base)を参照枚数で割った予算」まで圧縮（Vercel body 上限対策）。
           const refCount = objectsScaled.filter((o) => !!o.imageDataUrl).length;
           const refBudget =
@@ -1502,7 +1530,7 @@ export function AiEditWorkspace({
       // 仕上げ段を実行（point2・260721）。draftMode=true（候補生成）は高コスト段（仕上げ Gemini・精細化・フリープラン後処理）を
       // 回さず素早く安く提示し、ユーザーが1枚選んだ“本番確定”でのみ通す。1-B 開口復元はドラフト時に実施済みなので本番確定側は
       // 再実施しない（handleSelectCandidate で runOpeningRestore=false）。生成側（ここ）は常に true。
-      outUrl = await applyAreaEditFinish(outUrl, confineBaseForFinish, baseScaled, finishCtx, {
+      outUrl = await applyAreaEditFinish(outUrl, confineBaseForFinish, baseScaledNormalized, finishCtx, {
         runFinishing: !draftMode,
         runOpeningRestore: true,
         runEnhance: !draftMode,
