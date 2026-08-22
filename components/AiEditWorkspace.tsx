@@ -2082,6 +2082,11 @@ export function AiEditWorkspace({
 
   return (
     <div className="fixed inset-0 z-[10000] flex flex-col bg-zinc-950 text-white pl-3 pr-0 pt-0 pb-0 gap-3">
+      {/*
+        写真選択の input。履歴パネルの「写真を追加」から使うため、空状態だけでなく
+        通常UIにも常設する（空状態側の input は早期 return の中なので、ここには現れない）。
+      */}
+      <input ref={baseInputRef} type="file" accept="image/*" className="hidden" onChange={onPickBaseFile} />
       {/* アップロード直後のクロップ画面（AI対応比率へ・構図ズレ根本解決・260703）。 */}
       {cropSrc && (
         <ImageCropDialog
@@ -2132,8 +2137,32 @@ export function AiEditWorkspace({
             historyOpen ? 'translate-x-0' : '-translate-x-[110%]'
           } md:translate-x-0`}
         >
-          <div className="p-3 pb-2 border-b border-white/10 shrink-0">
+          <div className="p-3 pb-2 border-b border-white/10 shrink-0 space-y-2">
             <div className="text-[10px] font-black uppercase tracking-widest text-neutral-500">履歴</div>
+            {/*
+              【260821 クライアント指摘】写真PJだけ構図のズレが止まらない件への対策の1つ。
+
+              編集の土台は常に直前の版なので、モデルの微小な描き直しは版の連鎖で累積する。
+              図面PJは3Dへ戻ってAIレンダを撮り直せば、前の版から作られない版が挿入され
+              累積がリセットされる。一方この画面では、写真を選ぶ導線が「版が1枚も無いとき」
+              （!activeVersion の空状態）にしか無く、版が1つできると消えていた。
+              そのため写真PJは全編集が一本の連鎖になり、累積を断つ手段が存在しなかった。
+
+              ここに常設して、図面PJの「撮り直し」に相当する逃げ道を用意する。
+              onUploadBaseImage は addVersionFromRender を呼ぶので、追加される版は
+              直前の版から作られない＝そこで累積がゼロに戻る。既存の履歴は消えない。
+            */}
+            {onUploadBaseImage && (
+              <button
+                type="button"
+                onClick={() => baseInputRef.current?.click()}
+                title="別の写真を土台として追加します。これまでの履歴は消えず、追加した版から編集を続けられます（構図のズレの蓄積をここで断てます）"
+                className="inline-flex w-full items-center justify-center gap-1.5 rounded-lg border border-white/15 bg-white/5 px-2 py-1.5 text-[10px] font-bold text-neutral-200 transition hover:bg-white/10"
+              >
+                <ImagePlus className="h-3.5 w-3.5 shrink-0" />
+                写真を追加
+              </button>
+            )}
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto px-2 pb-2 space-y-2">
             {/* 新しい生成ほど上（新しい順・降順）に並べる（260623 クライアント要望）。 */}
